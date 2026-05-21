@@ -23,4 +23,17 @@ export {
 } from "./core/tools.js";
 export type { ToolName } from "./core/tools.js";
 
-export { getHalfPiDir, getSoulPath, getSkillsDir, getMemoryDir, getSessionsDir } from "./config.js";
+export {
+	getHalfPiDir,
+	getSoulPath,
+	getSkillsDir,
+	getMemoryDir,
+	getSessionsDir,
+	getConfigPath,
+	loadConfig,
+	applyApiKeys,
+} from "./config.js";
+export type { HalfPiConfig, ModelConfig, CustomProvider } from "./config.js";
+
+export { listAllModels, listBuiltinModels, listCustomModels, resolveModel, pickModel } from "./core/model-resolver.js";
+export type { ModelEntry } from "./core/model-resolver.js";

@@ -1,5 +1,5 @@
 /**
- * AgentSession — minimal session wrapper for half-pi.
+ * AgentSession — session wrapper for half-pi.
  *
  * Wraps the pi Agent class, registers tools, builds system prompt with SOUL.md,
  * and manages the prompt → agent run lifecycle.
@@ -20,15 +20,24 @@ export interface AgentSessionOptions {
 	thinkingLevel?: ThinkingLevel;
 	customSystemPrompt?: string;
 	enabledTools?: ToolName[];
+	/** Optional event callback for streaming output */
+	onEvent?: (event: AgentEvent) => void;
+	/**
+	 * Called before executing a tool. Return false to block execution.
+	 * Only called for the "bash" tool currently.
+	 */
+	confirmDangerous?: (toolName: string, params: Record<string, unknown>) => Promise<boolean>;
 }
 
 export class AgentSession {
 	private agent: Agent;
 	private tools: Map<ToolName, AgentTool>;
 	private cwd: string;
+	private eventHandler?: (event: AgentEvent) => void;
 
 	constructor(options: AgentSessionOptions) {
 		this.cwd = options.cwd;
+		this.eventHandler = options.onEvent;
 
 		// Create tools
 		this.tools = createHalfPiTools(this.cwd);
@@ -61,6 +70,14 @@ export class AgentSession {
 				medium: 4096,
 				high: 16384,
 			},
+			beforeToolCall: options.confirmDangerous
+				? async (ctx) => {
+						// Only intercept bash
+						if (ctx.toolCall.name !== "bash") return;
+						const ok = await options.confirmDangerous!(ctx.toolCall.name, ctx.args as Record<string, unknown>);
+						if (!ok) return { block: true, reason: "User denied the dangerous command." };
+					}
+				: undefined,
 		});
 	}
 
@@ -69,11 +86,19 @@ export class AgentSession {
 		return this.agent;
 	}
 
-	/** Send a prompt to the agent and wait for completion */
+	/**
+	 * Send a prompt and wait for the agent to complete.
+	 * Events (text chunks, tool calls) are forwarded to the onEvent callback
+	 * if provided in constructor options.
+	 */
 	async prompt(text: string): Promise<string> {
 		let finalText = "";
 
 		const unsubscribe = this.agent.subscribe((event: AgentEvent) => {
+			// Forward to user callback
+			this.eventHandler?.(event);
+
+			// Track final text from agent_end
 			if (event.type === "agent_end") {
 				const messages = this.agent.state.messages;
 				for (let i = messages.length - 1; i >= 0; i--) {
