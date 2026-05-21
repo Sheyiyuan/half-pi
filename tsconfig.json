@@ -1,0 +1,19 @@
+{
+	"extends": "./tsconfig.base.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"paths": {
+			"@earendil-works/pi-ai": ["./packages/ai/src/index.ts"],
+			"@earendil-works/pi-ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
+			"@earendil-works/pi-agent-core": ["./packages/agent/src/index.ts"],
+			"@earendil-works/pi-agent-core/*": ["./packages/agent/src/*"],
+			"@earendil-works/pi-tui": ["./packages/tui/src/index.ts"],
+			"@earendil-works/pi-tui/*": ["./packages/tui/src/*"],
+			"@half-pi/half-pi": ["./packages/half-pi/src/index.ts"],
+			"@half-pi/half-pi/*": ["./packages/half-pi/src/*"],
+			"typebox": ["./node_modules/typebox"]
+		}
+	},
+	"include": ["packages/*/src/**/*", "packages/*/test/**/*"],
+	"exclude": ["**/dist/**"]
+}
