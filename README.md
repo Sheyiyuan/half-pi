@@ -1,117 +1,110 @@
 # half-pi
 
-> half cloud, half local — a self-improving coding agent
+> 一半本地，一半云端，陪伴你始终如一
 
-half-pi 是一个自我迭代的 CLI Agent 框架，基于 [pi](https://github.com/earendil-works/pi-mono) 的 Agent 运行时构建。
+half-pi 是一个陪伴你始终如一的秘书团队。它不是普通的 agent——有人和你说话、陪你写代码、替你跑命令，帮你管理任务，当然，还有更重要的：
 
-**核心理念：** 大脑（人设、记忆、技能）放云端，操作（文件读写、命令执行）在本地。
+**"情绪价值 >> 工程实用价值"**
 
-## 状态
+能够更多地陪你聊天。
 
-当前处于骨架阶段——Agent 循环、工具系统、SOUL.md 身份加载已就绪，LLM 接入待完成。
-
-## 快速开始
-
-```bash
-npm install
-npm run build
-node dist/cli.js --soul    # 查看当前身份
-node dist/cli.js "hello"   # 单次提示
-```
+> 需要纯工具场景时，请用其他更专业化的 agent。half-pi 的价值不在于工程效率最大化，而在于带给你更多陪伴与成长。
 
 ## 架构
 
 ```
-┌─────────────────────────────────────────┐
-│                   云端                    │
-│  ┌──────────┐  ┌────────┐  ┌─────────┐ │
-│  │ SOUL.md  │  │ Memory │  │ Skills  │ │
-│  └──────────┘  └────────┘  └─────────┘ │
-│        ▲            ▲           ▲       │
-│        │   同步     │           │       │
-├────────┼────────────┼───────────┼───────┤
-│        ▼            ▼           ▼       │
-│             本地 (half-pi)              │
-│  ┌────────────────────────────────────┐ │
-│  │  pi-ai  │  pi-agent-core  │  tools │ │
-│  │  (LLM)  │  (ReAct cycle)  │ (bash, │ │
-│  │         │                 │  read, │ │
-│  │         │                 │  edit, │ │
-│  │         │                 │  skill)│ │
-│  └────────────────────────────────────┘ │
-└─────────────────────────────────────────┘
+~/.half-pi/
+├── core.SOUL.md           ← 底层承诺（所有 soul 共享）
+├── souls/                 ← 灵魂定义目录
+│   └── <name>/identity.md ← 每个灵魂的身份卡
+├── groups/                ← 群组配置
+│   └── <name>.json        ← 群组定义（成员 + 调度规则）
+├── style.md               ← 全局风格（可选，按需加载）
+├── skills/                ← 技能（所有 soul 可用）
+└── memory/                ← 记忆（计划中）
+```
+
+### 核心概念
+
+**导演模式** — LLM 不扮演任何灵魂。LLM 是一个对话导演，通过 `speak(soul, text)` 工具让灵魂发言。标签 `[name]` 由程序自动输出，不由模型生成。
+
+**群聊模型** — 所有灵魂在同一上下文中，消息标注来源。用户通过 @ 或自然语言指定谁回应。
+
+**群组** — 用户可以配置多个群组（日常组、工作组等），每组有不同的灵魂成员和调度规则。
+
+## 快速开始
+
+```bash
+pnpm install
+pnpm run build
+
+# 单次提示
+node dist/cli.js "你好"
+
+# 群聊模式
+node dist/cli.js chat --group daily
 ```
 
 ## 目录
 
 ```
-half-pi/
-├── src/
-│   ├── cli.ts                 # CLI 入口
-│   ├── index.ts               # 公共 API
-│   ├── config.ts              # 配置路径 (~/.half-pi/)
-│   └── core/
-│       ├── agent-session.ts   # Agent 生命周期封装
-│       ├── system-prompt.ts   # System Prompt 构建（SOUL.md 首位注入）
-│       ├── soul-loader.ts     # SOUL.md 加载（文件 / 回退默认）
-│       ├── skills.ts          # Skill 管理（加载 / 创建 / 删除）
-│       ├── tools.ts           # 11 个工具的名称和描述
-│       └── tool-impls.ts      # 工具实现（TypeBox schemas + AgentTool）
-├── identity/
-│   └── SOUL.md                # 身份模板（部署时复制到 ~/.half-pi/SOUL.md）
-├── package.json
-├── tsconfig.json
-├── LICENSE                    # AGPL-3.0
-└── README.md
+src/
+├── cli.ts                 # CLI 入口
+├── config.ts              # 配置路径
+├── index.ts               # 公共 API
+├── core/
+         ├── agent-session.ts   # 会话管理 + speak 调度
+         ├── soul-loader.ts     # 灵魂加载（core.SOUL.md + identity.md）
+         ├── system-prompt.ts   # 提示词构建
+         ├── groups.ts          # 群组配置解析
+         ├── skills.ts          # 技能管理
+         ├── tools.ts           # 工具名称定义
+         └── tool-impls.ts      # 工具实现
 ```
+
+## 自定义
+
+### 灵魂身份
+
+每个 soul 是一个完整的人。`identity.md` 定义它的性格、语气、行为边界。用户可以自由编写或修改。
+
+### 群组配置
+
+```json
+{
+  "name": "日常",
+  "souls": ["arona", "purana"],
+  "dispatch": "default",
+  "default_soul": "arona",
+  "prompt_rules": [
+    "你的自定义规则"
+  ]
+}
+```
+
+### 全局风格
+
+`~/.half-pi/style.md` — 不存就不加载。用来定义通用的写作风格、情感基调、反模式、受限视角原则等。适用于所有群组和所有灵魂。
 
 ## 工具
 
 | 工具 | 功能 |
 |------|------|
-| `read` | 读文件内容，支持分页 |
-| `bash` | 执行终端命令 |
-| `edit` | 查找替换编辑文件 |
+| `speak` | 让灵魂发言（导演模式下唯一输出方式） |
+| `read` | 读文件 |
+| `bash` | 执行命令 |
+| `edit` | 查找替换编辑 |
 | `write` | 创建或覆写文件 |
-| `grep` | 搜索文件内容（ripgrep） |
-| `find` | 按 glob 查找文件（fd） |
+| `grep` | 搜索文件内容 |
+| `find` | 按 glob 查找文件 |
 | `ls` | 列出目录 |
-| `skill_create` | 创建新 Skill |
-| `skill_list` | 列出所有 Skill |
-| `skill_delete` | 删除 Skill |
+| `skill_create/delete/list` | 技能管理 |
 | `soul_view` | 查看当前身份 |
 
-## 身份
+## 鸣谢
 
-Agent 的身份由 `~/.half-pi/SOUL.md` 定义——这是 System Prompt 的第一槽位，在每次运行开始时自动加载。文件不存在时使用内置默认。
-
-`identity/SOUL.md` 是模板，部署时复制过去并自定义。
-
-## 依赖
-
-| 包 | 用途 |
-|----|------|
-| `@earendil-works/pi-ai` | LLM API 抽象（20+ providers） |
-| `@earendil-works/pi-agent-core` | Agent 运行时（ReAct 循环、事件系统） |
-| `cross-spawn` | 跨平台 shell 执行 |
-| `typebox` | 工具参数 schema（TypeScript 原生类型推导） |
-
-编译器：`@typescript/native-preview`（tsgo，TypeScript 7.0 Go 原生编译器，0.47 秒全量构建）。
-
-## 路线图
-
-- [x] Agent 骨架 + ReAct 循环
-- [x] 11 个工具（含 skill CRUD）
-- [x] SOUL.md 身份加载
-- [x] tsgo 编译
-- [ ] LLM 接入 + 模型选择
-- [ ] 跨 Session 记忆系统
-- [ ] 云端同步（SOUL.md + memory + skills）
-- [ ] Cron 定时任务
-- [ ] 交互式 TUI
+本项目基于 [pi](https://github.com/earendil-works/pi) 的 Agent 运行时构建。感谢 [earendil-works](https://github.com/earendil-works) 团队的开源贡献。
 
 ## 许可
 
-GNU Affero General Public License v3.0。见 [LICENSE](LICENSE)。
-
-你可以在任何地方使用、修改、分发 half-pi，但如果你在网络上提供服务，修改后的源码必须公开。
+AGPL-3.0

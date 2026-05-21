@@ -28,29 +28,35 @@ import {
 
 // ─── Event display ───
 
-function formatEvent(event: AgentEvent): void {
+let currentSoulLabel: string = "";
+
+function setSoulLabel(name: string): void {
+	currentSoulLabel = name;
+}
+
+function formatEvent(event: AgentEvent, suppressRaw: boolean = false): void {
 	switch (event.type) {
-		case "agent_start":
-			process.stderr.write("\n");
-			break;
 		case "message_update": {
 			const ame = event.assistantMessageEvent;
-			if (ame.type === "text_delta") {
+			if (ame.type === "text_delta" && !suppressRaw) {
 				process.stdout.write(ame.delta);
 			}
 			break;
 		}
 		case "tool_execution_start":
-			process.stderr.write(`\n  ⚙ ${event.toolName}... `);
+			// Suppress speak tool display (text is handled by onSpeakDisplay)
+			if (event.toolName !== "speak") {
+				process.stderr.write(`\n  ⚙ ${event.toolName}... `);
+			}
 			break;
 		case "tool_execution_end":
-			process.stderr.write("done\n");
+			if (event.toolName !== "speak") {
+				process.stderr.write("done\n");
+			}
 			break;
 		case "turn_end":
-			process.stderr.write("\n");
-			break;
+		case "agent_start":
 		case "agent_end":
-			process.stdout.write("\n");
 			break;
 	}
 }
@@ -66,14 +72,17 @@ function showHelp(): void {
 	console.log("  half-pi --soul                 View current SOUL.md");
 	console.log("  half-pi --model <id>           Override model for this run");
 	console.log("  half-pi --provider <name>      Override provider for this run");
+	console.log("  half-pi --group <name>         Use group config (default: daily)");
 	console.log("  half-pi models                 List available models");
 	console.log("  half-pi models switch          Interactive model picker");
 	console.log("  half-pi models current         Show current default");
 	console.log("");
 	console.log("Config:");
-	console.log("  ~/.half-pi/config.jsonc  — API keys, default model, modules");
-	console.log("  ~/.half-pi/SOUL.md       — Agent identity");
-	console.log("  ~/.half-pi/skills/       — Reusable skill documents");
+	console.log("  ~/.half-pi/config.jsonc     — API keys, default model, modules");
+	console.log("  ~/.half-pi/core.SOUL.md     — Core commitment (all souls)");
+	console.log("  ~/.half-pi/souls/<name>/    — Soul identity + memory");
+	console.log("  ~/.half-pi/groups/<name>.yaml — Group config");
+	console.log("  ~/.half-pi/skills/          — Reusable skill documents");
 }
 
 // ─── Model listing ───
@@ -165,17 +174,35 @@ async function autoRejectBash(_toolName: string, params: Record<string, unknown>
 	return false;
 }
 
-async function runChat(model: Model<any>, config: HalfPiConfig, cwd: string, systemPrompt?: string): Promise<void> {
+	async function runChat(model: Model<any>, config: HalfPiConfig, cwd: string, systemPrompt?: string, groupName?: string): Promise<void> {
+	// Flag to suppress raw LLM text output (in director mode, only speak tool emits text)
+	let suppressRawText = false;
+
 	const session = new AgentSession({
 		cwd,
 		model,
 		customSystemPrompt: systemPrompt,
-		onEvent: formatEvent,
+		onEvent: (event) => formatEvent(event, suppressRawText),
 		confirmDangerous: confirmBash,
+		groupName,
+		onSoulSwitch: setSoulLabel,
+		onSpeakDisplay: (soul, text) => {
+			process.stdout.write(`[${soul}] ${text}\n`);
+		},
 	});
 
+	suppressRawText = groupName ? true : false;
+
+	// Initialize soul label
+	setSoulLabel(session.currentSoul);
+
 	console.log(`[half-pi] ${model.provider}/${model.id}  cwd: ${cwd}`);
-	console.log(`[half-pi] SOUL: ${loadSoul().source === "file" ? "~/.half-pi/SOUL.md" : "built-in"}`);
+	const soulInfo = loadSoul();
+	const soulLabel = soulInfo.source.includes("builtin") ? "built-in" : soulInfo.source;
+	console.log(`[half-pi] SOUL: ${soulLabel}`);
+	if (groupName) {
+		console.log(`[half-pi] GROUP: ${groupName}  [${session.groupSouls.join(", ")}]`);
+	}
 	console.log(`[half-pi] /help for commands, /exit to quit\n`);
 
 	const rl = createInterface({ input: process.stdin, output: process.stderr });
@@ -254,16 +281,25 @@ async function main(): Promise<void> {
 
 	// chat — interactive REPL
 	if (subcmd === "chat") {
+		// Parse --group from args
+		let chatGroup: string | undefined;
+		for (let i = 1; i < args.length; i++) {
+			if (args[i] === "--group" || args[i] === "-g") {
+				chatGroup = args[i + 1];
+				break;
+			}
+		}
+
 		const config = loadConfig();
 		applyApiKeys(config);
 		const model = resolveModel(undefined, undefined, config);
-		const apiKeyEnv = `${model.provider.toUpperCase()}_API_KEY`;
-		if (!process.env[apiKeyEnv] && !config.providers[model.provider as string]) {
-			console.error(`[half-pi] No API key. Set in ~/.half-pi/config.jsonc:`);
-			console.error(`  "api_keys": { "${model.provider}": "sk-your-key" }`);
+		const apiKeyEnv = model.provider.toUpperCase() + "_API_KEY";
+		if (!process.env[apiKeyEnv] && !config.providers[model.provider]) {
+			console.error("[half-pi] No API key. Set in ~/.half-pi/config.jsonc:");
+			console.error('  "api_keys": { "' + model.provider + '": "sk-your-key" }');
 			process.exit(1);
 		}
-		await runChat(model, config, process.cwd());
+		await runChat(model, config, process.cwd(), undefined, chatGroup);
 		process.exit(0);
 	}
 
@@ -294,7 +330,7 @@ async function main(): Promise<void> {
 	// --soul flag
 	if (args[0] === "--soul" || args[0] === "-s") {
 		const soul = loadSoul();
-		console.log(soul.content);
+		console.log(soul.identity);
 		console.log(`\n[source: ${soul.source}]`);
 		process.exit(0);
 	}
@@ -304,6 +340,7 @@ async function main(): Promise<void> {
 	let modelId: string | undefined;
 	let provider: string | undefined;
 	let systemPrompt: string | undefined;
+	let groupName: string | undefined;
 	let cwd = process.cwd();
 
 	for (let i = 0; i < args.length; i++) {
@@ -316,6 +353,8 @@ async function main(): Promise<void> {
 			systemPrompt = args[++i];
 		} else if (arg === "--cwd") {
 			cwd = resolve(args[++i]);
+		} else if (arg === "--group" || arg === "-g") {
+			groupName = args[++i];
 		} else if (!arg.startsWith("-") && arg !== "models" && arg !== "chat") {
 			prompt = arg;
 		}
@@ -360,7 +399,9 @@ async function main(): Promise<void> {
 		confirmDangerous: autoRejectBash,
 	});
 
-	console.log(`[half-pi] SOUL: ${loadSoul().source === "file" ? "~/.half-pi/SOUL.md" : "built-in"}`);
+	const soulInfo = loadSoul();
+	const soulLabel = soulInfo.source.includes("builtin") ? "built-in" : soulInfo.source;
+	console.log(`[half-pi] SOUL: ${soulLabel}`);
 	console.log(`[half-pi] Tools: ${DEFAULT_TOOLS.length} registered\n`);
 
 	try {

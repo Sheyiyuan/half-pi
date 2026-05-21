@@ -17,6 +17,7 @@ export const TOOL_NAMES = [
 	"skill_list",
 	"skill_delete",
 	"soul_view",
+	"speak",
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
@@ -34,6 +35,7 @@ export const TOOL_SNIPPETS: Record<string, string> = {
 	skill_list: "List all installed skills",
 	skill_delete: "Delete a skill by name",
 	soul_view: "View the current SOUL.md identity file",
+	speak: "CRITICAL: This is your ONLY way to output text. You are a director — never write raw text. Call speak(soul, text) to make a soul say something.",
 };
 
 export const DEFAULT_TOOLS: ToolName[] = [
@@ -48,4 +50,5 @@ export const DEFAULT_TOOLS: ToolName[] = [
 	"skill_list",
 	"skill_delete",
 	"soul_view",
+	"speak",
 ];

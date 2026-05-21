@@ -8,8 +8,8 @@ export type { AgentSessionOptions } from "./core/agent-session.js";
 export { buildSystemPrompt } from "./core/system-prompt.js";
 export type { BuildSystemPromptOptions } from "./core/system-prompt.js";
 
-export { loadSoul } from "./core/soul-loader.js";
-export type { Soul } from "./core/soul-loader.js";
+export { loadSoul, loadCoreSoul, loadSoulIdentity } from "./core/soul-loader.js";
+export type { SoulLoadResult } from "./core/soul-loader.js";
 
 export { loadAllSkills, createSkill, deleteSkill, formatSkillsForPrompt } from "./core/skills.js";
 export type { Skill } from "./core/skills.js";

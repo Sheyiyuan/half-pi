@@ -302,14 +302,61 @@ export function createSoulViewTool(): AgentTool<typeof SoulViewSchema, { source:
 		parameters: SoulViewSchema,
 		execute: async () => {
 			const soul = loadSoul();
-			return { content: [{ type: "text", text: soul.content }], details: { source: soul.source } };
+			return { content: [{ type: "text", text: soul.identity }], details: { source: soul.source } };
 		},
 	};
 }
 
+// ─── Pass Soul ───
+
+const PassSoulSchema = Type.Object({
+	target: Type.String({ description: "Target soul name to pass the conversation to (e.g. 'hanpai', 'zero')" }),
+	reason: Type.Optional(Type.String({ description: "Optional reason for passing — helps the target soul understand context" })),
+});
+
+export type PassSoulHandler = (target: string, reason?: string) => string;
+
+export function createPassSoulTool(handler: PassSoulHandler): AgentTool<typeof PassSoulSchema> {
+	return {
+		name: "pass_soul",
+		label: "Pass to soul",
+		description: "Pass the conversation to another soul. Does NOT produce visible output — use after speak() when you're done and another soul should take the next turn.",
+		parameters: PassSoulSchema,
+		execute: async (_id, params) => {
+			const systemMsg = handler(params.target, params.reason);
+			return textResult(systemMsg);
+		},
+	};
+}
+
+// ─── Speak ───
+
+const SpeakSchema = Type.Object({
+	soul: Type.String({ description: "Soul to speak (e.g. 'zero', 'hanpai'). Must be a valid group member." }),
+	text: Type.String({ description: "The text for this soul to say. Do NOT include [name] tags — they are added automatically." }),
+});
+
+export type SpeakHandler = (soul: string, text: string) => string;
+
+export function createSpeakTool(handler: SpeakHandler): AgentTool<typeof SpeakSchema> {
+	return {
+		name: "speak",
+		label: "Make a soul speak",
+		description: "CRITICAL: This is your ONLY way to output text. You are a director — never write raw text. Call speak(soul, text) to make a soul say something. The [name] tag is added automatically.",
+		parameters: SpeakSchema,
+		execute: async (_id, params) => {
+			return textResult(handler(params.soul, params.text));
+		},
+	};
+}
+
+export interface GroupChatHandlers {
+	onSpeak: SpeakHandler;
+}
+
 // ─── Factory ───
 
-export function createHalfPiTools(cwd: string): Map<ToolName, AgentTool> {
+export function createHalfPiTools(cwd: string, handlers?: GroupChatHandlers): Map<ToolName, AgentTool> {
 	const tools = new Map<ToolName, AgentTool>();
 	tools.set("read", createReadTool(cwd));
 	tools.set("bash", createBashTool(cwd));
@@ -322,5 +369,8 @@ export function createHalfPiTools(cwd: string): Map<ToolName, AgentTool> {
 	tools.set("skill_list", createSkillListTool());
 	tools.set("skill_delete", createSkillDeleteTool());
 	tools.set("soul_view", createSoulViewTool());
+	if (handlers?.onSpeak) {
+		tools.set("speak", createSpeakTool(handlers.onSpeak));
+	}
 	return tools;
 }

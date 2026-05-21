@@ -14,9 +14,39 @@ export function getHalfPiDir(): string {
 	return join(homedir(), ".half-pi");
 }
 
-/** SOUL.md path */
+/** SOUL.md path (legacy, single-file) */
 export function getSoulPath(): string {
 	return join(getHalfPiDir(), "SOUL.md");
+}
+
+/** Core SOUL.md path (new layered design) */
+export function getCoreSoulPath(): string {
+	return join(getHalfPiDir(), "core.SOUL.md");
+}
+
+/** Souls directory (new: souls/<name>/identity.md) */
+export function getSoulsDir(): string {
+	return join(getHalfPiDir(), "souls");
+}
+
+/** Get identity path for a named soul */
+export function getSoulIdentityPath(name: string): string {
+	return join(getSoulsDir(), name, "identity.md");
+}
+
+/** Groups directory (new: groups/<name>.yaml) */
+export function getGroupsDir(): string {
+	return join(getHalfPiDir(), "groups");
+}
+
+/** Get group config path */
+export function getGroupConfigPath(name: string): string {
+	return join(getGroupsDir(), `${name}.json`);
+}
+
+/** Global style/personality file (optional, loaded if exists) */
+export function getStylePath(): string {
+	return join(getHalfPiDir(), "style.md");
 }
 
 /** Skills directory */
