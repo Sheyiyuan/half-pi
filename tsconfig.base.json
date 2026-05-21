@@ -1,8 +1,8 @@
 {
 	"compilerOptions": {
-		"target": "ES2022",
+		"target": "ES2024",
 		"module": "Node16",
-		"lib": ["ES2022"],
+		"lib": ["ES2024"],
 		"strict": true,
 		"erasableSyntaxOnly": true,
 		"esModuleInterop": true,
@@ -17,18 +17,6 @@
 		"resolveJsonModule": true,
 		"allowImportingTsExtensions": true,
 		"rewriteRelativeImportExtensions": true,
-		"types": ["node"],
-		"baseUrl": ".",
-		"paths": {
-			"@earendil-works/pi-ai": ["./packages/ai/src/index.ts"],
-			"@earendil-works/pi-ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
-			"@earendil-works/pi-agent-core": ["./packages/agent/src/index.ts"],
-			"@earendil-works/pi-agent-core/*": ["./packages/agent/src/*"],
-			"@earendil-works/pi-tui": ["./packages/tui/src/index.ts"],
-			"@earendil-works/pi-tui/*": ["./packages/tui/src/*"],
-			"@half-pi/half-pi": ["./packages/half-pi/src/index.ts"],
-			"@half-pi/half-pi/*": ["./packages/half-pi/src/*"],
-			"typebox": ["./node_modules/typebox"]
-		}
+		"types": ["node"]
 	}
 }

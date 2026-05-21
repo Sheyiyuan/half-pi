@@ -7,7 +7,7 @@
 	],
 	"scripts": {
 		"clean": "npm run clean --workspaces --if-present",
-		"build": "cd packages/half-pi && npm run build",
+		"build": "./node_modules/.bin/tsc -p packages/tui/tsconfig.build.json && ./node_modules/.bin/tsc -p packages/ai/tsconfig.build.json && ./node_modules/.bin/tsc -p packages/agent/tsconfig.build.json && ./node_modules/.bin/tsc -p packages/half-pi/tsconfig.build.json",
 		"check": "true",
 		"test": "npm run test --workspaces --if-present"
 	},
