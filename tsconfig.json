@@ -14,6 +14,6 @@
 			"typebox": ["./node_modules/typebox"]
 		}
 	},
-	"include": ["packages/*/src/**/*", "packages/*/test/**/*"],
-	"exclude": ["**/dist/**"]
+	"include": ["packages/half-pi/src/**/*"],
+	"exclude": ["**/dist/**", "**/test/**"]
 }

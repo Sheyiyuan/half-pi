@@ -5,11 +5,10 @@
  * and manages the prompt → agent run lifecycle.
  */
 
-import { Agent, type AgentEvent, type AgentTool } from "@earendil-works/pi-agent-core";
-import { modelsAreEqual, type Model, streamSimple } from "@earendil-works/pi-ai";
+import { Agent, type AgentEvent } from "@earendil-works/pi-agent-core";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { Model } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
-import { convertToLlm } from "@earendil-works/pi-agent-core";
-import { getSessionsDir } from "../config.ts";
 import { loadAllSkills } from "./skills.ts";
 import { buildSystemPrompt, type BuildSystemPromptOptions } from "./system-prompt.ts";
 import { createHalfPiTools } from "./tool-impls.ts";
@@ -25,15 +24,11 @@ export interface AgentSessionOptions {
 
 export class AgentSession {
 	private agent: Agent;
-	private tools: Map<ToolName, AgentTool<ToolName>>;
+	private tools: Map<ToolName, AgentTool>;
 	private cwd: string;
-	private model: Model<any>;
-	private thinkingLevel: ThinkingLevel;
 
 	constructor(options: AgentSessionOptions) {
 		this.cwd = options.cwd;
-		this.model = options.model;
-		this.thinkingLevel = options.thinkingLevel ?? "off";
 
 		// Create tools
 		this.tools = createHalfPiTools(this.cwd);
@@ -48,24 +43,24 @@ export class AgentSession {
 			skills: loadAllSkills(),
 		});
 
-		// Create Agent instance
+		// Gather active tools
 		const activeTools = enabledTools
 			.map((name) => this.tools.get(name))
-			.filter((t): t is AgentTool<ToolName> => !!t);
+			.filter((t): t is AgentTool => !!t);
 
+		// Create Agent — use pi's built-in convertToLlm and streamFn defaults
 		this.agent = new Agent({
 			initialState: {
 				systemPrompt,
-				model: this.model,
+				model: options.model,
 				tools: activeTools,
 				messages: [],
 			},
-			streamFn: (ctx, opts, signal) =>
-				streamSimple(this.model, convertToLlm(ctx.messages, ctx.tools), {
-					...opts,
-					thinkingLevel: this.thinkingLevel,
-					signal,
-				}),
+			thinkingBudgets: {
+				low: 1024,
+				medium: 4096,
+				high: 16384,
+			},
 		});
 	}
 
@@ -78,10 +73,8 @@ export class AgentSession {
 	async prompt(text: string): Promise<string> {
 		let finalText = "";
 
-		// Subscribe to events to capture the final response
-		const unsubscribe = this.agent.subscribe((event) => {
+		const unsubscribe = this.agent.subscribe((event: AgentEvent) => {
 			if (event.type === "agent_end") {
-				// Extract final assistant text from messages
 				const messages = this.agent.state.messages;
 				for (let i = messages.length - 1; i >= 0; i--) {
 					const msg = messages[i];
@@ -98,23 +91,10 @@ export class AgentSession {
 		});
 
 		await this.agent.prompt(text);
-
-		// Wait for agent to finish
 		await this.agent.waitForIdle();
 		unsubscribe();
 
 		return finalText || "(no response)";
-	}
-
-	/** Send a prompt and stream events to a callback */
-	async promptWithEvents(
-		text: string,
-		onEvent: (event: AgentEvent) => void,
-	): Promise<void> {
-		const unsubscribe = this.agent.subscribe(onEvent);
-		await this.agent.prompt(text);
-		await this.agent.waitForIdle();
-		unsubscribe();
 	}
 
 	/** Abort current run */
@@ -122,7 +102,6 @@ export class AgentSession {
 		this.agent.abort();
 	}
 
-	/** Get the current system prompt */
 	get systemPrompt(): string {
 		return this.agent.state.systemPrompt;
 	}

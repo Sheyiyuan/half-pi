@@ -7,7 +7,7 @@
 	],
 	"scripts": {
 		"clean": "npm run clean --workspaces --if-present",
-		"build": "cd packages/ai && npm run build && cd ../agent && npm run build && cd ../tui && npm run build && cd ../half-pi && npm run build",
+		"build": "cd packages/half-pi && npm run build",
 		"check": "true",
 		"test": "npm run test --workspaces --if-present"
 	},
