@@ -1,16 +1,42 @@
 {
-	"name": "half-pi-monorepo",
-	"private": true,
+	"name": "half-pi",
+	"version": "0.1.0",
+	"description": "half-pi: half cloud, half local — a self-improving coding agent",
 	"type": "module",
-	"workspaces": [
-		"packages/*"
+	"bin": {
+		"half-pi": "dist/cli.js"
+	},
+	"main": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"files": [
+		"dist"
 	],
 	"scripts": {
-		"clean": "npm run clean --workspaces --if-present",
-		"build": "./node_modules/.bin/tsc -p packages/tui/tsconfig.build.json && ./node_modules/.bin/tsc -p packages/ai/tsconfig.build.json && ./node_modules/.bin/tsc -p packages/agent/tsconfig.build.json && ./node_modules/.bin/tsc -p packages/half-pi/tsconfig.build.json",
-		"check": "true",
-		"test": "npm run test --workspaces --if-present"
+		"build": "tsc",
+		"check": "tsc --noEmit",
+		"dev": "tsx src/cli.ts",
+		"clean": "rm -rf dist"
 	},
+	"dependencies": {
+		"@earendil-works/pi-agent-core": "^0.75.4",
+		"@earendil-works/pi-ai": "^0.75.4",
+		"cross-spawn": "^7.0.6"
+	},
+	"devDependencies": {
+		"@types/cross-spawn": "^6.0.6",
+		"@types/node": "^22.10.5",
+		"typescript": "^5.7.3"
+	},
+	"keywords": [
+		"agent",
+		"ai",
+		"llm",
+		"cli",
+		"half-pi",
+		"self-improving"
+	],
+	"author": "社亦园",
+	"license": "MIT",
 	"engines": {
 		"node": ">=22.19.0"
 	}

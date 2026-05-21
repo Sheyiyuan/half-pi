@@ -1,19 +1,21 @@
 {
-	"extends": "./tsconfig.base.json",
 	"compilerOptions": {
-		"noEmit": true,
-		"paths": {
-			"@earendil-works/pi-ai": ["./packages/ai/src/index.ts"],
-			"@earendil-works/pi-ai/*": ["./packages/ai/src/*.ts", "./packages/ai/src/providers/*.ts"],
-			"@earendil-works/pi-agent-core": ["./packages/agent/src/index.ts"],
-			"@earendil-works/pi-agent-core/*": ["./packages/agent/src/*"],
-			"@earendil-works/pi-tui": ["./packages/tui/src/index.ts"],
-			"@earendil-works/pi-tui/*": ["./packages/tui/src/*"],
-			"@half-pi/half-pi": ["./packages/half-pi/src/index.ts"],
-			"@half-pi/half-pi/*": ["./packages/half-pi/src/*"],
-			"typebox": ["./node_modules/typebox"]
-		}
+		"target": "ES2024",
+		"module": "ESNext",
+		"lib": ["ES2024"],
+		"outDir": "./dist",
+		"rootDir": "./src",
+		"strict": true,
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"forceConsistentCasingInFileNames": true,
+		"declaration": true,
+		"declarationMap": true,
+		"sourceMap": true,
+		"moduleResolution": "bundler",
+		"resolveJsonModule": true,
+		"types": ["node"]
 	},
-	"include": ["packages/half-pi/src/**/*"],
-	"exclude": ["**/dist/**", "**/test/**"]
+	"include": ["src/**/*"],
+	"exclude": ["dist", "node_modules"]
 }
