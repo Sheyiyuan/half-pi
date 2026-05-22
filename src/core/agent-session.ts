@@ -13,6 +13,8 @@ import type { AgentTool, AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { loadAllSkills } from "./skills.js";
+import { MemoryInjector } from "./memory-injector.js";
+import type { MemoryEntry } from "./memory-store.js";
 import { buildSystemPrompt, type BuildSystemPromptOptions } from "./system-prompt.js";
 import { createHalfPiTools } from "./tool-impls.js";
 import { DEFAULT_TOOLS, TOOL_SNIPPETS, type ToolName } from "./tools.js";
@@ -65,6 +67,9 @@ export class AgentSession {
 	/** Session ID for persistence (undefined if not persisted) */
 	public sessionId?: string;
 
+	/** Memories injected in this session (for call_count tracking) */
+	private injectedMemories: MemoryEntry[] = [];
+
 	constructor(options: AgentSessionOptions) {
 		this.cwd = options.cwd;
 		this.eventHandler = options.onEvent;
@@ -88,6 +93,15 @@ export class AgentSession {
 		});
 
 		const enabledTools = options.enabledTools ?? DEFAULT_TOOLS;
+
+		// Build memory section
+		const injector = new MemoryInjector();
+		const injectedMemory = injector.buildMemorySection();
+		this.injectedMemories = injector.selectMemories();
+		if (this.injectedMemories.length > 0 && injectedMemory) {
+			injector.recordInjection(this.injectedMemories);
+		}
+
 		const systemPrompt = buildSystemPrompt({
 			cwd: this.cwd,
 			customPrompt: options.customSystemPrompt,
@@ -95,6 +109,7 @@ export class AgentSession {
 			toolSnippets: TOOL_SNIPPETS,
 			skills: loadAllSkills(),
 			soulNames: this.groupSouls.length > 0 ? this.groupSouls : undefined,
+			injectedMemory: injectedMemory || undefined,
 		});
 
 		const activeTools = enabledTools

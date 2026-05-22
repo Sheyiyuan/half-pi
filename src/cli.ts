@@ -21,6 +21,7 @@ import type { HalfPiConfig } from "./config.js";
 import { DEFAULT_TOOLS } from "./core/tools.js";
 import { SessionStore, titleFromFirstMessage } from "./core/session-store.js";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { MemoryStore } from "./core/memory-store.js";
 import {
 	listAllModels,
 	pickModel,
@@ -81,6 +82,7 @@ function showHelp(): void {
 	console.log("  half-pi models switch          Interactive model picker");
 	console.log("  half-pi models current         Show current default");
 	console.log("  half-pi session list           List saved sessions");
+	console.log("  half-pi memory list            List memories");
 	console.log("");
 	console.log("Config:");
 	console.log("  ~/.half-pi/config.jsonc     — API keys, default model, modules");
@@ -457,6 +459,30 @@ async function main(): Promise<void> {
 		await runChat(model, config, process.cwd(), undefined, chatGroup, store, sessionId, initialMessages,
 			process.env[model.provider.toUpperCase() + "_API_KEY"] ?? config.api_keys[model.provider]);
 		store.releaseLock(sessionId);
+		process.exit(0);
+	}
+
+	if (subcmd === "memory") {
+		const action = args[1];
+		const store = new MemoryStore();
+
+		if (action === "list") {
+			const memories = store.list();
+			if (memories.length === 0) {
+				console.log("(no memories yet)");
+			} else {
+				for (const m of memories) {
+					const scope = m.scope === "local" ? "📌" : "☁️";
+					const w = m.weight.toFixed(2);
+					const calls = `${m.call_count}c`;
+					const title = m.id.length > 40 ? m.id.slice(0, 37) + "..." : m.id;
+					console.log(`  ${scope} [${w}] ${calls.padStart(5)}  ${title}`);
+				}
+			}
+			process.exit(0);
+		}
+
+		showHelp();
 		process.exit(0);
 	}
 

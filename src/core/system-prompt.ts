@@ -44,11 +44,10 @@ export interface BuildSystemPromptOptions {
 	 * For Phase 1: typically just ["zero"].
 	 */
 	soulNames?: string[];
-	/**
-	 * Current active soul (for group chat mode).
-	 * Used to tell the LLM who is currently speaking.
-	 */
+	/** Current active soul (for group chat mode). */
 	currentSoul?: string;
+	/** Pre-formatted memory section to inject (from MemoryInjector). */
+	injectedMemory?: string;
 }
 
 function buildGroupChatPrompt(
@@ -245,6 +244,11 @@ export function buildSystemPrompt(options: BuildSystemPromptOptions): string {
 
 	// --- Context ---
 	prompt += `\n\nCurrent date: ${date}`;
+
+	// --- Memory ---
+	if (options.injectedMemory) {
+		prompt += `\n\n${options.injectedMemory}`;
+	}
 
 	return prompt;
 }
