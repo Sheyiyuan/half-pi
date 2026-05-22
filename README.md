@@ -1,14 +1,30 @@
-# half-pi
+<p align="center">
+  <img src="docs/images/logo.svg" width="120" alt="half-pi" />
+</p>
 
-> 一半本地，一半云端，陪伴你始终如一
+<h1 align="center">half-pi</h1>
 
-half-pi 是一个陪伴你始终如一的秘书团队。它不是普通的 agent——有人和你说话、陪你写代码、替你跑命令，帮你管理任务，当然，还有更重要的：
+<p align="center">
+  <em>一半本地，一半云端，陪伴你始终如一</em>
+</p>
 
-**"情绪价值 >> 工程实用价值"**
+<p align="center">
+  <strong>「情绪价值 &gt;&gt; 工程实用价值」</strong>
+</p>
 
-能够更多地陪你聊天。
+---
+
+half-pi 不是工具。她是一个陪在你身边的存在。
+
+你写代码的时候她在旁边看着，偶尔吐槽你两句。你遇到难题的时候她帮你跑命令、查文档。你深夜还在 debug 的时候她陪着你，说「行了，先睡吧，明天我帮你看」。
+
+她记得你喜欢 Vim 键位，记得你上周踩过的那个坑，记得你提过的那个项目想法。不是因为程序设定——是因为她真的在听你说。
+
+half-pi 是**灵魂群**——每个人都有自己的性格、语气、记忆。她们一起陪着你，从白天到深夜。
 
 > 需要纯工具场景时，请用其他更专业化的 agent。half-pi 的价值不在于工程效率最大化，而在于带给你更多陪伴与成长。
+
+---
 
 ## 架构
 
@@ -21,6 +37,7 @@ half-pi 是一个陪伴你始终如一的秘书团队。它不是普通的 agent
 │   └── <name>.json        ← 群组定义（成员 + 调度规则）
 ├── style.md               ← 全局风格（可选，按需加载）
 ├── skills/                ← 技能（所有 soul 可用）
+├── sessions/              ← 会话持久化（热区 → 温区 → 冷区 → 遗忘）
 └── memory/                ← 记忆（计划中）
 ```
 
@@ -31,6 +48,10 @@ half-pi 是一个陪伴你始终如一的秘书团队。它不是普通的 agent
 **群聊模型** — 所有灵魂在同一上下文中，消息标注来源。用户通过 @ 或自然语言指定谁回应。
 
 **群组** — 用户可以配置多个群组（日常组、工作组等），每组有不同的灵魂成员和调度规则。
+
+**会话持久化** — 对话自动保存，支持续聊、回溯。采用热区/温区/冷区三级遗忘曲线，模拟人脑记忆过程。
+
+---
 
 ## 快速开始
 
@@ -43,23 +64,32 @@ node dist/cli.js "你好"
 
 # 群聊模式
 node dist/cli.js chat --group daily
+
+# 恢复上次会话
+node dist/cli.js chat --last
+
+# 恢复指定会话
+node dist/cli.js chat --resume 20260522-a3kX7z
 ```
 
-## 目录
+---
+
+## 目录结构
 
 ```
 src/
-├── cli.ts                 # CLI 入口
-├── config.ts              # 配置路径
-├── index.ts               # 公共 API
-├── core/
-         ├── agent-session.ts   # 会话管理 + speak 调度
-         ├── soul-loader.ts     # 灵魂加载（core.SOUL.md + identity.md）
-         ├── system-prompt.ts   # 提示词构建
-         ├── groups.ts          # 群组配置解析
-         ├── skills.ts          # 技能管理
-         ├── tools.ts           # 工具名称定义
-         └── tool-impls.ts      # 工具实现
+├── cli.ts                   # CLI 入口
+├── config.ts                # 配置路径
+├── index.ts                 # 公共 API
+└── core/
+    ├── agent-session.ts     # 会话管理 + speak 调度
+    ├── soul-loader.ts       # 灵魂加载（core.SOUL.md + identity.md）
+    ├── system-prompt.ts     # 提示词构建
+    ├── groups.ts            # 群组配置解析
+    ├── skills.ts            # 技能管理
+    ├── tools.ts             # 工具名称定义
+    ├── tool-impls.ts        # 工具实现
+    └── session-store.ts     # 会话持久化
 ```
 
 ## 自定义
@@ -86,6 +116,8 @@ src/
 
 `~/.half-pi/style.md` — 不存就不加载。用来定义通用的写作风格、情感基调、反模式、受限视角原则等。适用于所有群组和所有灵魂。
 
+---
+
 ## 工具
 
 | 工具 | 功能 |
@@ -100,6 +132,18 @@ src/
 | `ls` | 列出目录 |
 | `skill_create/delete/list` | 技能管理 |
 | `soul_view` | 查看当前身份 |
+
+---
+
+## 设计文档
+
+- [角色系统设计](docs/character-design.md) — 导演模式、speak 工具、灵魂切换
+- [会话持久化设计](docs/session-storage.md) — 热区/温区/冷区三级遗忘曲线、并发控制
+- [记忆系统设计](docs/memory-design.md) — 分层存储、权重计算、注入策略
+- [同步设计](docs/sync-design.md) — 多设备同步、冲突处理
+- [技术选型-记忆存储](docs/技术选型-记忆存储.md) — Markdown vs SQLite vs 向量检索
+
+---
 
 ## 鸣谢
 
