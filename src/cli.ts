@@ -11,7 +11,7 @@
  */
 import { resolve } from "node:path";
 import { createInterface } from "node:readline";
-import { getModel } from "@earendil-works/pi-ai";
+import { getModel, completeSimple } from "@earendil-works/pi-ai";
 import type { Model } from "@earendil-works/pi-ai";
 import type { AgentEvent } from "@earendil-works/pi-agent-core";
 import { AgentSession } from "./core/agent-session.js";
@@ -19,6 +19,8 @@ import { loadSoul } from "./core/soul-loader.js";
 import { applyApiKeys, loadConfig } from "./config.js";
 import type { HalfPiConfig } from "./config.js";
 import { DEFAULT_TOOLS } from "./core/tools.js";
+import { SessionStore, titleFromFirstMessage } from "./core/session-store.js";
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import {
 	listAllModels,
 	pickModel,
@@ -69,6 +71,8 @@ function showHelp(): void {
 	console.log("Usage:");
 	console.log("  half-pi 'prompt'              Run a single prompt");
 	console.log("  half-pi chat                  Start interactive chat session");
+	console.log("  half-pi chat --last           Resume most recent session");
+	console.log("  half-pi chat --resume <id>    Resume a specific session");
 	console.log("  half-pi --soul                 View current SOUL.md");
 	console.log("  half-pi --model <id>           Override model for this run");
 	console.log("  half-pi --provider <name>      Override provider for this run");
@@ -76,6 +80,7 @@ function showHelp(): void {
 	console.log("  half-pi models                 List available models");
 	console.log("  half-pi models switch          Interactive model picker");
 	console.log("  half-pi models current         Show current default");
+	console.log("  half-pi session list           List saved sessions");
 	console.log("");
 	console.log("Config:");
 	console.log("  ~/.half-pi/config.jsonc     — API keys, default model, modules");
@@ -144,6 +149,70 @@ function checkDanger(command: string): { level: DangerLevel; label: string } | n
 	return null;
 }
 
+// ─── Title generation ───
+
+/**
+ * Ask the LLM to generate a short title from the conversation.
+ * Falls back to firstMessage title on failure.
+ */
+async function generateTitle(
+	model: Model<any>,
+	messages: unknown[],
+	apiKey: string,
+): Promise<string> {
+	try {
+		// Take first user message + first assistant response
+		const excerpt: Array<{ role: string; content: string }> = [];
+		for (const msg of messages) {
+			const m = msg as Record<string, unknown>;
+			if (m.role !== "user" && m.role !== "assistant") continue;
+
+			let text = "";
+			const content = m.content;
+			if (typeof content === "string") {
+				text = content;
+			} else if (Array.isArray(content)) {
+				for (const block of content as Array<Record<string, unknown>>) {
+					if (block.type === "text" && typeof block.text === "string") {
+						text += block.text;
+					}
+				}
+			}
+			if (text.trim()) {
+				excerpt.push({ role: m.role as string, content: text.trim().slice(0, 300) });
+			}
+			if (excerpt.length >= 2) break;
+		}
+
+		if (excerpt.length === 0) return titleFromFirstMessage(messages);
+
+		const response = await completeSimple(model, {
+			systemPrompt:
+				"你是一个标题生成器。根据对话内容生成一个简短标题，不超过15个汉字。只输出标题本身，不加引号、句号或任何解释。",
+			messages: [
+				{
+					role: "user",
+					content: `为这段对话生成标题：\n[User]: ${excerpt[0]?.content ?? ""}\n${excerpt[1] ? `[Assistant]: ${excerpt[1].content}` : ""}`,
+					timestamp: Date.now(),
+				},
+			],
+		}, { apiKey, maxTokens: 30 });
+
+		const title = response.content
+			.filter((c): c is { type: "text"; text: string } => c.type === "text")
+			.map((c) => c.text)
+			.join("")
+			.trim()
+			.replace(/^["「『【《]/, "")
+			.replace(/["」』】》]$/, "")
+			.replace(/[。！？，、；：]$/, "");
+
+		return title.length > 30 ? title.slice(0, 27) + "..." : title || titleFromFirstMessage(messages);
+	} catch {
+		return titleFromFirstMessage(messages);
+	}
+}
+
 // ─── Chat REPL ───
 
 async function confirmBash(_toolName: string, params: Record<string, unknown>): Promise<boolean> {
@@ -174,7 +243,17 @@ async function autoRejectBash(_toolName: string, params: Record<string, unknown>
 	return false;
 }
 
-	async function runChat(model: Model<any>, config: HalfPiConfig, cwd: string, systemPrompt?: string, groupName?: string): Promise<void> {
+	async function runChat(
+		model: Model<any>,
+		config: HalfPiConfig,
+		cwd: string,
+		systemPrompt: string | undefined,
+		groupName: string | undefined,
+		store: SessionStore,
+		sessionId: string,
+		initialMessages?: AgentMessage[],
+		apiKey?: string,
+	): Promise<void> {
 	// Flag to suppress raw LLM text output (in director mode, only speak tool emits text)
 	let suppressRawText = false;
 
@@ -189,6 +268,8 @@ async function autoRejectBash(_toolName: string, params: Record<string, unknown>
 		onSpeakDisplay: (soul, text) => {
 			process.stdout.write(`[${soul}] ${text}\n`);
 		},
+		sessionId,
+		initialMessages,
 	});
 
 	suppressRawText = groupName ? true : false;
@@ -197,6 +278,11 @@ async function autoRejectBash(_toolName: string, params: Record<string, unknown>
 	setSoulLabel(session.currentSoul);
 
 	console.log(`[half-pi] ${model.provider}/${model.id}  cwd: ${cwd}`);
+	if (initialMessages && initialMessages.length > 0) {
+		console.log(`[half-pi] 续聊: ${sessionId} (${initialMessages.length} 条历史消息)`);
+	} else {
+		console.log(`[half-pi] 新会话: ${sessionId}`);
+	}
 	const soulInfo = loadSoul();
 	const soulLabel = soulInfo.source.includes("builtin") ? "built-in" : soulInfo.source;
 	console.log(`[half-pi] SOUL: ${soulLabel}`);
@@ -211,6 +297,7 @@ async function autoRejectBash(_toolName: string, params: Record<string, unknown>
 
 	let running = false;
 	let aborted = false;
+	let firstPrompt = true;
 
 	const abort = () => {
 		if (running) {
@@ -261,6 +348,17 @@ async function autoRejectBash(_toolName: string, params: Record<string, unknown>
 		try {
 			await session.prompt(input);
 			process.stdout.write("\n");
+
+			// Persist session
+			const msgs = session.getMessages();
+			if (firstPrompt && apiKey) {
+				// Generate LLM title for new sessions only
+				const title = await generateTitle(model, msgs, apiKey);
+				store.save(sessionId, msgs, title);
+			} else {
+				store.save(sessionId, msgs);
+			}
+			firstPrompt = false;
 		} catch (err) {
 			process.stderr.write(`\n[error] ${err instanceof Error ? err.message : String(err)}\n`);
 		} finally {
@@ -281,12 +379,17 @@ async function main(): Promise<void> {
 
 	// chat — interactive REPL
 	if (subcmd === "chat") {
-		// Parse --group from args
+		// Parse --group, --last, --resume from args
 		let chatGroup: string | undefined;
+		let resumeLast = false;
+		let resumeId: string | undefined;
 		for (let i = 1; i < args.length; i++) {
 			if (args[i] === "--group" || args[i] === "-g") {
 				chatGroup = args[i + 1];
-				break;
+			} else if (args[i] === "--last") {
+				resumeLast = true;
+			} else if (args[i] === "--resume") {
+				resumeId = args[i + 1];
 			}
 		}
 
@@ -299,7 +402,83 @@ async function main(): Promise<void> {
 			console.error('  "api_keys": { "' + model.provider + '": "sk-your-key" }');
 			process.exit(1);
 		}
-		await runChat(model, config, process.cwd(), undefined, chatGroup);
+
+		// Session persistence
+		const store = new SessionStore();
+		let sessionId: string;
+		let initialMessages: AgentMessage[] | undefined;
+
+		if (resumeLast) {
+			const data = store.loadLast();
+			if (!data || data.phase === "cold") {
+				console.log("[half-pi] 没有可恢复的上次会话，创建新会话。");
+				sessionId = store.create();
+				store.acquireLock(sessionId);
+			} else {
+				if (!store.acquireLock(data.id)) {
+					console.error(`[session] 会话 ${data.id} 正在被另一个终端使用`);
+					console.error("  请稍后再试，或使用其他会话。");
+					process.exit(1);
+				}
+				sessionId = data.id;
+				initialMessages = data.messages as AgentMessage[];
+			}
+		} else if (resumeId) {
+			const data = store.load(resumeId);
+			if (!data) {
+				console.error(`[session] 会话 ${resumeId} 不存在`);
+				process.exit(1);
+			}
+			if (data.phase === "cold") {
+				console.log(`[session] 会话 ${resumeId} 已进入冷区，只保留摘要：`);
+				console.log(`  ${data.entry.summary ?? "(无摘要)"}`);
+				console.log(`  无法恢复对话内容，请使用新会话。`);
+				process.exit(1);
+			}
+			if (!store.acquireLock(data.id)) {
+				console.error(`[session] 会话 ${data.id} 正在被另一个终端使用`);
+				console.error("  请稍后再试，或使用其他会话。");
+				process.exit(1);
+			}
+			sessionId = data.id;
+			initialMessages = data.messages as AgentMessage[];
+		} else {
+			sessionId = store.create();
+			store.acquireLock(sessionId);
+		}
+
+		// Register cleanup on exit (SIGTERM only; SIGINT is handled by runChat's abort)
+		const releaseAndExit = () => {
+			store.releaseLock(sessionId);
+			process.exit(0);
+		};
+		process.on("SIGTERM", releaseAndExit);
+
+		await runChat(model, config, process.cwd(), undefined, chatGroup, store, sessionId, initialMessages,
+			process.env[model.provider.toUpperCase() + "_API_KEY"] ?? config.api_keys[model.provider]);
+		store.releaseLock(sessionId);
+		process.exit(0);
+	}
+
+	if (subcmd === "session") {
+		const action = args[1];
+		if (action === "list") {
+			const store = new SessionStore();
+			const sessions = store.listSessions();
+			if (sessions.length === 0) {
+				console.log("(no saved sessions)");
+			} else {
+				for (const s of sessions) {
+					const phaseIcon = s.phase === "hot" ? "🔥" : s.phase === "warm" ? "🌤 " : "❄️ ";
+					const date = s.created.slice(0, 10);
+					const msgs = `${s.msg_count} msgs`;
+					const title = s.title.length > 50 ? s.title.slice(0, 47) + "..." : s.title;
+					console.log(`  ${phaseIcon} ${date}  ${msgs.padStart(8)}  ${title}`);
+				}
+			}
+			process.exit(0);
+		}
+		showHelp();
 		process.exit(0);
 	}
 

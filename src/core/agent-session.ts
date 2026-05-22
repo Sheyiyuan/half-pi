@@ -9,7 +9,7 @@
  */
 
 import { Agent, type AgentEvent } from "@earendil-works/pi-agent-core";
-import type { AgentTool } from "@earendil-works/pi-agent-core";
+import type { AgentTool, AgentMessage } from "@earendil-works/pi-agent-core";
 import type { Model } from "@earendil-works/pi-ai";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { loadAllSkills } from "./skills.js";
@@ -43,6 +43,10 @@ export interface AgentSessionOptions {
 	 * Arguments: (soulName, text)
 	 */
 	onSpeakDisplay?: (soul: string, text: string) => void;
+	/** Session ID for persistence (set when resuming or creating new) */
+	sessionId?: string;
+	/** Pre-existing messages to inject (for session recovery) */
+	initialMessages?: AgentMessage[];
 }
 
 export class AgentSession {
@@ -58,11 +62,15 @@ export class AgentSession {
 	private onSpeakDisplay?: (soul: string, text: string) => void;
 	private lastSpeakSoul: string = "";
 
+	/** Session ID for persistence (undefined if not persisted) */
+	public sessionId?: string;
+
 	constructor(options: AgentSessionOptions) {
 		this.cwd = options.cwd;
 		this.eventHandler = options.onEvent;
 		this.onSoulSwitch = options.onSoulSwitch;
 		this.onSpeakDisplay = options.onSpeakDisplay;
+		this.sessionId = options.sessionId;
 
 		if (options.groupName) {
 			const group = loadGroup(options.groupName);
@@ -98,7 +106,7 @@ export class AgentSession {
 				systemPrompt,
 				model: options.model,
 				tools: activeTools,
-				messages: [],
+				messages: options.initialMessages ?? [],
 			},
 			thinkingBudgets: {
 				low: 1024,
@@ -181,6 +189,11 @@ export class AgentSession {
 		unsubscribe();
 
 		return finalText || "(no response)";
+	}
+
+	/** Return the current message history for persistence. */
+	getMessages(): AgentMessage[] {
+		return this.agent.state.messages;
 	}
 
 	abort(): void {

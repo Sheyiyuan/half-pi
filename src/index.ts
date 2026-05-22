@@ -35,5 +35,8 @@ export {
 } from "./config.js";
 export type { HalfPiConfig, ModelConfig, CustomProvider } from "./config.js";
 
+export { SessionStore, titleFromFirstMessage } from "./core/session-store.js";
+export type { SessionPhase, SessionIndexEntry, SessionIndex, SessionData, SessionStoreOptions } from "./core/session-store.js";
+
 export { listAllModels, listBuiltinModels, listCustomModels, resolveModel, pickModel } from "./core/model-resolver.js";
 export type { ModelEntry } from "./core/model-resolver.js";
