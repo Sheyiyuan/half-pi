@@ -12,6 +12,7 @@ import { Type, type Static } from "@earendil-works/pi-ai";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core";
 import { createSkill, deleteSkill, loadAllSkills, type Skill } from "./skills.js";
 import { loadSoul } from "./soul-loader.js";
+import { MemoryStore, type MemoryEntry, type MemoryScope, type MemoryType, type MemoryPriority } from "./memory-store.js";
 import type { ToolName } from "./tools.js";
 
 // ─── Helpers ───
@@ -25,6 +26,10 @@ function textResult(text: string, details?: Record<string, unknown>): AgentToolR
 		content: [{ type: "text", text }],
 		details,
 	};
+}
+
+function okText(text: string): AgentToolResult<undefined> {
+	return { content: [{ type: "text", text }], details: undefined };
 }
 
 // ─── Read ───
@@ -354,6 +359,155 @@ export interface GroupChatHandlers {
 	onSpeak: SpeakHandler;
 }
 
+// ─── Memory Create ───
+
+const MemoryCreateSchema = Type.Object({
+	id: Type.String({ description: "Unique memory ID (e.g. '2026-05-22-vim-pref')" }),
+	scope: Type.String({ description: "Scope: 'local' (this device) or 'cloud' (synced across devices)" }),
+	type: Type.String({ description: "Type: 'user_pref', 'env_fact', 'lesson', or 'episodic'" }),
+	priority: Type.Optional(Type.String({ description: "Priority: 'critical', 'high', 'medium' (default), or 'low'" })),
+	tags: Type.Optional(Type.Array(Type.String(), { description: "Tags for grouping and search" })),
+	content: Type.String({ description: "Memory body (markdown). Be specific — include file paths, command names, exact preferences." }),
+});
+
+export function createMemoryCreateTool(store: MemoryStore): AgentTool<typeof MemoryCreateSchema, undefined> {
+	return {
+		name: "memory_create",
+		label: "Create Memory",
+		description: "Create a persistent memory. Use when the user shares important facts, preferences, or lessons worth remembering across sessions.",
+		parameters: MemoryCreateSchema,
+		execute: async (_id, params) => {
+			const entry = store.create({
+				id: params.id,
+				scope: params.scope as MemoryScope,
+				type: params.type as MemoryType,
+				priority: (params.priority as MemoryPriority) || "medium",
+				tags: params.tags || [],
+				content: params.content,
+				created: new Date().toISOString().slice(0, 10),
+				updated: new Date().toISOString().slice(0, 10),
+				call_count: 0,
+				last_called: null,
+			});
+			if (!entry) return okText(`Memory "${params.id}" already exists. Use memory_update to modify it.`);
+			return okText(`Memory "${params.id}" created (scope: ${params.scope}, priority: ${entry.priority}, weight: ${entry.weight.toFixed(2)})`);
+		},
+	};
+}
+
+// ─── Memory List ───
+
+const MemoryListSchema = Type.Object({
+	scope: Type.Optional(Type.String({ description: "Filter by scope: 'local' or 'cloud'" })),
+	type: Type.Optional(Type.String({ description: "Filter by type: 'user_pref', 'env_fact', 'lesson', 'episodic'" })),
+	priority: Type.Optional(Type.String({ description: "Filter by priority: 'critical', 'high', 'medium', 'low'" })),
+});
+
+export function createMemoryListTool(store: MemoryStore): AgentTool<typeof MemoryListSchema, undefined> {
+	return {
+		name: "memory_list",
+		label: "List Memories",
+		description: "List all memories, optionally filtered by scope, type, or priority.",
+		parameters: MemoryListSchema,
+		execute: async (_id, params) => {
+			const memories = store.list({
+				scope: params.scope as MemoryScope | undefined,
+				type: params.type as MemoryType | undefined,
+				priority: params.priority as MemoryPriority | undefined,
+			});
+			if (memories.length === 0) return okText("(no memories)");
+			const lines = memories.map((m) =>
+				`- [${m.scope}] ${m.id} (${m.type}, ${m.priority}, w=${m.weight.toFixed(2)}, ${m.call_count}c)`
+			);
+			return okText(`${memories.length} memories:\n${lines.join("\n")}`);
+		},
+	};
+}
+
+// ─── Memory Search ───
+
+const MemorySearchSchema = Type.Object({
+	query: Type.String({ description: "Keyword to search for in memory IDs, tags, and content" }),
+	scope: Type.Optional(Type.String({ description: "Limit search scope: 'local' or 'cloud' (default: both)" })),
+});
+
+export function createMemorySearchTool(store: MemoryStore): AgentTool<typeof MemorySearchSchema, undefined> {
+	return {
+		name: "memory_search",
+		label: "Search Memories",
+		description: "Search memories by keyword (case-insensitive, matches id, tags, body).",
+		parameters: MemorySearchSchema,
+		execute: async (_id, params) => {
+			const memories = store.list({
+				scope: params.scope as MemoryScope | undefined,
+			});
+			const q = params.query.toLowerCase();
+			const matches = memories.filter((m) =>
+				m.id.toLowerCase().includes(q) ||
+				m.tags.some((t) => t.toLowerCase().includes(q)) ||
+				m.content.toLowerCase().includes(q)
+			);
+			if (matches.length === 0) return okText(`No memories matching "${params.query}"`);
+			const lines = matches.map((m) =>
+				`- [${m.scope}] ${m.id} (${m.type}, w=${m.weight.toFixed(2)})\n  ${m.content.slice(0, 120)}${m.content.length > 120 ? "..." : ""}`
+			);
+			return okText(`${matches.length} matches for "${params.query}":\n${lines.join("\n")}`);
+		},
+	};
+}
+
+// ─── Memory Update ───
+
+const MemoryUpdateSchema = Type.Object({
+	id: Type.String({ description: "Memory ID to update" }),
+	scope: Type.String({ description: "Memory scope: 'local' or 'cloud'" }),
+	content: Type.Optional(Type.String({ description: "New content (if changing)" })),
+	priority: Type.Optional(Type.String({ description: "New priority: 'critical', 'high', 'medium', 'low', 'archive'" })),
+	type: Type.Optional(Type.String({ description: "New type: 'user_pref', 'env_fact', 'lesson', 'episodic'" })),
+	tags: Type.Optional(Type.Array(Type.String(), { description: "New tag list (replaces existing tags)" })),
+});
+
+export function createMemoryUpdateTool(store: MemoryStore): AgentTool<typeof MemoryUpdateSchema, undefined> {
+	return {
+		name: "memory_update",
+		label: "Update Memory",
+		description: "Update a memory's content, priority, type, or tags.",
+		parameters: MemoryUpdateSchema,
+		execute: async (_id, params) => {
+			const patch: Record<string, unknown> = {};
+			if (params.content !== undefined) patch.content = params.content;
+			if (params.priority !== undefined) patch.priority = params.priority;
+			if (params.type !== undefined) patch.type = params.type;
+			if (params.tags !== undefined) patch.tags = params.tags;
+
+			const updated = store.update(params.id, params.scope as MemoryScope, patch as Parameters<MemoryStore["update"]>[2]);
+			if (!updated) return okText(`Memory "${params.id}" (${params.scope}) not found.`);
+			return okText(`Memory "${params.id}" updated. New weight: ${updated.weight.toFixed(2)}`);
+		},
+	};
+}
+
+// ─── Memory Delete ───
+
+const MemoryDeleteSchema = Type.Object({
+	id: Type.String({ description: "Memory ID to delete" }),
+	scope: Type.String({ description: "Memory scope: 'local' or 'cloud'" }),
+});
+
+export function createMemoryDeleteTool(store: MemoryStore): AgentTool<typeof MemoryDeleteSchema, undefined> {
+	return {
+		name: "memory_delete",
+		label: "Delete Memory",
+		description: "Delete a memory permanently. Use cautiously — only for obsolete or incorrect memories.",
+		parameters: MemoryDeleteSchema,
+		execute: async (_id, params) => {
+			const ok = store.delete(params.id, params.scope as MemoryScope);
+			if (!ok) return okText(`Memory "${params.id}" (${params.scope}) not found.`);
+			return okText(`Memory "${params.id}" deleted.`);
+		},
+	};
+}
+
 // ─── Factory ───
 
 export function createHalfPiTools(cwd: string, handlers?: GroupChatHandlers): Map<ToolName, AgentTool> {
@@ -372,5 +526,12 @@ export function createHalfPiTools(cwd: string, handlers?: GroupChatHandlers): Ma
 	if (handlers?.onSpeak) {
 		tools.set("speak", createSpeakTool(handlers.onSpeak));
 	}
+	// Memory tools
+	const memoryStore = new MemoryStore();
+	tools.set("memory_create", createMemoryCreateTool(memoryStore));
+	tools.set("memory_list", createMemoryListTool(memoryStore));
+	tools.set("memory_search", createMemorySearchTool(memoryStore));
+	tools.set("memory_update", createMemoryUpdateTool(memoryStore));
+	tools.set("memory_delete", createMemoryDeleteTool(memoryStore));
 	return tools;
 }

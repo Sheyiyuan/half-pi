@@ -18,6 +18,11 @@ export const TOOL_NAMES = [
 	"skill_delete",
 	"soul_view",
 	"speak",
+	"memory_create",
+	"memory_list",
+	"memory_search",
+	"memory_update",
+	"memory_delete",
 ] as const;
 export type ToolName = (typeof TOOL_NAMES)[number];
 
@@ -36,6 +41,11 @@ export const TOOL_SNIPPETS: Record<string, string> = {
 	skill_delete: "Delete a skill by name",
 	soul_view: "View the current SOUL.md identity file",
 	speak: "CRITICAL: This is your ONLY way to output text. You are a director — never write raw text. Call speak(soul, text) to make a soul say something.",
+	memory_create: "Create a persistent memory (Markdown file). Use when user says 'remember this' or shares important facts/preferences/lessons.",
+	memory_list: "List all memories. Supports filtering by scope (local/cloud), type, or priority.",
+	memory_search: "Search memories by keyword (searches id, tags, and content).",
+	memory_update: "Update a memory's content or metadata (priority, tags, type). Provide id and scope to identify the memory.",
+	memory_delete: "Delete a memory by id and scope. Use cautiously — only for obsolete or incorrect memories.",
 };
 
 export const DEFAULT_TOOLS: ToolName[] = [
@@ -51,4 +61,9 @@ export const DEFAULT_TOOLS: ToolName[] = [
 	"skill_delete",
 	"soul_view",
 	"speak",
+	"memory_create",
+	"memory_list",
+	"memory_search",
+	"memory_update",
+	"memory_delete",
 ];
