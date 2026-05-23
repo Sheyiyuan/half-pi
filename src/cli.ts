@@ -259,6 +259,9 @@ async function autoRejectBash(_toolName: string, params: Record<string, unknown>
 	// Flag to suppress raw LLM text output (in director mode, only speak tool emits text)
 	let suppressRawText = false;
 
+	const SHORT_DIVIDER = "─".repeat(24);
+	let lastSpeakSoul = "";
+
 	const session = new AgentSession({
 		cwd,
 		model,
@@ -268,6 +271,10 @@ async function autoRejectBash(_toolName: string, params: Record<string, unknown>
 		groupName,
 		onSoulSwitch: setSoulLabel,
 		onSpeakDisplay: (soul, text) => {
+			if (lastSpeakSoul && soul !== lastSpeakSoul) {
+				process.stdout.write(SHORT_DIVIDER + "\n");
+			}
+			lastSpeakSoul = soul;
 			process.stdout.write(`[${soul}] ${text}\n`);
 		},
 		sessionId,
@@ -348,8 +355,13 @@ async function autoRejectBash(_toolName: string, params: Record<string, unknown>
 
 		running = true;
 		try {
+			// ── 用户发言前 ──
+			process.stdout.write(SHORT_DIVIDER + "\n");
+
 			await session.prompt(input);
-			process.stdout.write("\n");
+
+			// ── speak发言后 ──
+			process.stdout.write(SHORT_DIVIDER + "\n");
 
 			// Persist session
 			const msgs = session.getMessages();
