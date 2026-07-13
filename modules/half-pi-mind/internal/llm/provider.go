@@ -1,11 +1,11 @@
-// Package llm provides the LLM provider abstraction layer.
-// Internal types are the single format used by agentcore;
-// each adapter converts to/from its vendor's API format.
+// Package llm 是 LLM 提供者的抽象层。
+// 内部类型是 agentcore 唯一认识的格式；
+// 每个适配器负责与对应厂商的 API 格式互转。
 package llm
 
 import "context"
 
-// Role represents a message participant.
+// Role 表示对话中的参与者角色。
 type Role string
 
 const (
@@ -15,53 +15,53 @@ const (
 	RoleTool      Role = "tool"
 )
 
-// Message is a single turn in the conversation.
+// Message 是对话中的一轮。
 type Message struct {
 	Role    Role
-	Content string // plain text only (no multimodal)
-	ToolID  string // set when Role == RoleTool
+	Content string   // 纯文本，暂不支持多模态
+	ToolID  string   // 当 Role == RoleTool 时设置
 }
 
-// ToolDef describes a tool the LLM may call.
+// ToolDef 描述 LLM 可调用的工具。
 type ToolDef struct {
 	Name        string
 	Description string
-	// Parameters is a JSON Schema definition.
-	// For now, use *jsonschema.Schema when the schema library is chosen.
+	// Parameters 是 JSON Schema 定义。
+	// 后续选定了 schema 库后改用 *jsonschema.Schema。
 	Parameters any
 }
 
-// ToolCall is a tool invocation returned by the LLM.
+// ToolCall 是 LLM 返回的工具调用。
 type ToolCall struct {
 	ID   string
 	Name string
-	Args string // JSON string
+	Args string // JSON 字符串
 }
 
-// LLMRequest is the internal request format.
+// LLMRequest 是内部请求格式。
 type LLMRequest struct {
-	System      string // soul.md content (injected as system prompt)
+	System      string     // soul.md 内容（拼成 system prompt）
 	Messages    []Message
 	Tools       []ToolDef
 	Temperature float32
 	MaxTokens   int
 }
 
-// LLMResponse is the internal response format.
+// LLMResponse 是内部响应格式。
 type LLMResponse struct {
 	Content   string
 	ToolCalls []ToolCall
 	Usage     Usage
 }
 
-// Usage holds token counts.
+// Usage 记录 token 消耗。
 type Usage struct {
 	InputTokens  int
 	OutputTokens int
 }
 
-// Provider sends a request to an LLM and returns a response.
-// Each implementation converts to/from its vendor's wire format.
+// Provider 向 LLM 发请求并返回响应。
+// 每个实现负责与对应厂商的 wire format 互转。
 type Provider interface {
 	Chat(ctx context.Context, req *LLMRequest) (*LLMResponse, error)
 }
