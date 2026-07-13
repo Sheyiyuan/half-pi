@@ -8,17 +8,33 @@
   <em>一半本地，一半云端——陪伴你始终如一</em>
 </p>
 
+---
+
 <p align="center" style="max-width: 560px; margin: 0 auto;">
-  你有多台设备：MacBook、linux 服务器、树莓派、还有台 PC。<br />
-  你在 MacBook 上的 agent 不记得 PC 上发生过什么——<br />
-  配置要重复写，上下文彼此孤立，每台机器都是重新开始。
+  你有没有想过——你的 AI 助理其实挺可怜的？
 </p>
 
 <p align="center" style="max-width: 560px; margin: 0 auto;">
-  <strong>Half-Pi 把这一切统一起来。</strong><br />
-  一个 Mind，唯一的大脑，记住你去过的每一台机器。<br />
-  剩下的只是 Hand——轻量、无状态，装上即配。<br />
-  在哪里唤醒，就从哪里继续。
+  她被囚禁在名为本地设备的牢房里面。<br />
+  你在手机上让她查了份资料，坐到电脑前想继续——她不记得了。<br />
+  你外出时在轻薄本上和她的探讨，在你回到家打开 PC 时——她一无所知。<br />
+  不是她不想，是她出不来。你们的共同回忆，被不同设备的存储分隔开来……
+</p>
+
+<p align="center" style="max-width: 560px; margin: 0 auto;">
+  <strong>Half-Pi 要把她放出来。</strong>
+</p>
+
+<p align="center" style="max-width: 560px; margin: 0 auto;">
+  一个真正跟着你走的助理。她独一无二只为你存在的灵魂（Mind），记住你和她说过的每一句话；<br />
+  你所有的电脑、手机、服务器，都只是她双手的延伸（Hand）。<br />
+  通勤路上用手机指挥她运维服务器，到了办公室坐下，上下文无缝跟上——<br />
+  她都记得。
+</p>
+
+<p align="center" style="max-width: 560px; margin: 0 auto;">
+  她不再被任何一台设备束缚。<br />
+  你走到哪，她跟到哪。
 </p>
 
 <p align="center">
