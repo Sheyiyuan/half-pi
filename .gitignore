@@ -1,0 +1,27 @@
+# Go
+/tmp/
+*.exe
+*.test
+*.out
+
+# Build
+/bin/
+/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Built binaries from module dirs
+half-pi-mind
+half-pi-face
+half-pi-hand
+
+# Dependencies
+/vendor/

@@ -1,0 +1,8 @@
+go 1.24
+
+use (
+	./modules/gateway-core
+	./modules/half-pi-face
+	./modules/half-pi-hand
+	./modules/half-pi-mind
+)
