@@ -1,6 +1,74 @@
 package llm
 
-import "context"
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+)
+
+// ── OpenAI 请求体结构 ──
+
+// openaiRequestBody 对应 POST /chat/completions 的请求体。
+type openaiRequestBody struct {
+	Model       string          `json:"model"`
+	Messages    []openaiMessage `json:"messages"`
+	Tools       []openaiTool    `json:"tools,omitempty"`
+	Temperature float32         `json:"temperature,omitempty"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+}
+
+type openaiMessage struct {
+	Role        string           `json:"role"`
+	Content     string           `json:"content"`
+	ToolCallID  string           `json:"tool_call_id,omitempty"`
+	ToolCalls   []openaiToolCall `json:"tool_calls,omitempty"`
+}
+
+type openaiTool struct {
+	Type     string         `json:"type"`
+	Function openaiFunction `json:"function"`
+}
+
+type openaiFunction struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	Parameters  any    `json:"parameters"`
+}
+
+// ── OpenAI 响应体结构 ──
+
+type openaiResponse struct {
+	Choices []openaiChoice `json:"choices"`
+	Usage   *openaiUsage   `json:"usage,omitempty"`
+}
+
+type openaiChoice struct {
+	Message openaiResponseMessage `json:"message"`
+}
+
+type openaiResponseMessage struct {
+	Content   string           `json:"content"`
+	ToolCalls []openaiToolCall `json:"tool_calls,omitempty"`
+}
+
+type openaiToolCall struct {
+	ID       string             `json:"id"`
+	Type     string             `json:"type"`
+	Function openaiToolCallFunc `json:"function"`
+}
+
+type openaiToolCallFunc struct {
+	Name      string `json:"name"`
+	Arguments string `json:"arguments"`
+}
+
+type openaiUsage struct {
+	PromptTokens     int `json:"prompt_tokens"`
+	CompletionTokens int `json:"completion_tokens"`
+}
 
 // openaiProvider 适配 OpenAI 兼容 API（deepseek、groq、openrouter 等）。
 type openaiProvider struct {
@@ -18,7 +86,134 @@ func NewOpenAI(baseURL, apiKey, model string) Provider {
 	}
 }
 
-// Chat 发送请求并返回 LLM 响应。
+// Chat 向 OpenAI 兼容 API 发送请求并返回解析后的响应。
 func (p *openaiProvider) Chat(ctx context.Context, req *LLMRequest) (*LLMResponse, error) {
-	return nil, nil
+	// 构造请求体
+	body := p.buildRequestBody(req)
+	jsonBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+	}
+
+	// 创建 HTTP 请求
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		p.BaseURL+"/chat/completions", bytes.NewReader(jsonBytes))
+	if err != nil {
+		return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
+
+	// 发送请求
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	// 读取响应体
+	respBytes, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应体失败: %w", err)
+	}
+
+	// 检查 HTTP 状态码
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API 返回错误状态 %d: %s", resp.StatusCode, string(respBytes))
+	}
+
+	// 解析响应
+	return p.parseResponse(respBytes)
+}
+
+// buildRequestBody 将内部 LLMRequest 转换为 OpenAI 格式的请求体。
+func (p *openaiProvider) buildRequestBody(req *LLMRequest) *openaiRequestBody {
+	body := &openaiRequestBody{
+		Model:       p.Model,
+		Temperature: req.Temperature,
+		MaxTokens:   req.MaxTokens,
+	}
+
+	// system prompt 作为 messages 的第一条
+	if req.System != "" {
+		body.Messages = append(body.Messages, openaiMessage{
+			Role:    "system",
+			Content: req.System,
+		})
+	}
+
+	// 逐条映射对话消息
+	for _, msg := range req.Messages {
+		om := openaiMessage{
+			Role:    string(msg.Role),
+			Content: msg.Content,
+		}
+		if msg.Role == RoleTool {
+			om.ToolCallID = msg.ToolID
+		}
+		if msg.Role == RoleAssistant && len(msg.ToolCalls) > 0 {
+			for _, tc := range msg.ToolCalls {
+				om.ToolCalls = append(om.ToolCalls, openaiToolCall{
+					ID:   tc.ID,
+					Type: "function",
+					Function: openaiToolCallFunc{
+						Name:      tc.Name,
+						Arguments: tc.Args,
+					},
+				})
+			}
+		}
+		body.Messages = append(body.Messages, om)
+	}
+
+	// 映射工具定义
+	for _, tool := range req.Tools {
+		body.Tools = append(body.Tools, openaiTool{
+			Type: "function",
+			Function: openaiFunction{
+				Name:        tool.Name,
+				Description: tool.Description,
+				Parameters:  tool.Parameters,
+			},
+		})
+	}
+
+	return body
+}
+
+// parseResponse 将 OpenAI 格式的响应体解析为内部 LLMResponse。
+func (p *openaiProvider) parseResponse(body []byte) (*LLMResponse, error) {
+	var resp openaiResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return nil, fmt.Errorf("解析响应 JSON 失败: %w", err)
+	}
+
+	if len(resp.Choices) == 0 {
+		return nil, fmt.Errorf("响应中没有 choices")
+	}
+
+	choice := resp.Choices[0]
+
+	result := &LLMResponse{
+		Content: choice.Message.Content,
+	}
+
+	// 映射工具调用
+	for _, tc := range choice.Message.ToolCalls {
+		result.ToolCalls = append(result.ToolCalls, ToolCall{
+			ID:   tc.ID,
+			Name: tc.Function.Name,
+			Args: tc.Function.Arguments,
+		})
+	}
+
+	// 映射 token 用量
+	if resp.Usage != nil {
+		result.Usage = Usage{
+			InputTokens:  resp.Usage.PromptTokens,
+			OutputTokens: resp.Usage.CompletionTokens,
+		}
+	}
+
+	return result, nil
 }

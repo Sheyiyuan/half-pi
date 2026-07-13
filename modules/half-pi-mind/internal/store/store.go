@@ -2,8 +2,6 @@
 // devices, and audit logs.
 package store
 
-import "fmt"
-
 // Store wraps an SQLite database.
 type Store struct{}
 
@@ -12,7 +10,8 @@ func New(path string) (*Store, error) {
 	return &Store{}, nil
 }
 
-// Close shuts down the database connection.
+// Close 关闭数据库连接。
+// TODO: 接入 SQLite 后实现真正的关闭逻辑。
 func (s *Store) Close() error {
-	return fmt.Errorf("not implemented")
+	return nil
 }

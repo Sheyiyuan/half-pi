@@ -24,7 +24,8 @@ type StorageConfig struct {
 	LogDir  string `toml:"log_dir"`
 }
 
-// Load reads configuration from path.
+// Load 读取配置文件。
+// TODO: 实现 TOML 解析，当前忽略 path 返回空配置。
 func Load(path string) (*Config, error) {
 	return &Config{}, nil
 }
