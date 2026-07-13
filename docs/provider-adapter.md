@@ -10,8 +10,9 @@ agentcore 需要调用 LLM，但不同 provider 的 API 格式不兼容。
 ```
 agentcore (只认内部格式)
     │
-    ├── openaiAdapter ──→ openai 兼容 API (deepseek, groq, openrouter……)
-    └── geminiAdapter ──→ Google Gemini API
+    ├── openaiAdapter ──→ OpenAI 兼容 API (deepseek, groq, openrouter……)
+    ├── geminiAdapter ──→ Google Gemini API
+    └── anthropicAdapter ──→ Anthropic Claude API
 ```
 
 每个适配器做且只做两件事：
@@ -133,9 +134,61 @@ functionCall   → for each candidate:
                  注意：一个消息可能有多个 parts，部分是 text 部分是 functionCall
 ```
 
+### 2.4 Anthropic (Claude)
+
+| 概念 | 内部格式 | Anthropic |
+|------|---------|-----------|
+| system prompt | `System string` | `system: "…"` 独立字段（支持纯文本或 block 数组） |
+| 用户消息 | `{Role: user, Content: "…"}` | `{role: "user", content: [{type: "text", text: "…"}]}` content 永远是 block 数组 |
+| 助手消息 | `{Role: assistant, Content: "…"}` | `{role: "assistant", content: [{type: "text", text: "…"}]}` |
+| tool 结果 | `{Role: tool, Content: "…", ToolID: "…"}` | `{role: "user", content: [{type: "tool_result", tool_use_id: "…", content: "…"}]}` |
+| 工具定义 | `ToolDef[]` | `tools: [{name, description, input_schema}]` |
+| 工具调用 | `ToolCall[]` | 在 assistant 的 content block 里：`{type: "tool_use", id, name, input}` |
+
+#### Anthropic 格式独有特征
+
+1. **content 永远是 block 数组** —— 不能传纯字符串，每条消息的 content 都是 `[]Block`。OpenAI 可以传字符串，Gemini 传 `parts[]`。适配器要做对应的序列化。
+
+2. **tool 调用在 content block 里** —— 不像 OpenAI 有独立的 `tool_calls` 字段，Anthropic 的 tool_use 混在 content 数组里，和 text block 平级。解析时需要遍历 content 区分 `type: "text"` 和 `type: "tool_use"`。
+
+3. **tool 结果用 user 角色** —— 没有 `role: "tool"`，而是 `role: "user"` 配合 `content: [{type: "tool_result", tool_use_id: "…"}]`。这对内部格式映射影响最大——给 LLM 发消息时，tool 角色的消息必须转为 user 角色的 tool_result block。
+
+4. **system 字段是独立顶层字段**（类似 Gemini），不能放在 messages 里。
+
+#### 映射逻辑
+
+```
+── Anthropic 请求构建（内部 → Anthropic）──
+
+system         → 独立字段 system: "…"
+user           → role: "user", content: [{type: "text", text: "…"}]
+assistant      → role: "assistant", content: 
+                  如果无 tool_call：[{type: "text", text: "…"}]
+                  有 tool_call：拆成 text block + tool_use blocks
+tool 消息      → role: "user", content: [{type: "tool_result", tool_use_id, content: "…"}]
+tools          → {name, description, input_schema}
+                 注意 Anthropic 不支持 type: "function" 外层包装
+
+── Anthropic 响应解析（Anthropic → 内部）──
+
+content blocks → 遍历 content 数组，type: "text" 拼到 Content，
+                 type: "tool_use" 拆成 ToolCall
+max_tokens     → 必填字段（deepseek 不用传，但 Anthropic 报了错才给结果）
+```
+
 ---
 
-## 3. 适配器接口
+## 3. 三大 provider 格式对比总表
+
+| 特性 | OpenAI 兼容 | Gemini | Anthropic |
+|------|------------|--------|-----------|
+| system prompt | messages[0].role=system | 独立字段 system_instruction | 独立字段 system |
+| content 格式 | 字符串 / block 数组 | parts[] 数组 | block[] 数组 |
+| 助手 role 名 | "assistant" | "model" | "assistant" |
+| tool 调用位置 | 独立的 `tool_calls` 字段 | `functionCall` 在 parts 里 | `type: "tool_use"` 在 content block 里 |
+| tool 结果角色 | "tool" | "function" | "user"（tool_result block） |
+| 工具定义包装 | `{type: "function", function: …}` | `{function_declarations: […]}` | 直接 `{name, description, …}` |
+| 必填字段 | 无特殊 | 无特殊 | `max_tokens` 必填 |
 
 ```go
 type Provider interface {
@@ -170,7 +223,8 @@ internal/agentcore/
 ├── llm.go          ← Chat() 入口，tool call 循环
 ├── provider.go     ← Provider 接口 + LLMRequest/LLMResponse 类型定义
 ├── openai.go       ← openaiImpl：内部格式 ↔ OpenAI 格式
-└── gemini.go       ← geminiImpl：内部格式 ↔ Gemini 格式
+├── gemini.go       ← geminiImpl：内部格式 ↔ Gemini 格式
+└── anthropic.go    ← anthropicImpl：内部格式 ↔ Anthropic 格式
 ```
 
 ---
