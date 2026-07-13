@@ -85,7 +85,7 @@ flowchart TB
 **Local Hand**（Mind 内置的手脚——自我迭代的执行器）
 - 与远程 Hand 运行同样的协议和约束，与 Gateway 在同一进程内或 Unix socket 通信
 - **默认模式：restricted（受限）**
-  - 仅允许操作 `${MIND_DATA_DIR}`（soul.md、config.yaml 等）和部分数据库表
+  - 仅允许操作 `${MIND_DATA_DIR}`（soul.md、config.toml 等）和部分数据库表
   - 受完整黑白名单约束，自我修改也需要通过审批流程
   - 当有远程 Hand 连接时，Agent Core 优先使用远程 Hand 执行用户任务
 - **退化模式：unrestricted（非受限）**
@@ -242,7 +242,7 @@ sequenceDiagram
 3. Hand（手脚）—— 执行层
 
 · 常驻进程：开机自启，保持与 Mind 的长连接（WSS）。
-· 本地规则文件：hand_rules.yaml，用户可手动编辑白名单/黑名单。
+· 本地规则文件：hand_rules.toml，用户可手动编辑白名单/黑名单。
 · 多 session 执行环境：
   · 每个 session 是一个独立的 shell 执行语境，拥有自己的 cwd、env、运行中的进程树。
   · session 之间完全隔离——一个 session 的 cd 不影响其他 session，pkill 不会误杀隔壁进程。
