@@ -19,9 +19,9 @@
 Thumbs.db
 
 # Built binaries from module dirs
-half-pi-mind
-half-pi-face
-half-pi-hand
+modules/*/half-pi-mind
+modules/*/half-pi-face
+modules/*/half-pi-hand
 
 # Dependencies
 /vendor/
