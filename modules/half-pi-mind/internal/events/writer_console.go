@@ -21,6 +21,9 @@ func (w *ConsoleWriter) WriteEvent(e Event) error {
 		return nil
 	}
 	fmt.Fprintln(os.Stderr, prefix+msg)
+	if e.Type == TypeToolResult {
+		fmt.Fprintln(os.Stderr) // 结果后空一行，和旧格式一致
+	}
 	return nil
 }
 
@@ -36,7 +39,7 @@ func formatPrefix(e Event) string {
 		return "── [BLOCKED] "
 	case TypeLLMRequest:
 		return "── [LLM >>] "
-	case TypeLLMRespone:
+	case TypeLLMResponse:
 		return "── [LLM <<] "
 	case TypeSecurity:
 		return "── [SEC] "

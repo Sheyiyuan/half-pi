@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 )
@@ -51,14 +52,19 @@ func main() {
 
 	exec := local.New()
 
+	bus := events.NewEventBus()
+	bus.Subscribe(events.NewConsoleWriter())
+
 	core, err := agentcore.New(provider, exec)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "初始化失败: %v\n", err)
 		os.Exit(1)
 	}
+	core.Bus = bus
 
 	scanner := bufio.NewScanner(os.Stdin)
 	core.SetApprover(&REPLApprover{scanner: scanner})
+	defer bus.Close()
 
 	fmt.Println("half-pi mind ready")
 	fmt.Println("输入 /mode <normal|trust|yolo> 切换模式")
@@ -80,11 +86,13 @@ func main() {
 		}
 		if input == "/debug" {
 			core.Debug = !core.Debug
-			fmt.Fprintf(os.Stderr, "调试模式: %v\n", core.Debug)
+			bus.PublishSync(events.New("", "repl", events.LevelInfo, events.TypeSystem,
+				fmt.Sprintf("调试模式: %v", core.Debug)))
 			continue
 		}
 		if input == "/mode" {
-			fmt.Fprintf(os.Stderr, "当前模式: %s\n", core.Mode)
+			bus.PublishSync(events.New("", "repl", events.LevelInfo, events.TypeSystem,
+				fmt.Sprintf("当前模式: %s", core.Mode)))
 			continue
 		}
 		if strings.HasPrefix(input, "/mode ") {
@@ -92,16 +100,19 @@ func main() {
 			switch mode {
 			case "strict", "normal", "trust", "yolo":
 				core.SetMode(mode)
-				fmt.Fprintf(os.Stderr, "安全模式: %s\n", mode)
+				bus.PublishSync(events.New("", "repl", events.LevelInfo, events.TypeModeChange,
+					fmt.Sprintf("安全模式已切换为: %s", mode)))
 			default:
-				fmt.Fprintf(os.Stderr, "未知模式: %s（支持: strict, normal, trust, yolo）\n", mode)
+				bus.PublishSync(events.New("", "repl", events.LevelWarn, events.TypeSystem,
+					fmt.Sprintf("未知模式: %s（支持: strict, normal, trust, yolo）", mode)))
 			}
 			continue
 		}
 
 		response, err := core.Chat(context.Background(), input)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "错误: %v\n", err)
+			bus.PublishSync(events.New("", "repl", events.LevelError, events.TypeSystem,
+				fmt.Sprintf("错误: %v", err)))
 			continue
 		}
 		fmt.Println(response)

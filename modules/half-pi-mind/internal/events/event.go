@@ -38,7 +38,7 @@ const (
 	TypeSystem     = "system"
 	TypeUserInput  = "user_input"
 	TypeLLMRequest = "llm_request"
-	TypeLLMRespone = "llm_response"
+	TypeLLMResponse = "llm_response"
 	TypeToolCall   = "tool_call"
 	TypeToolResult = "tool_result"
 	TypeToolBlock  = "tool_blocked"
@@ -67,6 +67,8 @@ func (e Event) WithData(data any) Event {
 
 func newID() string {
 	b := make([]byte, 8)
-	rand.Read(b)
+	if _, err := rand.Read(b); err != nil {
+		return fmt.Sprintf("%016x", time.Now().UnixNano())
+	}
 	return fmt.Sprintf("%016x", b)
 }

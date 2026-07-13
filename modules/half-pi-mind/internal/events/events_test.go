@@ -80,18 +80,31 @@ func TestBusSubscribeAndPublish(t *testing.T) {
 
 	bus.Publish(e1)
 	bus.Publish(e2)
+	bus.Close() // 等待 goroutine 写入完成
 
-	// 异步写入，等一会
-	waitFor(t, func() bool { mu.Lock(); defer mu.Unlock(); return len(got) >= 2 })
-
-	if len(got) != 2 {
-		t.Fatalf("收到 %d 个事件，期望 2", len(got))
+	mu.Lock()
+	gotLen := len(got)
+	mu.Unlock()
+	if gotLen != 2 {
+		t.Fatalf("收到 %d 个事件，期望 2", gotLen)
 	}
-	if got[0].Message != "事件A" {
-		t.Errorf("第1个事件 message = %q", got[0].Message)
+	// 异步发布，不保证顺序，检查内容是否存在
+	var hasEventA, hasToolCall bool
+	mu.Lock()
+	for _, e := range got {
+		if e.Message == "事件A" {
+			hasEventA = true
+		}
+		if e.Type == TypeToolCall {
+			hasToolCall = true
+		}
 	}
-	if got[1].Type != TypeToolCall {
-		t.Errorf("第2个事件 type = %q", got[1].Type)
+	mu.Unlock()
+	if !hasEventA {
+		t.Error("未收到事件A")
+	}
+	if !hasToolCall {
+		t.Error("未收到工具调用事件")
 	}
 }
 
@@ -191,12 +204,18 @@ func TestRace(t *testing.T) {
 	bus := NewEventBus()
 	bus.Subscribe(NewConsoleWriter())
 
-	f, _ := os.CreateTemp("", "events-race-*.jsonl")
+	f, err := os.CreateTemp("", "events-race-*.jsonl")
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer os.Remove(f.Name())
 	f.Close()
-	fw, _ := NewFileWriter(f.Name())
-	bus.Subscribe(fw)
+	fw, err := NewFileWriter(f.Name())
+	if err != nil {
+		t.Fatal(err)
+	}
 	defer fw.Close()
+	bus.Subscribe(fw)
 
 	var wg sync.WaitGroup
 
@@ -248,6 +267,7 @@ func waitFor(t *testing.T, cond func() bool) {
 	t.Fatal("等待超时")
 }
 
+// captureStderr 捕获 stderr 输出。不 goroutine-safe，不同时跑测试没问题。
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	r, w, err := os.Pipe()

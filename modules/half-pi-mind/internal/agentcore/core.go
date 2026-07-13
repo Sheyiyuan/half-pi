@@ -5,8 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 )
@@ -17,6 +17,7 @@ type Core struct {
 	llm        llm.Provider
 	exec       executor.ToolExecutor
 	history    []llm.Message
+	Bus        *events.EventBus // Mind 的事件总线，nil 时不发事件
 	Debug      bool
 	Mode       string // "normal" | "trust" | "yolo"
 	approver   Approver
@@ -52,12 +53,21 @@ func New(llmProvider llm.Provider, exec executor.ToolExecutor) (*Core, error) {
 }
 
 // SetMode 切换安全模式，同时在对话历史中记录，让 LLM 感知到变化。
+// TODO: 被非 REPL 调用方（如 WSS server）调用时，调用方需负责发送事件。
 func (c *Core) SetMode(mode string) {
 	c.Mode = mode
 	c.history = append(c.history, llm.Message{
 		Role:    llm.RoleSystem,
 		Content: fmt.Sprintf("安全模式已切换为: %s", mode),
 	})
+}
+
+// publish 向事件总线发送一条事件，Bus 为 nil 时静默跳过。
+// 同步发送，确保调试输出顺序（[TOOL] → [RESULT] → LLM 回复）不乱。
+func (c *Core) publish(level, typ, msg string) {
+	if c.Bus != nil {
+		c.Bus.PublishSync(events.New("", "agentcore", level, typ, msg))
+	}
 }
 
 // SetApprover 设置审批交互器，用于 normal 模式下用户确认流程。
@@ -124,7 +134,7 @@ func (c *Core) Chat(ctx context.Context, input string) (string, error) {
 		// 逐个执行工具
 		for _, tc := range resp.ToolCalls {
 			if c.Debug {
-				fmt.Fprintf(os.Stderr, "── [TOOL] %s(%s)\n", tc.Name, tc.Args)
+				c.publish(events.LevelDebug, events.TypeToolCall, fmt.Sprintf("%s(%s)", tc.Name, tc.Args))
 			}
 
 			// 解析参数，提取 LLM 的 confirm 标记
@@ -188,9 +198,7 @@ func (c *Core) Chat(ctx context.Context, input string) (string, error) {
 
 			var result *executor.ToolResult
 			if shouldBlock {
-				if c.Debug {
-					fmt.Fprintf(os.Stderr, "── [BLOCKED] %s\n", blockReason)
-				}
+				c.publish(events.LevelDebug, events.TypeToolBlock, blockReason)
 				result = &executor.ToolResult{
 					Success: true,
 					Output:  fmt.Sprintf("⚠️ 操作被拒绝: %s", blockReason),
@@ -209,7 +217,7 @@ func (c *Core) Chat(ctx context.Context, input string) (string, error) {
 				if len([]rune(truncated)) > 200 {
 					truncated = string([]rune(truncated)[:200]) + "…"
 				}
-				fmt.Fprintf(os.Stderr, "── [RESULT] %s\n\n", truncated)
+				c.publish(events.LevelDebug, events.TypeToolResult, truncated)
 			}
 
 			c.history = append(c.history, llm.Message{

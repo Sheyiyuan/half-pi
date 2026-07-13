@@ -26,7 +26,7 @@ run-hand:
 
 # ── Test all modules ──
 test:
-	go test ./modules/...
+	cd modules/half-pi-mind && go test -race -count=1 ./...
 
 # ── Lint ──
 lint:
