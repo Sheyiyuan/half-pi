@@ -12,9 +12,8 @@
 
 Half-Pi 是一套 Face-Mind-Hand 三端分离的远程设备操控系统。
 
-一个 AI 意识（Mind）作为唯一的记忆与决策核心，通过多台远程设备（Hand）精准执行，用户通过统一的交互界面（Face）与之对话。跨设备的上下文与记忆始终保持全局一致。
-
-不是远程控制台加 AI 插件——Mind 是整个系统的中心。
+一个 AI 意识（Mind）作为唯一的记忆与决策核心，通过多台远程设备（Hand）
+精准执行，用户通过统一的交互界面（Face）与之对话。
 
 ## 架构
 
@@ -22,25 +21,33 @@ Half-Pi 是一套 Face-Mind-Hand 三端分离的远程设备操控系统。
 Face  ←→  Mind  ←→  Hand
 ```
 
-| 角色 | 职责 | 实现 |
-|------|------|------|
-| **Face** | 用户交互层，不持有任何状态 | Bubble Tea TUI / WebUI / IM Bot |
-| **Mind** | 唯一的智能节点，维护全局记忆与决策 | Go 服务端 |
-| **Hand** | 纯执行者，常驻被控设备 | Go 编译的单一二进制守护进程 |
+| 角色 | 职责 | 实现状态 |
+|------|------|----------|
+| **Mind** | 唯一的智能节点，工具调用 + 安全审批 + 事件总线 | 🟢 Go REPL 可用 |
+| **Face** | 用户交互层，不持有任何状态 | ⚪ 待开发 |
+| **Hand** | 纯执行者，常驻被控设备 | ⚪ 待开发 |
 
-详细设计：[agent 设计文档](https://github.com/Sheyiyuan/half-pi)（待补充）
+## 当前进展（Phase 1）
 
-## 核心设计
+- ✅ 工具系统：init() 自注册，独立文件，通用 confirm 参数
+- ✅ 安全策略：strict / normal / trust / yolo 四模式，y/n/Y/N 审批
+- ✅ 事件总线：EventBus + ConsoleWriter + FileWriter
+- ✅ 环境初始化：~/.half-pi/ 目录，config.toml，编译时 OS 区分
+- ✅ 配置加载：TOML 解析，模型/提供商定义，环境变量密钥覆盖
+- ✅ 执行工具：exec_command、read_file、list_dir、check_security
+- ✅ 工具模板：example.md 规范，添加新工具只需一个文件 + init()
 
-- **关注点分离**：Face 只做 I/O，Mind 只做决策，Hand 只做执行
-- **联邦黑白名单**：服务端 + 客户端双层安全规则
-- **四种风险模式**：Strict / Normal / Trust / YOLO
-- **全链路审计**：每步操作可追溯
-- **跨平台会话**：所有 Face 共享同一上下文
+详细开发进度见 [AGENTS.md](AGENTS.md)。
 
-## 状态
+## 快速开始
 
-设计定稿，准备进入 Phase 1 开发。
+```bash
+# 首次使用：编辑配置填入 API Key
+vim ~/.half-pi/config.toml
+
+# 启动 REPL
+cd modules/half-pi-mind && go run ./cmd/half-pi-mind/
+```
 
 ## 许可
 

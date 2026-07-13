@@ -8,9 +8,11 @@ import (
 	"strings"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/setup"
 )
 
 // REPLApprover 实现 agentcore.Approver，在终端交互确认。
@@ -38,16 +40,35 @@ func (a *REPLApprover) Confirm(toolName, reason string) agentcore.ConfirmResult 
 }
 
 func main() {
-	apiKey := os.Getenv("DEEPSEEK_API_KEY")
-	if apiKey == "" {
-		fmt.Fprintln(os.Stderr, "请设置 DEEPSEEK_API_KEY 环境变量")
+	// 初始化环境目录
+	env, err := setup.Init()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "环境初始化失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 读取配置
+	cfg, err := config.Load(env.Config)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "读取配置失败: %v\n", err)
+		os.Exit(1)
+	}
+
+	// 解析选中的模型
+	modelID := cfg.LLM.DefaultModel
+	if modelID == "" && len(cfg.LLM.Models) > 0 {
+		modelID = cfg.LLM.Models[0].ID
+	}
+	rm, err := cfg.ResolveModel(modelID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "模型解析错误: %v\n", err)
 		os.Exit(1)
 	}
 
 	provider := llm.NewOpenAI(
-		"https://api.deepseek.com/v1",
-		apiKey,
-		"deepseek-chat",
+		rm.Endpoint,
+		rm.APIKey,
+		rm.Name,
 	)
 
 	exec := local.New()
