@@ -43,33 +43,34 @@ Half-Pi （重置版） 远程设备操控系统 · 设计文档
 
 Mind 由两个组件构成：Agent Core（大脑）和 Local Hand（内置的手脚）。通信不内嵌在 Mind 中——所有包通过共同的 gateway-core 互连。
 
-```
-                         ┌─── Face ──── gateway-core + 交互层
-                         │
-                      ┌──┴─────────────────────────────┐
-                      │           Mind                  │
-                      │  gateway-core  ←── 与 Face/Hand │
-                      │               ──→ 共用同一基座  │
-                      │                                 │
-                      │  ┌──────────────────────┐      │
-                      │  │    Agent Core         │      │
-                      │  │  (soul.md 驱动行为)    │      │
-                      │  │  理解意图 / 记忆管理   │      │
-                      │  │  设备选择 / 跨设备编排 │      │
-                      │  └────────┬─────────────┘      │
-                      │           │ 内部调用             │
-                      │  ┌────────┴─────────────┐      │
-                      │  │    Local Hand         │      │
-                      │  │    执行本地指令       │      │
-                      │  │    受黑白名单约束     │      │
-                      │  │    restricted/unrestricted │  │
-                      │  └──────────────────────┘      │
-                      └─────────────────────────────────┘
-                                │ gateway-core
-                    ┌───────────┴───────────┐
-                    │                       │
-              远程 Hand-1              远程 Hand-2
-               (gateway-core + 执行器)   (同上)
+```mermaid
+flowchart TB
+    subgraph Face["Face 交互层"]
+        FaceUI["gateway-core + 交互层<br/>（无状态，只做 I/O）"]
+    end
+
+    subgraph Mind["Mind 大脑层"]
+        direction TB
+        Gateway["gateway-core<br/>WSS 通信基座"]
+
+        subgraph Inner["内部组件"]
+            AgentCore["Agent Core<br/>soul.md 驱动行为<br/>理解意图 / 记忆管理<br/>设备选择 / 跨设备编排"]
+            LocalHand["Local Hand<br/>执行本地指令<br/>受黑白名单约束<br/>restricted / unrestricted"]
+        end
+
+        Gateway --> AgentCore
+        AgentCore -->|内部调用| LocalHand
+        Gateway --> LocalHand
+    end
+
+    subgraph RemoteHands["远程 Hand"]
+        Hand1["远程 Hand-1<br/>gateway-core + 执行器"]
+        Hand2["远程 Hand-2<br/>gateway-core + 执行器"]
+    end
+
+    FaceUI -->|WSS + 加密| Gateway
+    Gateway -->|WSS + 加密| Hand1
+    Gateway -->|WSS + 加密| Hand2
 ```
 
 ### 3. 各组件职责
