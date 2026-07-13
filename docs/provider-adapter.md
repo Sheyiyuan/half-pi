@@ -196,22 +196,12 @@ type Provider interface {
 }
 ```
 
-两个实现：
+三个实现：
 
 ```
-openaiImpl{
-    BaseURL string   // deepseek: https://api.deepseek.com/v1
-    APIKey  string
-    Model   string   // "deepseek-chat"
-    Client  *http.Client
-}
-
-geminiImpl{
-    BaseURL string   // https://generativelanguage.googleapis.com/v1beta
-    APIKey  string
-    Model   string   // "gemini-2.0-flash"
-    Client  *http.Client
-}
+openai   → deepseek / groq / openrouter 等
+gemini   → Google Gemini
+anthropic → Anthropic Claude
 ```
 
 ---
@@ -219,13 +209,20 @@ geminiImpl{
 ## 4. 文件结构
 
 ```
-internal/agentcore/
-├── llm.go          ← Chat() 入口，tool call 循环
-├── provider.go     ← Provider 接口 + LLMRequest/LLMResponse 类型定义
-├── openai.go       ← openaiImpl：内部格式 ↔ OpenAI 格式
-├── gemini.go       ← geminiImpl：内部格式 ↔ Gemini 格式
-└── anthropic.go    ← anthropicImpl：内部格式 ↔ Anthropic 格式
+internal/llm/                    ← 独立包，只负责 LLM 通信
+├── provider.go                  ← Provider 接口 + LLMRequest/LLMResponse
+├── openai.go                    ← OpenAI 兼容适配器
+├── gemini.go                    ← Gemini 适配器
+└── anthropic.go                 ← Anthropic 适配器
+
+internal/agentcore/              ← 业务逻辑，import llm
+├── core.go                      ← 主循环、tool call 循环
+├── soul.go                      ← soul.md 加载
+├── session.go                   ← 上下文管理
+└── dispatch.go                  ← 设备选择
 ```
+
+依赖方向：`agentcore → llm`，llm 不依赖 agentcore 任何东西。
 
 ---
 
