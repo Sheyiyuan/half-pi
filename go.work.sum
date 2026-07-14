@@ -1,4 +1,5 @@
-github.com/google/pprof v0.0.0-20250317173921-a4b03ec1a45e/go.mod h1:boTsfXsheKC2y+lKOCMpSfarhxDeIzfZG1jqGcPl3cA=
 golang.org/x/exp v0.0.0-20250305212735-054e65f0b394/go.mod h1:sIifuuw/Yco/y6yb6+bDNfyeQ/MdPUy/hKEMYQV17cM=
 modernc.org/ebnf v1.1.0/go.mod h1:CNIo7vuji3SyjIP/VhEumIKlAguC1g64mcdk/+VJW/w=
 modernc.org/ebnfutil v1.1.0/go.mod h1:hdAyhM1jZSq9ygKhEeYgerbagyuLxyxzXcakBPyNqUI=
+modernc.org/sqlite v1.34.0 h1:wnIcc4XIGoWVkM9qGKn2PARAmpXsQWGebuOVOBYZZVY=
+modernc.org/sqlite v1.34.0/go.mod h1:pXV2xHxhzXZsgT/RtTFAPY6JJDEvOTcTdwADQCCWD4k=

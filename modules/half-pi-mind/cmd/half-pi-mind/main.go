@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/google/uuid"
+
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/events"
@@ -12,6 +14,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/repl"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/setup"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/skill"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 
 func main() {
@@ -46,6 +49,26 @@ func main() {
 	}
 	local.SetSkillStore(skillStore)
 
+	db, err := store.New(env.DBPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "store init failed: %v\n", err)
+		os.Exit(1)
+	}
+	defer db.Close()
+
+	cwd, _ := os.Getwd()
+	group, err := db.UpsertGroup(cwd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "group init failed: %v\n", err)
+		os.Exit(1)
+	}
+
+	sessionID := uuid.Must(uuid.NewV7()).String()
+	if err := db.CreateSession(group.ID, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "session create failed: %v\n", err)
+		os.Exit(1)
+	}
+
 	bus := events.NewEventBus()
 	defer bus.Close()
 	bus.Subscribe(events.NewConsoleWriter())
@@ -57,6 +80,10 @@ func main() {
 	}
 	core.Bus = bus
 	core.SetSkills(skillStore)
+	if err := core.SetStore(db, sessionID); err != nil {
+		fmt.Fprintf(os.Stderr, "session load failed: %v\n", err)
+		os.Exit(1)
+	}
 
-	repl.Run(core, bus)
+	repl.Run(core, bus, db, group.ID)
 }
