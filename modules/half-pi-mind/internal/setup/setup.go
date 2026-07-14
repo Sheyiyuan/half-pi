@@ -33,12 +33,12 @@ func Init() (*Env, error) {
 		LogDir:    filepath.Join(halfPiDir, "logs"),
 		SkillsDir: filepath.Join(halfPiDir, "skills"),
 		Config:    filepath.Join(halfPiDir, "config.toml"),
-		DBPath:    filepath.Join(halfPiDir, "data", "half-pi.db"),
+		DBPath:    filepath.Join(halfPiDir, "db", "half-pi.db"),
 		EventLog:  filepath.Join(halfPiDir, "logs", "events.jsonl"),
 	}
 
 	// 创建目录
-	for _, dir := range []string{env.HomeDir, env.DataDir, env.LogDir, env.SkillsDir} {
+	for _, dir := range []string{env.HomeDir, env.DataDir, env.LogDir, env.SkillsDir, filepath.Dir(env.DBPath)} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
 			return nil, fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}

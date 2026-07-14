@@ -42,7 +42,7 @@ func TestInit(t *testing.T) {
 	if env.HomeDir != wantHome {
 		t.Errorf("HomeDir = %q, want %q", env.HomeDir, wantHome)
 	}
-	if env.DBPath != filepath.Join(wantHome, "data", "half-pi.db") {
+	if env.DBPath != filepath.Join(wantHome, "db", "half-pi.db") {
 		t.Errorf("DBPath = %q", env.DBPath)
 	}
 	if env.EventLog != filepath.Join(wantHome, "logs", "events.jsonl") {
