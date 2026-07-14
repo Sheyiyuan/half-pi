@@ -68,8 +68,8 @@ Face  ←→  Mind  ←→  Hand
 | 角色 | 职责 | 实现状态 |
 |------|------|----------|
 | **Face** | 用户交互层，不持有任何状态。IM Bot / WebUI / TUI 可互换，**同一上下文无缝衔接** | ⚪ 待开发 |
-| **Mind** | 系统唯一的智能节点。维护全局记忆、理解意图、选择设备、编排流程、管理安全规则。**三层中唯一有状态的一层** | 🟢 REPL 可用 |
-| **Hand** | 纯执行者，常驻被控设备。接收指令、执行、上报结果。轻量、安全、可靠 | ⚪ 待开发 |
+| **Mind** | 系统唯一的智能节点。维护全局记忆、理解意图、选择设备、编排流程、管理安全规则。**三层中唯一有状态的一层** | 🟢 REPL 可用，工具系统完备，技能系统集成，SQLite 持久化 |
+| **Hand** | 纯执行者，常驻被控设备。接收指令、执行、上报结果。轻量、安全、可靠 | 🟡 gateway-core 就绪，待构建 |
 
 ### Mind 内部结构
 
@@ -188,17 +188,19 @@ temperature = 0.3
 
 ## 当前进展
 
-Phase 1（Mind 核心）~70% 完成：
+Phase 1（Mind 核心 + Gateway 通信）~85% 完成：
 
-- ✅ 工具系统：init() 自注册、安全检查 hook、confirm 参数
-- ✅ 安全审批：四模式 + y/n/Y/N + 自动放行/拒绝
-- ✅ 事件总线：EventBus + ConsoleWriter + FileWriter（JSON Lines）
-- ✅ 环境初始化：~/.half-pi/ 目录、config.toml、编译时 OS 区分
-- ✅ 配置加载：TOML 解析、提供商/模型定义、环境变量密钥覆盖
-- ✅ 执行工具：exec_command / read_file / list_dir / check_security
-- ⚪ SQLite 持久化 — 待开发
-- ⚪ 会话管理 — 待开发
-- ⚪ Face 远程交互 — 待开发
+- [x] 工具系统：10 个工具，init() 自注册、安全检查 hook、confirm 参数
+- [x] 安全审批：四模式 + y/n/Y/N + 自动放行/拒绝
+- [x] 事件总线：EventBus + ConsoleWriter + FileWriter（JSON Lines）
+- [x] 环境初始化：~/.half-pi/ 目录、config.toml、编译时 OS 区分
+- [x] 配置加载：TOML 解析、提供商/模型定义、环境变量密钥覆盖
+- [x] 技能系统：skill.Store + frontmatter 解析 + view_skill 工具 + system prompt 注入
+- [x] SQLite 持久化：session_groups / sessions / messages 三表 CRUD
+- [x] Gateway-core：WSS 协议、Hub 连接管理、AES-GCM 加密、防重放
+- [ ] Hand 远程执行器 — 待构建
+- [ ] Face 远程交互 — 待构建
+- [ ] 会话持久化接入 agentcore — 待开发
 
 详细进度见 [AGENTS.md](AGENTS.md)。
 

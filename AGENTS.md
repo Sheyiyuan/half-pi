@@ -82,6 +82,9 @@ half-pi/
 ```bash
 # 进入 mind 模块运行全部测试
 cd modules/half-pi-mind && go test -race -count=1 ./...
+
+# 测试 gateway-core
+cd modules/gateway-core && go test -race -count=1 ./...
 ```
 - 测试必须带 `-race`
 - 测试文件就近放（`*_test.go`），不与源码分离
@@ -97,7 +100,7 @@ cd modules/half-pi-mind && go test -race -count=1 ./...
 ```bash
 make build        # 编译 mind/face/hand 到 bin/
 make run-mind     # 启动 Mind REPL
-make lint         # golangci-lint 检查
+make test         # 运行 mind 模块全部测试
 ```
 
 ### 首次运行约定
@@ -113,6 +116,7 @@ make lint         # golangci-lint 检查
   - `feat:` 新功能
   - `fix:` 修 bug
   - `refactor:` 重构（无功能变化）
+  - `docs:` 文档
   - `chore:` 杂项（注释、依赖、构建）
 - commit message 用英文（方便国际协作），代码注释用中文
 - 不提交 `DEEPSEEK_API_KEY`、`.env`、二进制文件
@@ -121,24 +125,23 @@ make lint         # golangci-lint 检查
 
 ## 开发进度
 
-### Phase 1 — Mind 核心（完成度 ~70%）
+### Phase 1 — Mind 核心 + Gateway 通信（完成度 ~85%）
 
 #### ✅ 已完成
 
-##### 工具系统 (`internal/executor/`)
-- 工具注册表：`executor.Register()` + `init()` 自注册
-- 类型定义：`Tool`、`ToolResult`、`ObjectSchema`、`PropertySchema`
-- 安全检查 hook：`Tool.Check` 函数字段
-- `DefaultConfirm`：工具可声明每次调用默认需用户确认
-- 每个工具独立文件 `tool_<name>.go`
-
-##### 已实现工具
+##### 工具系统（10 个工具）
 | 工具 | 功能 |
 |------|------|
-| `read_file` | 读取文件内容 |
-| `list_dir` | 列出目录内容 |
-| `exec_command` | 执行 shell 命令（可设超时） |
+| `read_file` | 读取文件，支持行号/行范围/字符偏移/双上限 |
+| `write_file` | 创建/覆盖文件（DefaultConfirm 保护） |
+| `edit_file` | 精确替换，唯一性检查 + 上下文提示 |
+| `grep` | 文件内容搜索（字面量），glob 过滤 + 上下文行 |
+| `grep_regex` | 正则搜索，同 grep 参数 |
+| `list_files` | 递归遍历 + glob 过滤 |
+| `exec_command` | 跨平台 Shell 执行（Unix: sh, Windows: cmd），可设超时 |
 | `check_security` | 预查安全策略结果 |
+| `view_skill` | 按名称加载技能全文 |
+| `list_dir` | 平铺目录（已由 list_files 替代，保留兼容） |
 
 ##### 安全策略 (`internal/security/`)
 - 四模式：strict / normal / trust / yolo
@@ -147,8 +150,7 @@ make lint         # golangci-lint 检查
 - 全局 `security.Check()` 函数
 
 ##### 审批流程 (`agentcore`)
-- `Approver` 接口 + REPL 实现
-- y = 允许一次 / Y = 始终允许 / n = 拒绝一次 / N = 始终拒绝
+- `Approver` 接口 + REPL 实现（y/n/Y/N）
 - 自动放行/拒绝列表（autoAllow / autoDeny）
 - LLM 通过 `confirm: true` 参数主动请求确认（覆盖 trust/yolo）
 
@@ -157,15 +159,12 @@ make lint         # golangci-lint 检查
 - `EventBus`：`Publish()`（异步）/ `PublishSync()`（同步）
 - `Writer` 接口 + `ConsoleWriter`（终端） + `FileWriter`（JSON Lines）
 - `WaitGroup` 确保 `Close()` 等待所有写入完成
-- 单元测试 + race 测试
-- Core 已整合事件总线，不再直接 `fmt.Fprintf(os.Stderr, ...)`
+- Core 已整合事件总线，不再直接 `fmt.Fprintf`
 
 ##### 环境初始化 (`internal/setup/`)
 - `~/.half-pi/` 目录结构创建（编译时 OS 区分）
-  - Linux/macOS: `~/.half-pi/`
-  - Windows: `%APPDATA%/half-pi/`
-- 默认 `config.toml` 生成（不覆盖已有）
-- 配置权限 0600
+- 默认 `config.toml` 生成（0600 权限，不覆盖已有）
+- 自动创建 skills/、data/、logs/ 子目录
 
 ##### 配置加载 (`internal/config/`)
 - TOML 解析（`github.com/BurntSushi/toml`）
@@ -175,23 +174,44 @@ make lint         # golangci-lint 检查
 - 环境变量密钥覆盖：`LLM_{NAME}_API_KEY`
 - `ResolveModel()` / `ResolveProvider()` 解析
 - `Sanitized()` 脱敏导出
-- `main.go` 已接入：`setup.Init()` → `config.Load()` → `ResolveModel()` → LLM 适配器
 
 ##### LLM 适配器 (`internal/llm/`)
 - OpenAI 兼容适配器完整实现（DeepSeek、Groq、OpenRouter 等）
 - Gemini / Anthropic 适配器骨架
 
-#### 🔄 进行中
-- 修复 `DefaultModel` 为空时的回退逻辑
-- `go.work` 多模块（gateway-core、half-pi-face、half-pi-hand 骨架）
+##### 技能系统 (`internal/skill/`)
+- `skill.Store`：加载、缓存、查询 `.skill.md` 文件
+- 手写 frontmatter 解析（name/description/tags/version/author）
+- `Index()` 生成技能目录，注入 system prompt
+- `view_skill` 工具按名称加载全文
+- 启动时从 `~/.half-pi/skills/` 自动加载
+
+##### SQLite 持久化 (`internal/store/`)
+- `session_groups` 表：工作区管理（work_dir、soul_path）
+- `sessions` 表：会话管理（关联 group、soul_path 覆盖）
+- `messages` 表：消息持久化（role、tool_id、tool_calls、seq）
+- 完整 CRUD + 事务批量写入 + 级联删除
+- 15 个单元测试 + race 覆盖
+
+##### Gateway-core 通信层 (`modules/gateway-core/`)
+- `protocol/`：Envelope 消息协议，Session 重放防护（单调序号），AAD 构造
+- `wss/crypto`：AES-128-GCM 加解密 + Envelope 集成
+- `wss/server`：HTTP → WebSocket 升级
+- `wss/client`：ConnectAndRegister 完整握手 + Send/Read 封装
+- `hub/`：Peer 管理、ServeWS 生命周期、Broadcast、重放防护
+- 25+ 测试 + race 覆盖
+
+##### 设计文档
+- `docs/skill-design.md` — 技能系统设计
+- `docs/skill-session-memory-design.md` — 技能/会话/记忆组织设计
 
 #### ⏳ 待完成
-- [ ] `config.Load()` 参数校验（必填字段检查）
+- [ ] **Hand** 远程执行器（基于 gateway-core）
+- [ ] **Face** 远程交互终端（TUI / IM Bot）
+- [ ] 会话持久化接入 agentcore（当前仍为内存历史）
 - [ ] LLM 适配器工厂（根据 `provider.adapter` 自动选择）
-- [ ] `store/` SQLite 实现（会话持久化）
-- [ ] `session/` 会话管理
+- [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
-- [ ] `skill` 加载系统
 
 ---
 
@@ -210,31 +230,30 @@ make lint         # golangci-lint 检查
 ### 2026-07-13：事件系统
 - 所有输出通过 EventBus，不再是 `fmt.Fprintf`
 - REPL 交互消息用 `PublishSync` 保证顺序
-- 诊断事件用 `Publish` 异步（不影响延迟）
 - 远程 Face 通过订阅同一条总线获取输出
 
 ### 2026-07-14：配置设计
 - `[[llm.providers]]` 数组，每个提供商独立配置
 - `[[llm.models]]` 数组，模型关联到提供商
-- API key 在 provider 层级，支持环境变量覆盖（环境变量优先级更高）
+- API key 在 provider 层级，支持环境变量覆盖
 - adapter 字段决定使用哪个 LLM 适配器
 
-### 2026-07-14：事件总线与 Core 集成
-- `Bus` 字段注入到 Core，`publish()` 辅助方法 nil-safe
-- `core.go` 移除 `"os"` import，不再直接写 stderr
-- `ConsoleWriter` TypeToolResult 后保留空行，兼容旧格式
-- `main.go` REPL 消息使用 `PublishSync`，保证提示符顺序
+### 2026-07-14：Gateway 协议设计
+- Envelope 统一消息格式（MsgID/Type/SessionID/From/To/Seq/Payload）
+- AES-128-GCM 应用层加密，AAD 绑定消息头防挪用
+- 单调序号防重放，SessionID 标识连接
+- Hub 管理连接生命周期，callback 驱动消息处理
 
-### 2026-07-14：配置从 stub 到可用
-- `config.Load()` 从返回空结构体 → 完整 TOML 解析 + 环境变量覆盖
-- `main.go` 接入：`setup.Init()` → `config.Load()` → `ResolveModel()` → `llm.NewOpenAI()`
-- 删除了硬编码的 `DEEPSEEK_API_KEY` 环境变量读取
+### 2026-07-14：Skill 系统
+- 文件系统存储，frontmatter + markdown 格式
+- 启动时扫描 → system prompt 索引 → LLM 按需 view_skill
+- 无数据库、无权限管理、无版本控制
 
 ---
 
 ## 下一步
 
-1. 修复 `DefaultModel` 回退逻辑 bug
-2. `store/` — SQLite 会话持久化
-3. `llm` — 适配器工厂（按 adapter 字段选择）
-4. Face — 远程交互终端
+1. **Hand** — 远程执行器（基于 gateway-core 连接 Mind，执行远程指令）
+2. **Face** — 远程交互终端（Telegram Bot / TUI）
+3. 会话持久化接入 agentcore
+4. LLM 适配器工厂
