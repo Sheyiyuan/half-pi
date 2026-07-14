@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/events"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 )
 
@@ -104,12 +104,14 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 			delete(rawArgs, "confirm")
 			cleanArgs, _ := json.Marshal(rawArgs)
 
-			tool := executor.FindTool(tc.Name)
+			_, decision, reason, found := executor.CheckTool(tc.Name, cleanArgs)
 			shouldBlock := false
 			var blockReason string
 
-			if tool != nil && tool.Check != nil {
-				decision, reason := tool.Check(json.RawMessage(tc.Args))
+			if !found {
+				shouldBlock = true
+				blockReason = reason
+			} else {
 				switch decision {
 				case executor.DecisionDeny:
 					shouldBlock = true
@@ -117,9 +119,6 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 				case executor.DecisionConfirm:
 					blockReason = reason
 				}
-			}
-			if tool != nil && tool.DefaultConfirm && blockReason == "" {
-				blockReason = "该操作默认需用户确认"
 			}
 
 			needsConfirm := llmConfirm || blockReason != ""

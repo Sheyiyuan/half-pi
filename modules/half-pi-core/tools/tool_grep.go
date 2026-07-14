@@ -1,4 +1,4 @@
-package local
+package tools
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 )
 
 const (

@@ -1,6 +1,6 @@
 // 精确编辑文件：查找 old_string 并替换为 new_string。
 // old_string 必须在文件中唯一匹配，否则返回错误。
-package local
+package tools
 
 import (
 	"context"
@@ -9,7 +9,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 )
 
 func init() {

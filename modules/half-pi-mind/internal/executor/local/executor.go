@@ -3,26 +3,25 @@ package local
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
+	_ "github.com/Sheyiyuan/half-pi/modules/half-pi-core/tools"
 )
 
-type LocalExecutor struct{}
+type LocalExecutor struct {
+	runner *executor.Runner
+}
 
 func New() *LocalExecutor {
-	return &LocalExecutor{}
+	return &LocalExecutor{
+		runner: executor.NewRunner(executor.ExecutionPolicy{SkipChecks: true}),
+	}
 }
 
 func (e *LocalExecutor) Tools() []executor.Tool {
-	return executor.RegisteredTools()
+	return e.runner.Tools()
 }
 
 func (e *LocalExecutor) ExecuteTool(ctx context.Context, name string, args json.RawMessage) *executor.ToolResult {
-	for _, t := range executor.RegisteredTools() {
-		if t.Name == name {
-			return t.Execute(ctx, args)
-		}
-	}
-	return &executor.ToolResult{Error: fmt.Sprintf("unknown tool: %s", name)}
+	return e.runner.ExecuteTool(ctx, name, args)
 }

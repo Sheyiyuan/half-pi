@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/security"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 

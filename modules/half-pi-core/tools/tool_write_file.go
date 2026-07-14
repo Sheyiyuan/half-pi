@@ -1,5 +1,5 @@
 // 创建或覆盖文件。写操作每次执行默认需用户确认。
-package local
+package tools
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 )
 
 func init() {

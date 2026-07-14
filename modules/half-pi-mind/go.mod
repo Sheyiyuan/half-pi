@@ -4,7 +4,10 @@ go 1.25.0
 
 require (
 	github.com/BurntSushi/toml v1.6.0
+	github.com/Sheyiyuan/half-pi/modules/gateway-core v0.0.0-20260714110534-880fe4d6f2ab
+	github.com/Sheyiyuan/half-pi/modules/half-pi-core v0.0.0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.3
 	modernc.org/sqlite v1.53.0
 )
 
@@ -18,3 +21,7 @@ require (
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
 )
+
+replace github.com/Sheyiyuan/half-pi/modules/half-pi-core => ../half-pi-core
+
+replace github.com/Sheyiyuan/half-pi/modules/gateway-core => ../gateway-core

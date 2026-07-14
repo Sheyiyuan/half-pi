@@ -1,5 +1,5 @@
 // 文件内容搜索——正则匹配。
-package local
+package tools
 
 import (
 	"context"
@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 )
 
 func init() {

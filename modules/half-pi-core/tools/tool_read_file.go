@@ -2,7 +2,7 @@
 // 返回带行号的文本，方便 LLM 精确定位。
 // 内置行数、字符数双上限，防止超长文件或超长行撑爆上下文。
 // 被截断的长行可通过 char_offset 继续读取。
-package local
+package tools
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 )
 
 const (

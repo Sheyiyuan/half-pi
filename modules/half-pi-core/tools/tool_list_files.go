@@ -1,6 +1,6 @@
 // 列出目录内容，支持递归遍历和 glob 过滤。
 // 输出格式：权限 大小  路径。按名称排序，目录末尾带 /。
-package local
+package tools
 
 import (
 	"context"
@@ -12,7 +12,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 )
 
 func init() {

@@ -1,7 +1,10 @@
 // Package security 实现风险模式和黑白名单检查。
 package security
 
-import "strings"
+import (
+	"strings"
+	"sync"
+)
 
 // Mode 表示当前的风险模式。
 type Mode int
@@ -116,19 +119,31 @@ func (p *Policy) Check(cmd string) (Decision, string) {
 
 // ── 全局默认策略 ──
 
-var defaultPolicy = New()
+var (
+	defaultMu     sync.RWMutex
+	defaultPolicy = New()
+)
 
 // SetPolicy 替换全局默认策略。
 func SetPolicy(p *Policy) {
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
+	if p == nil {
+		p = New()
+	}
 	defaultPolicy = p
 }
 
 // SetMode 更新全局默认策略的安全模式。
 func SetMode(mode Mode) {
+	defaultMu.Lock()
+	defer defaultMu.Unlock()
 	defaultPolicy.Mode = mode
 }
 
 // Check 使用全局默认策略检查命令。
 func Check(cmd string) (Decision, string) {
+	defaultMu.RLock()
+	defer defaultMu.RUnlock()
 	return defaultPolicy.Check(cmd)
 }

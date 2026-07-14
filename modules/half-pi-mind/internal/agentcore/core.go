@@ -4,10 +4,12 @@ package agentcore
 import (
 	"fmt"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/events"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/security"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/skill"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
@@ -27,6 +29,7 @@ type Core struct {
 	approver  Approver
 	autoAllow map[string]bool // 本会话自动放行的工具
 	autoDeny  map[string]bool // 本会话自动拒绝的工具
+	Hub       *hub.Hub        // WebSocket Hub，管理 Face/Hand 连接
 }
 
 // Approver 由 REPL 实现，处理用户确认交互。
@@ -103,3 +106,53 @@ func (c *Core) SetStore(s *store.Store, sessionID string) error {
 }
 
 func (c *Core) SessionID() string { return c.sessionID }
+
+// SetHub 注入 WebSocket Hub，配置 Hand/Face 连接认证和断开通知。
+func (c *Core) SetHub(h *hub.Hub) {
+	c.Hub = h
+	h.OnHandshake(func(peer *hub.Peer, msg protocol.Envelope) error {
+		reg, err := protocol.DecodePayload[protocol.Register](&msg)
+		if err != nil {
+			return err
+		}
+		if reg.Token == "" {
+			return fmt.Errorf("token is required")
+		}
+		if c.store == nil {
+			return fmt.Errorf("store not initialized")
+		}
+		ht, err := c.store.ValidateHandToken(reg.Token)
+		if err != nil {
+			return fmt.Errorf("invalid token")
+		}
+		c.publish(events.LevelInfo, events.TypeSystem,
+			fmt.Sprintf("[HUB] %s (%s) 已连接", peer.ID, ht.Label))
+		return nil
+	})
+	h.OnDisconnect(func(peer *hub.Peer) {
+		c.publish(events.LevelInfo, events.TypeSystem,
+			fmt.Sprintf("[HUB] %s 已断开", peer.ID))
+	})
+	h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
+		switch peer.Type {
+		case hub.PeerHand:
+			switch msg.Type {
+			case protocol.TypeRPCResult:
+				result, _ := protocol.DecodePayload[protocol.RPCResult](&msg)
+				c.publish(events.LevelDebug, events.TypeToolResult,
+					fmt.Sprintf("[%s] %s: %s", peer.ID, result.ID, truncate(result.Output)))
+			}
+		default:
+			c.publish(events.LevelDebug, events.TypeSystem,
+				fmt.Sprintf("unhandled message from %s type=%s", peer.ID, msg.Type))
+		}
+	})
+}
+
+func truncate(s string) string {
+	runes := []rune(s)
+	if len(runes) <= 100 {
+		return s
+	}
+	return string(runes[:100]) + "…"
+}

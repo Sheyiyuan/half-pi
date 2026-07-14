@@ -1,9 +1,8 @@
-// 执行 shell 命令。返回 stdout/stderr。
-// Unix 平台使用 sh -c。
+// Windows 命令执行工具，提供 cmd 和 powershell 两种执行方式。
 //
-//go:build !windows
+//go:build windows
 
-package local
+package tools
 
 import (
 	"bytes"
@@ -14,40 +13,58 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/security"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 )
 
 func init() {
+	// cmd.exe
 	executor.Register(executor.Tool{
-		Name:        "exec_command",
-		Description: "执行 shell 命令，返回命令输出",
+		Name:        "exec_cmd",
+		Description: "通过 cmd.exe 执行命令，返回命令输出",
 		Parameters: &executor.ObjectSchema{
 			Properties: []executor.PropertySchema{
-				{Name: "command", Type: "string", Description: "要执行的 shell 命令"},
+				{Name: "command", Type: "string", Description: "要执行的命令"},
 				{Name: "timeout", Type: "number", Description: "超时秒数，默认 30"},
 			},
 			Required: []string{"command"},
 		},
-		Check: func(args json.RawMessage) (executor.Decision, string) {
-			var p struct {
-				Command string `json:"command"`
-			}
-			if err := json.Unmarshal(args, &p); err != nil || p.Command == "" {
-				return executor.DecisionDeny, "failed to parse args"
-			}
-			decision, reason := security.Check(p.Command)
-			switch decision {
-			case security.Deny:
-				return executor.DecisionDeny, fmt.Sprintf("blocked by security policy: %s", reason)
-			case security.NeedApproval:
-				return executor.DecisionConfirm, fmt.Sprintf("requires approval: %s", reason)
-			default:
-				return executor.DecisionAllow, ""
-			}
-		},
-		Execute: executeWithShell("sh", "-c"),
+		Check:   cmdCheck,
+		Execute: executeWithShell("cmd", "/c"),
 	})
+
+	// PowerShell
+	executor.Register(executor.Tool{
+		Name:        "exec_ps",
+		Description: "通过 PowerShell 执行命令，返回命令输出",
+		Parameters: &executor.ObjectSchema{
+			Properties: []executor.PropertySchema{
+				{Name: "command", Type: "string", Description: "要执行的 PowerShell 命令"},
+				{Name: "timeout", Type: "number", Description: "超时秒数，默认 30"},
+			},
+			Required: []string{"command"},
+		},
+		Check:   cmdCheck,
+		Execute: executeWithShell("powershell", "-Command"),
+	})
+}
+
+func cmdCheck(args json.RawMessage) (executor.Decision, string) {
+	var p struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Command == "" {
+		return executor.DecisionDeny, "failed to parse args"
+	}
+	decision, reason := security.Check(p.Command)
+	switch decision {
+	case security.Deny:
+		return executor.DecisionDeny, fmt.Sprintf("blocked by security policy: %s", reason)
+	case security.NeedApproval:
+		return executor.DecisionConfirm, fmt.Sprintf("requires approval: %s", reason)
+	default:
+		return executor.DecisionAllow, ""
+	}
 }
 
 func executeWithShell(shell string, shellArgs ...string) func(ctx context.Context, args json.RawMessage) *executor.ToolResult {

@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 
@@ -20,7 +20,7 @@ type Repl struct {
 	scanner *bufio.Scanner
 }
 
-func Run(core *agentcore.Core, bus *events.EventBus, s *store.Store, groupID string) {
+func Run(core *agentcore.Core, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool) {
 	r := &Repl{
 		core:    core,
 		bus:     bus,
@@ -30,17 +30,24 @@ func Run(core *agentcore.Core, bus *events.EventBus, s *store.Store, groupID str
 	}
 	core.SetApprover(&approver{scanner: r.scanner})
 
-	r.printBanner()
+	r.printBanner(serverEnabled)
 	for r.loop() {
 	}
 }
 
-func (r *Repl) printBanner() {
+func (r *Repl) printBanner(serverEnabled bool) {
 	fmt.Println("half-pi mind ready")
 	fmt.Printf("group: %s\n", r.groupID)
+	if serverEnabled {
+		fmt.Println("hub:   ws://127.0.0.1:15707/ws")
+	}
 	fmt.Println("/session              list sessions")
 	fmt.Println("/session <prefix>     switch session")
 	fmt.Println("/session name <name>  rename session")
+	fmt.Println("/hand                 list hand tokens")
+	fmt.Println("/hand add <label>     create hand token")
+	fmt.Println("/hand remove <id>     revoke hand token")
+	fmt.Println("/peers                list connected peers")
 	fmt.Println("/mode <normal|trust|yolo>  switch mode")
 	fmt.Println("/debug                toggle debug")
 	fmt.Println("exit / quit           exit")

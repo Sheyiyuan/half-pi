@@ -2,6 +2,7 @@ go 1.25.0
 
 use (
 	./modules/gateway-core
+	./modules/half-pi-core
 	./modules/half-pi-face
 	./modules/half-pi-hand
 	./modules/half-pi-mind

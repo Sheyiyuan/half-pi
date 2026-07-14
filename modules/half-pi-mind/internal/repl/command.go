@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/events"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 )
 
 func (r *Repl) handleCommand(input string) bool {
@@ -40,6 +40,24 @@ func (r *Repl) handleCommand(input string) bool {
 		} else {
 			r.handleSessionSwitch(arg)
 		}
+		return true
+
+	case input == "/hand":
+		r.handleHandList()
+		return true
+
+	case strings.HasPrefix(input, "/hand add "):
+		label := strings.TrimSpace(strings.TrimPrefix(input, "/hand add "))
+		r.handleHandAdd(label)
+		return true
+
+	case strings.HasPrefix(input, "/hand remove "):
+		idStr := strings.TrimSpace(strings.TrimPrefix(input, "/hand remove "))
+		r.handleHandRemove(idStr)
+		return true
+
+	case input == "/peers":
+		r.handlePeers()
 		return true
 	}
 	return false
@@ -123,4 +141,69 @@ func shortID(id string) string {
 		s = s[:12]
 	}
 	return s
+}
+
+func (r *Repl) handleHandList() {
+	tokens, err := r.store.ListHandTokens()
+	if err != nil {
+		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("list hand tokens: %v", err))
+		return
+	}
+	if len(tokens) == 0 {
+		fmt.Println("No hand tokens. Use /hand add <label> to create one.")
+		return
+	}
+	fmt.Println("id  label          token                              created")
+	for _, ht := range tokens {
+		fmt.Printf("%2d  %-14s %s  %s\n", ht.ID, ht.Label, ht.Token, ht.CreatedAt.Format("01-02 15:04"))
+	}
+}
+
+func (r *Repl) handleHandAdd(label string) {
+	if label == "" {
+		r.emit(events.LevelWarn, events.TypeSystem, "usage: /hand add <label>")
+		return
+	}
+	ht, err := r.store.AddHandToken(label)
+	if err != nil {
+		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("add hand token: %v", err))
+		return
+	}
+	fmt.Printf("Hand created:\n")
+	fmt.Printf("  id:    %d\n", ht.ID)
+	fmt.Printf("  label: %s\n", ht.Label)
+	fmt.Printf("  token: %s\n", ht.Token)
+	fmt.Println()
+	fmt.Printf("Hand 配置参考:\n")
+	fmt.Printf("  [server]\n")
+	fmt.Printf("  url = \"ws://127.0.0.1:15707/ws\"\n")
+	fmt.Printf("  token = \"%s\"\n", ht.Token)
+}
+
+func (r *Repl) handleHandRemove(idStr string) {
+	var id int64
+	if _, err := fmt.Sscanf(idStr, "%d", &id); err != nil {
+		r.emit(events.LevelWarn, events.TypeSystem, "usage: /hand remove <id>")
+		return
+	}
+	if err := r.store.RemoveHandToken(id); err != nil {
+		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("remove hand token: %v", err))
+		return
+	}
+	fmt.Printf("Hand token %d removed\n", id)
+}
+
+func (r *Repl) handlePeers() {
+	if r.core.Hub == nil {
+		fmt.Println("hub not running")
+		return
+	}
+	peers := r.core.Hub.Peers()
+	if len(peers) == 0 {
+		fmt.Println("No connected peers.")
+		return
+	}
+	for _, id := range peers {
+		fmt.Printf("  %s\n", id)
+	}
 }

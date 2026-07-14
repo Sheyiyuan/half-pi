@@ -2,13 +2,16 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 
 	"github.com/google/uuid"
+	"github.com/gorilla/websocket"
 
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/repl"
@@ -85,5 +88,27 @@ func main() {
 		os.Exit(1)
 	}
 
-	repl.Run(core, bus, db, group.ID)
+	wsHub := hub.New()
+	core.SetHub(wsHub)
+
+	if cfg.Server.Enabled {
+		addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
+		mux := http.NewServeMux()
+		mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+			upgrader := websocket.Upgrader{}
+			conn, err := upgrader.Upgrade(w, r, nil)
+			if err != nil {
+				return
+			}
+			wsHub.ServeWS(conn)
+		})
+		go func() {
+			fmt.Fprintf(os.Stderr, "WS Hub listening on %s/ws\n", addr)
+			if err := http.ListenAndServe(addr, mux); err != nil {
+				fmt.Fprintf(os.Stderr, "hub server: %v\n", err)
+			}
+		}()
+	}
+
+	repl.Run(core, bus, db, group.ID, cfg.Server.Enabled)
 }

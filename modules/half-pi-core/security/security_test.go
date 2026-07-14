@@ -171,3 +171,21 @@ func TestSetPolicy(t *testing.T) {
 	// Restore default
 	SetPolicy(New())
 }
+
+func TestSetPolicyNilRestoresDefault(t *testing.T) {
+	SetPolicy(nil)
+	decision, _ := Check("echo hello")
+	if decision != Allow {
+		t.Errorf("nil policy should restore normal default, got %v", decision)
+	}
+}
+
+func TestSetMode(t *testing.T) {
+	SetPolicy(New())
+	SetMode(ModeStrict)
+	decision, _ := Check("echo hello")
+	if decision != NeedApproval {
+		t.Errorf("strict mode: got %v, want NeedApproval", decision)
+	}
+	SetMode(ModeNormal)
+}
