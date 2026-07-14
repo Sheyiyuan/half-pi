@@ -22,8 +22,8 @@ type Policy struct {
 
 // rule 是一条黑白名单规则。
 type rule struct {
-	pattern string   // 匹配模式
-	desc    string   // 规则说明，用于日志和提示
+	pattern string // 匹配模式
+	desc    string // 规则说明，用于日志和提示
 }
 
 // New 创建一个默认策略（Normal 模式）。
@@ -37,8 +37,8 @@ func New() *Policy {
 			{pattern: "dd if=/dev/zero of=/dev/sd", desc: "覆写磁盘"},
 			{pattern: ":(){ :|:& };:", desc: "fork 炸弹"},
 			{pattern: "> /dev/sd", desc: "覆写磁盘"},
-			{pattern: "chmod -R 000 /", desc: "锁定系统"},
-			{pattern: "wget -O - | sh", desc: "远程执行未验证脚本"},
+			{pattern: "chmod -r 000 /", desc: "锁定系统"},
+			{pattern: "wget -o - | sh", desc: "远程执行未验证脚本"},
 			{pattern: "curl | sh", desc: "远程执行未验证脚本"},
 			{pattern: "mv /* /dev/null", desc: "移动系统文件到空设备"},
 			{pattern: "shutdown", desc: "关机"},
@@ -53,9 +53,9 @@ func New() *Policy {
 type Decision int
 
 const (
-	Allow    Decision = iota // 允许执行
-	Deny                     // 拒绝执行（命中黑名单）
-	NeedApproval             // 灰名单，需要用户确认
+	Allow        Decision = iota // 允许执行
+	Deny                         // 拒绝执行（命中黑名单）
+	NeedApproval                 // 灰名单，需要用户确认
 )
 
 // Check 对命令进行安全检查，返回决策结果和原因。
@@ -121,6 +121,11 @@ var defaultPolicy = New()
 // SetPolicy 替换全局默认策略。
 func SetPolicy(p *Policy) {
 	defaultPolicy = p
+}
+
+// SetMode 更新全局默认策略的安全模式。
+func SetMode(mode Mode) {
+	defaultPolicy.Mode = mode
 }
 
 // Check 使用全局默认策略检查命令。
