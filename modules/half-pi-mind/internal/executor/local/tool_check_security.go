@@ -26,10 +26,10 @@ func init() {
 				Command string `json:"command"`
 			}
 			if err := json.Unmarshal(args, &p); err != nil {
-				return &executor.ToolResult{Error: fmt.Sprintf("参数解析失败: %v", err)}
+				return &executor.ToolResult{Error: fmt.Sprintf("failed to parse args: %v", err)}
 			}
 			if p.Command == "" {
-				return &executor.ToolResult{Error: "command 不能为空"}
+				return &executor.ToolResult{Error: "command cannot be empty"}
 			}
 
 			decision, reason := security.Check(p.Command)
