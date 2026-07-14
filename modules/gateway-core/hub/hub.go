@@ -32,11 +32,12 @@ const (
 
 // Hub 管理所有 WebSocket 节点和消息投递。
 type Hub struct {
-	ID          string
-	mu          sync.RWMutex
-	peers       map[string]*Peer
-	handshakeFn func(peer *Peer, env protocol.Envelope) error
-	onMessage   func(peer *Peer, env protocol.Envelope)
+	ID           string
+	mu           sync.RWMutex
+	peers        map[string]*Peer
+	handshakeFn  func(peer *Peer, env protocol.Envelope) error
+	onMessage    func(peer *Peer, env protocol.Envelope)
+	disconnectFn func(peer *Peer)
 }
 
 // New 创建一个新的 Hub。
@@ -55,6 +56,11 @@ func (h *Hub) OnHandshake(fn func(peer *Peer, env protocol.Envelope) error) {
 // OnMessage 设置接收业务消息的回调。
 func (h *Hub) OnMessage(fn func(peer *Peer, env protocol.Envelope)) {
 	h.onMessage = fn
+}
+
+// OnDisconnect 设置节点断开回调。
+func (h *Hub) OnDisconnect(fn func(peer *Peer)) {
+	h.disconnectFn = fn
 }
 
 // ServeWS 接受 WebSocket 连接并启动 Peer 的读循环。
@@ -168,6 +174,9 @@ func (h *Hub) Remove(id string) {
 	}
 	h.mu.Unlock()
 	if ok {
+		if h.disconnectFn != nil {
+			h.disconnectFn(peer)
+		}
 		peer.Close()
 	}
 }
@@ -181,6 +190,9 @@ func (h *Hub) RemovePeer(target *Peer) {
 	}
 	h.mu.Unlock()
 	if ok && current == target {
+		if h.disconnectFn != nil {
+			h.disconnectFn(target)
+		}
 		target.Close()
 	}
 }

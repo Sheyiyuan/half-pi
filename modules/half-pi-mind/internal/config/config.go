@@ -18,8 +18,9 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host string `toml:"host"`
-	Port int    `toml:"port"`
+	Host    string `toml:"host"`
+	Port    int    `toml:"port"`
+	Enabled bool   `toml:"enabled"`
 }
 
 type LLMConfig struct {

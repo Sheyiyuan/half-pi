@@ -69,6 +69,12 @@ func (s *Store) migrate() error {
 			FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq)`,
+		`CREATE TABLE IF NOT EXISTS hand_tokens (
+			id         INTEGER PRIMARY KEY AUTOINCREMENT,
+			label      TEXT NOT NULL,
+			token      TEXT NOT NULL UNIQUE,
+			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
 	}
 	for _, stmt := range statements {
 		if _, err := s.db.Exec(stmt); err != nil {

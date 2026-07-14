@@ -63,6 +63,7 @@ func writeDefaultConfig(path string) error {
 
 	defaultCfg := `# half-pi 配置文件
 [server]
+enabled = true
 host = "127.0.0.1"
 port = 15707
 

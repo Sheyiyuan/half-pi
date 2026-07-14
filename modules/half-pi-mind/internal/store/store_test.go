@@ -456,3 +456,99 @@ func TestFindSessionsByPrefix(t *testing.T) {
 		t.Fatalf("single match: expected 1, got %d", len(sessions))
 	}
 }
+
+func TestHandTokenAddAndList(t *testing.T) {
+	s := newTestStore(t)
+
+	ht1, err := s.AddHandToken("office-pc")
+	if err != nil {
+		t.Fatalf("AddHandToken: %v", err)
+	}
+	if ht1.Label != "office-pc" {
+		t.Errorf("label = %q, want office-pc", ht1.Label)
+	}
+	if len(ht1.Token) != 32 {
+		t.Errorf("token length = %d, want 32", len(ht1.Token))
+	}
+
+	ht2, err := s.AddHandToken("raspberry-pi")
+	if err != nil {
+		t.Fatalf("AddHandToken: %v", err)
+	}
+	if ht1.Token == ht2.Token {
+		t.Error("tokens should be unique")
+	}
+
+	tokens, err := s.ListHandTokens()
+	if err != nil {
+		t.Fatalf("ListHandTokens: %v", err)
+	}
+	if len(tokens) != 2 {
+		t.Fatalf("expected 2 tokens, got %d", len(tokens))
+	}
+}
+
+func TestHandTokenValidate(t *testing.T) {
+	s := newTestStore(t)
+
+	ht, err := s.AddHandToken("test-hand")
+	if err != nil {
+		t.Fatalf("AddHandToken: %v", err)
+	}
+
+	matched, err := s.ValidateHandToken(ht.Token)
+	if err != nil {
+		t.Fatalf("ValidateHandToken: %v", err)
+	}
+	if matched.Label != "test-hand" {
+		t.Errorf("label = %q", matched.Label)
+	}
+
+	_, err = s.ValidateHandToken("bad-token")
+	if err == nil {
+		t.Error("ValidateHandToken should fail for bad token")
+	}
+
+	_, err = s.ValidateHandToken("")
+	if err == nil {
+		t.Error("ValidateHandToken should fail for empty token")
+	}
+}
+
+func TestHandTokenRemove(t *testing.T) {
+	s := newTestStore(t)
+
+	ht, err := s.AddHandToken("removable")
+	if err != nil {
+		t.Fatalf("AddHandToken: %v", err)
+	}
+
+	if err := s.RemoveHandToken(ht.ID); err != nil {
+		t.Fatalf("RemoveHandToken: %v", err)
+	}
+
+	tokens, err := s.ListHandTokens()
+	if err != nil {
+		t.Fatalf("ListHandTokens: %v", err)
+	}
+	if len(tokens) != 0 {
+		t.Errorf("expected 0 tokens after remove, got %d", len(tokens))
+	}
+
+	// Remove non-existent
+	if err := s.RemoveHandToken(999); err == nil {
+		t.Error("RemoveHandToken should fail for non-existent id")
+	}
+}
+
+func TestHandTokenRemoveTwice(t *testing.T) {
+	s := newTestStore(t)
+
+	ht, _ := s.AddHandToken("remove-me")
+	_ = s.RemoveHandToken(ht.ID)
+
+	// Second remove should fail
+	if err := s.RemoveHandToken(ht.ID); err == nil {
+		t.Error("second RemoveHandToken should fail")
+	}
+}
