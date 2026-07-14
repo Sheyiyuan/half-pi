@@ -11,7 +11,7 @@ import (
 func halfPiHome() (string, error) {
 	appData := os.Getenv("APPDATA")
 	if appData == "" {
-		return "", fmt.Errorf("APPDATA 环境变量未设置")
+		return "", fmt.Errorf("APPDATA environment variable is not set")
 	}
 	return filepath.Join(appData, "half-pi"), nil
 }

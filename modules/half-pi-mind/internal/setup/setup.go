@@ -40,7 +40,7 @@ func Init() (*Env, error) {
 	// 创建目录
 	for _, dir := range []string{env.HomeDir, env.DataDir, env.LogDir, env.SkillsDir} {
 		if err := os.MkdirAll(dir, 0755); err != nil {
-			return nil, fmt.Errorf("创建目录 %s 失败: %w", dir, err)
+			return nil, fmt.Errorf("failed to create directory %s: %w", dir, err)
 		}
 	}
 
@@ -58,7 +58,7 @@ func writeDefaultConfig(path string) error {
 		return nil // 文件已存在，不覆盖
 	}
 	if !os.IsNotExist(err) {
-		return fmt.Errorf("检查配置文件失败: %w", err)
+		return fmt.Errorf("failed to check config file: %w", err)
 	}
 
 	defaultCfg := `# half-pi 配置文件
@@ -92,7 +92,7 @@ max_tokens = 384000
 temperature = 0.3
 `
 	if err := os.WriteFile(path, []byte(defaultCfg), 0600); err != nil {
-		return fmt.Errorf("写入默认配置文件失败: %w", err)
+		return fmt.Errorf("failed to write default config: %w", err)
 	}
 	return nil
 }

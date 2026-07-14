@@ -21,10 +21,10 @@ type openaiRequestBody struct {
 }
 
 type openaiMessage struct {
-	Role        string           `json:"role"`
-	Content     string           `json:"content"`
-	ToolCallID  string           `json:"tool_call_id,omitempty"`
-	ToolCalls   []openaiToolCall `json:"tool_calls,omitempty"`
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls  []openaiToolCall `json:"tool_calls,omitempty"`
 }
 
 type openaiTool struct {
@@ -92,14 +92,14 @@ func (p *openaiProvider) Chat(ctx context.Context, req *LLMRequest) (*LLMRespons
 	body := p.buildRequestBody(req)
 	jsonBytes, err := json.Marshal(body)
 	if err != nil {
-		return nil, fmt.Errorf("序列化请求体失败: %w", err)
+		return nil, fmt.Errorf("failed to serialize request: %w", err)
 	}
 
 	// 创建 HTTP 请求
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		p.BaseURL+"/chat/completions", bytes.NewReader(jsonBytes))
 	if err != nil {
-		return nil, fmt.Errorf("创建 HTTP 请求失败: %w", err)
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+p.APIKey)
@@ -107,19 +107,19 @@ func (p *openaiProvider) Chat(ctx context.Context, req *LLMRequest) (*LLMRespons
 	// 发送请求
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		return nil, fmt.Errorf("HTTP 请求失败: %w", err)
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// 读取响应体
 	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("读取响应体失败: %w", err)
+		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
 
 	// 检查 HTTP 状态码
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API 返回错误状态 %d: %s", resp.StatusCode, string(respBytes))
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(respBytes))
 	}
 
 	// 解析响应
@@ -185,11 +185,11 @@ func (p *openaiProvider) buildRequestBody(req *LLMRequest) *openaiRequestBody {
 func (p *openaiProvider) parseResponse(body []byte) (*LLMResponse, error) {
 	var resp openaiResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("解析响应 JSON 失败: %w", err)
+		return nil, fmt.Errorf("failed to parse response JSON: %w", err)
 	}
 
 	if len(resp.Choices) == 0 {
-		return nil, fmt.Errorf("响应中没有 choices")
+		return nil, fmt.Errorf("response contains no choices")
 	}
 
 	choice := resp.Choices[0]
