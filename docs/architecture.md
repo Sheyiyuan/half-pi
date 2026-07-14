@@ -97,9 +97,9 @@ flowchart TB
 **Gateway-core**（公共通信基座——所有包的公共依赖）
 - WSS 客户端：连接其他模块（Face 连 Mind，Mind 连远程 Hand）
 - WSS 服务端：接受其他模块的连接（Mind 接受 Face 连入，远程 Hand 连 Mind）
-- 应用层加密（AES-128-GCM / ChaCha20-Poly1305）
-- session 管理：创建、路由、生命周期
-- 消息编解码与序列化
+- 应用层加密原语：AES-128-GCM + AAD（ChaCha20-Poly1305 规划中）
+- 连接级 session 管理：注册成功响应、session_id、严格递增 seq 防重放
+- 消息编解码与序列化：Envelope / Register / RPC / RPCResult / Error
 - Face/Mind/Hand 各包的二进制嵌入此基座后叠加各自业务层打包
 
 这个设计的关键含义：
@@ -275,18 +275,77 @@ sequenceDiagram
 · 用户在 WebUI 上复制密钥，粘贴到 Hand 的配置文件。
 · Hand 首次连接时完成密钥验证，后续通信全程加密。
 
-3. 消息格式
+3. 消息格式（Envelope）
 
-每条消息携带 session_id，标识该命令所属的 shell 执行环境。
+每条消息携带完整的路由和加密上下文。
 
 ```json
 {
-  "msg_id": "uuid-v4",
-  "session_id": "session-uuid",
-  "type": "exec | result | event | ping",
-  "payload": { ... }
+  "msg_id":     "uuid-v7",
+  "type":       "register | rpc | rpc_result | ping | pong | error",
+  "session_id": "32-char hex",
+  "from":       "发送方 client_id",
+  "to":         "接收方 client_id",
+  "seq":        1,
+  "payload":    { ... }
 }
 ```
+
+字段说明：
+- `session_id` — 连接级别的随机 ID，每次重连重新生成，用于重放防护和消息隔离
+- `from` / `to` — 发送方和接收方的 client_id，消息不接受来源不明的投递
+- `seq` — 从 1 开始的单调递增序号，同一 session 内每发一条 +1
+
+4. 会话与防重放
+
+4.1 会话创建（Handshake）
+
+```
+Hand ──reg──→ Mind
+  { type: "register", payload: { client_id, type, token } }
+
+Mind → 校验 token → 生成 32 字节随机 session_id
+     → 创建 Peer（seq 计数器归零）
+     → 替换旧连接（当 client_id 冲突时）
+
+后续所有消息必须携带此 session_id。
+```
+
+4.2 连接层防重放（Hub.Accept）
+
+每条到达 Mind 的业务消息在进入处理逻辑前，通过 `Accept()` 校验：
+
+| 检查项 | 规则 | 违反则拒绝 |
+|--------|------|-----------|
+| type | 非空，不能是 register | 401 |
+| session_id | 必须与握手分配的完全一致 | 401 |
+| from | 必须等于 peer 的 client_id | 401 |
+| to | 必须等于当前 hub 的 ID | 401 |
+| seq | `seq == inSeq + 1`（严格递增） | 409 replay/out-of-order |
+
+拒绝 Register 消息走业务通路——它只能在握手阶段出现一次。
+
+4.3 序号模型
+
+- `seq` 从 1 开始，每条消息严格 +1
+- 采用严格匹配（`==` 而非 `>`）而非窗口：收到错误的 seq 直接拒绝，重连后新 session 自动重置计数器
+- Hub 发消息时自动调用 `stampOutgoing()` 填充 `from`/`to`/`session_id`/`seq`
+- 对端（Hand/Face）必须自行维护 outgoing seq 并填充 `from`/`to`/`session_id`
+
+5. 加密上下文绑定（AAD）
+
+加密时使用的附加认证数据（AAD）是 Envelope 的结构化 JSON：
+
+```json
+{"v":1,"msg_id":"...","type":"rpc","session_id":"...","from":"...","to":"...","seq":42}
+```
+
+这确保密文不可跨消息挪用：
+- 改 `type` 或 `seq` → AAD 变化 → GCM tag 校验失败
+- 改 `from` 或 `to` → 同上
+- 跨 session 重放 → 同上
+
+🔐 Encrypt(payload, env.AAD()) 和 Decrypt(ciphertext, env.AAD()) 在 gateway-core/wss/crypto.go 中实现。MVP 阶段加密为实验性功能。重放防护由 Envelope session/seq + Hub.Accept 独立保障，不依赖加密层。生产环境建议配合 TLS 使用。
 
 ---
 
