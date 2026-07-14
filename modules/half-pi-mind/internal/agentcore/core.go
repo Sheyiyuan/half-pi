@@ -9,20 +9,22 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/skill"
 )
 
 // Core 是 agent core 的主体。
 // TODO: 接入 WSS server 后需为 Mode、history、autoAllow/autoDeny 加并发保护。
 type Core struct {
-	llm        llm.Provider
-	exec       executor.ToolExecutor
-	history    []llm.Message
-	Bus        *events.EventBus // Mind 的事件总线，nil 时不发事件
-	Debug      bool
-	Mode       string // "normal" | "trust" | "yolo"
-	approver   Approver
-	autoAllow  map[string]bool // 本会话自动放行的工具
-	autoDeny   map[string]bool // 本会话自动拒绝的工具
+	llm       llm.Provider
+	exec      executor.ToolExecutor
+	history   []llm.Message
+	Bus       *events.EventBus // Mind 的事件总线，nil 时不发事件
+	skills    *skill.Store
+	Debug     bool
+	Mode      string // "normal" | "trust" | "yolo"
+	approver  Approver
+	autoAllow map[string]bool // 本会话自动放行的工具
+	autoDeny  map[string]bool // 本会话自动拒绝的工具
 }
 
 // Approver 由 REPL 实现，处理用户确认交互。
@@ -34,7 +36,7 @@ type Approver interface {
 type ConfirmResult int
 
 const (
-	ConfirmDeny       ConfirmResult = iota
+	ConfirmDeny ConfirmResult = iota
 	ConfirmAllow
 	ConfirmAllowAlways
 	ConfirmDenyAlways
@@ -75,6 +77,11 @@ func (c *Core) SetApprover(a Approver) {
 	c.approver = a
 }
 
+// SetSkills 设置技能仓库，skill index 将被注入 system prompt。
+func (c *Core) SetSkills(s *skill.Store) {
+	c.skills = s
+}
+
 func toolsToDefs(tools []executor.Tool) []llm.ToolDef {
 	var defs []llm.ToolDef
 	for _, t := range tools {
@@ -103,15 +110,21 @@ func (c *Core) Chat(ctx context.Context, input string) (string, error) {
 	})
 
 	for step := 0; step < maxToolCallSteps; step++ {
+		system := loadSoul(c.Mode)
+		if c.skills != nil {
+			if idx := c.skills.Index(); idx != "" {
+				system += "\n\n" + idx
+			}
+		}
 		req := &llm.LLMRequest{
-			System:   loadSoul(c.Mode),
+			System:   system,
 			Messages: c.history,
 			Tools:    toolsToDefs(c.exec.Tools()),
 		}
 
 		resp, err := c.llm.Chat(ctx, req)
 		if err != nil {
-			return "", fmt.Errorf("LLM 调用失败: %w", err)
+			return "", fmt.Errorf("LLM call failed: %w", err)
 		}
 
 		if len(resp.ToolCalls) == 0 {
@@ -229,5 +242,5 @@ func (c *Core) Chat(ctx context.Context, input string) (string, error) {
 		// continue loop → LLM sees tool results
 	}
 
-	return "", fmt.Errorf("tool call 循环超过最大轮数")
+	return "", fmt.Errorf("tool call loop exceeded max steps")
 }

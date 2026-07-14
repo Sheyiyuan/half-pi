@@ -13,6 +13,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/setup"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/skill"
 )
 
 // REPLApprover 实现 agentcore.Approver，在终端交互确认。
@@ -73,6 +74,13 @@ func main() {
 
 	exec := local.New()
 
+	// 加载技能
+	skillStore, err := skill.LoadFromDir(env.SkillsDir)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "加载技能失败: %v\n", err)
+	}
+	local.SetSkillStore(skillStore)
+
 	bus := events.NewEventBus()
 	bus.Subscribe(events.NewConsoleWriter())
 
@@ -82,6 +90,7 @@ func main() {
 		os.Exit(1)
 	}
 	core.Bus = bus
+	core.SetSkills(skillStore)
 
 	scanner := bufio.NewScanner(os.Stdin)
 	core.SetApprover(&REPLApprover{scanner: scanner})
