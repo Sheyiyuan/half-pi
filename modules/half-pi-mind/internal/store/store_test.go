@@ -128,8 +128,102 @@ func TestCreateSession(t *testing.T) {
 	if sess.GroupID != g.ID {
 		t.Errorf("session group_id = %q, want %q", sess.GroupID, g.ID)
 	}
-	if sess.ID != "session-1" {
-		t.Errorf("session id = %q, want session-1", sess.ID)
+	if sess.Name != "" {
+		t.Errorf("new session name should be empty, got %q", sess.Name)
+	}
+	if sess.Description != "" {
+		t.Errorf("new session description should be empty, got %q", sess.Description)
+	}
+}
+
+func TestUpdateSessionName(t *testing.T) {
+	s := newTestStore(t)
+	g, _ := s.UpsertGroup("/tmp/test-project")
+	s.CreateSession(g.ID, "s-named")
+
+	err := s.UpdateSessionName("s-named", "My Session")
+	if err != nil {
+		t.Fatalf("UpdateSessionName: %v", err)
+	}
+
+	sess, _ := s.GetSession("s-named")
+	if sess.Name != "My Session" {
+		t.Errorf("name = %q, want My Session", sess.Name)
+	}
+}
+
+func TestGetMessageCount(t *testing.T) {
+	s := newTestStore(t)
+	g, _ := s.UpsertGroup("/tmp/test-project")
+	s.CreateSession(g.ID, "s-count")
+
+	count, err := s.GetMessageCount("s-count")
+	if err != nil {
+		t.Fatalf("GetMessageCount: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("empty session count = %d, want 0", count)
+	}
+
+	s.SaveMessages("s-count", []Message{
+		{Role: "user", Content: "a", Seq: 1},
+		{Role: "assistant", Content: "b", Seq: 2},
+	})
+
+	count, err = s.GetMessageCount("s-count")
+	if err != nil {
+		t.Fatalf("GetMessageCount: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("count = %d, want 2", count)
+	}
+}
+
+func TestReplaceMessages(t *testing.T) {
+	s := newTestStore(t)
+	g, _ := s.UpsertGroup("/tmp/test-project")
+	s.CreateSession(g.ID, "s-replace")
+
+	// Initial save
+	s.SaveMessages("s-replace", []Message{
+		{Role: "user", Content: "old", Seq: 1},
+	})
+
+	// Replace
+	err := s.ReplaceMessages("s-replace", []Message{
+		{Role: "user", Content: "new-1", Seq: 1},
+		{Role: "assistant", Content: "new-2", Seq: 2},
+	})
+	if err != nil {
+		t.Fatalf("ReplaceMessages: %v", err)
+	}
+
+	msgs, _ := s.GetMessages("s-replace")
+	if len(msgs) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(msgs))
+	}
+	if msgs[0].Content != "new-1" || msgs[1].Content != "new-2" {
+		t.Error("replace didn't update messages")
+	}
+}
+
+func TestReplaceMessagesEmpty(t *testing.T) {
+	s := newTestStore(t)
+	g, _ := s.UpsertGroup("/tmp/test-project")
+	s.CreateSession(g.ID, "s-replace-empty")
+
+	s.SaveMessages("s-replace-empty", []Message{
+		{Role: "user", Content: "old", Seq: 1},
+	})
+
+	err := s.ReplaceMessages("s-replace-empty", nil)
+	if err != nil {
+		t.Fatalf("ReplaceMessages with nil: %v", err)
+	}
+
+	msgs, _ := s.GetMessages("s-replace-empty")
+	if len(msgs) != 0 {
+		t.Errorf("expected 0 messages after replace with nil, got %d", len(msgs))
 	}
 }
 
@@ -302,5 +396,63 @@ func TestDateTimeParsing(t *testing.T) {
 	msgs, _ := s.GetMessages("ts-session")
 	if len(msgs) > 0 && msgs[0].CreatedAt.IsZero() {
 		t.Error("message CreatedAt should not be zero")
+	}
+}
+
+func TestFindSessionsByPrefix(t *testing.T) {
+	s := newTestStore(t)
+	g, _ := s.UpsertGroup("/tmp/test-prefix")
+
+	// UUID-style IDs with dashes
+	s.CreateSession(g.ID, "550e8400-e29b-41d4-a716-446655440000")
+	s.CreateSession(g.ID, "550e8400-f3a8-4b12-c829-557766330011")
+	s.CreateSession(g.ID, "9e8f7a6b-3c4d-5e6f-7890-abcd12345678")
+
+	// Exact match
+	sessions, err := s.FindSessionsByPrefix(g.ID, "550e8400-e29b-41d4-a716-446655440000")
+	if err != nil {
+		t.Fatalf("FindSessionsByPrefix: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("exact match: expected 1, got %d", len(sessions))
+	}
+
+	// Prefix match (no dashes)
+	sessions, err = s.FindSessionsByPrefix(g.ID, "550e8400")
+	if err != nil {
+		t.Fatalf("FindSessionsByPrefix: %v", err)
+	}
+	if len(sessions) != 2 {
+		t.Fatalf("prefix match: expected 2, got %d", len(sessions))
+	}
+
+	// Prefix match with dashes
+	sessions, err = s.FindSessionsByPrefix(g.ID, "550e8400-e29b")
+	if err != nil {
+		t.Fatalf("FindSessionsByPrefix: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("dashed prefix: expected 1, got %d", len(sessions))
+	}
+	if sessions[0].Name != "" {
+		t.Error("new session should have empty name")
+	}
+
+	// No match
+	sessions, err = s.FindSessionsByPrefix(g.ID, "deadbeef")
+	if err != nil {
+		t.Fatalf("FindSessionsByPrefix: %v", err)
+	}
+	if len(sessions) != 0 {
+		t.Fatalf("no match: expected 0, got %d", len(sessions))
+	}
+
+	// Single match
+	sessions, err = s.FindSessionsByPrefix(g.ID, "9e8f7a6b")
+	if err != nil {
+		t.Fatalf("FindSessionsByPrefix: %v", err)
+	}
+	if len(sessions) != 1 {
+		t.Fatalf("single match: expected 1, got %d", len(sessions))
 	}
 }
