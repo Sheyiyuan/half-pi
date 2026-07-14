@@ -24,5 +24,5 @@ func (e *LocalExecutor) ExecuteTool(ctx context.Context, name string, args json.
 			return t.Execute(ctx, args)
 		}
 	}
-	return &executor.ToolResult{Error: fmt.Sprintf("未知工具: %s", name)}
+	return &executor.ToolResult{Error: fmt.Sprintf("unknown tool: %s", name)}
 }
