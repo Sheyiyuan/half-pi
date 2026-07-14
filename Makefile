@@ -22,11 +22,14 @@ run-face:
 	go run ./modules/half-pi-face/cmd/half-pi-face/
 
 run-hand:
-	go run ./modules/half-pi-hand/cmd/half-pi-hand/
+	go run ./modules/half-pi-hand/cmd/half-pi-hand/ $(ARGS)
 
 # ── Test all modules ──
 test:
+	cd modules/half-pi-core && go test -race -count=1 ./...
+	cd modules/gateway-core && go test -race -count=1 ./...
 	cd modules/half-pi-mind && go test -race -count=1 ./...
+	cd modules/half-pi-hand && go test -race -count=1 ./...
 
 # ── Lint ──
 lint:
