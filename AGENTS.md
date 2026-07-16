@@ -132,7 +132,7 @@ make test         # 运行全部 4 个模块的测试
 
 #### ✅ 已完成
 
-##### 工具系统（11 个工具）
+##### 工具系统（9 个工具）
 | 工具 | 位置 | 功能 |
 |------|------|------|
 | `read_file` | half-pi-core/tools | 读取文件，支持行号/行范围/字符偏移/双上限 |
@@ -220,15 +220,18 @@ make test         # 运行全部 4 个模块的测试
 - `server.enabled` 配置开关
 
 ##### 设计文档
+- `docs/architecture.md` — 完整系统架构设计（三层模型、术语定义、通信协议、安全审计）
+- `docs/provider-adapter.md` — LLM 适配器模式设计（内部格式、各厂商适配器细节）
+- `docs/remote-execution.md` — Mind → Hand 远程执行设计（协议扩展、四个 LLM 工具、数据流）
 - `docs/skill-design.md` — 技能系统设计
 - `docs/skill-session-memory-design.md` — 技能/会话/记忆组织设计
 
 #### ⏳ 待完成
-- [ ] **Face** 远程交互终端（TUI / IM Bot）
+- [ ] **Face** 远程交互终端（TUI / IM Bot）——占位 stub 已创建（`modules/half-pi-face/`，仅打印一行字），go.work 已注册，可编译
 - [ ] LLM 适配器工厂（根据 `provider.adapter` 自动选择）
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
-- [ ] Mind → Hand 工具执行路由（当前 Hand 可接收 RPC，但 Mind Chat 仍用 local executor）
+- [ ] Mind → Hand 工具执行路由 — 设计文档 `docs/remote-execution.md`，待实现 4 个工具：`list_hands`、`get_hand_info`、`select_hand`、`use_hand`
 
 ---
 
