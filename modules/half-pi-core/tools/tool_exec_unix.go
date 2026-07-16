@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
@@ -71,11 +72,12 @@ func executeWithShell(shell string, shellArgs ...string) func(ctx context.Contex
 		defer cancel()
 
 		cmd := exec.CommandContext(cmdCtx, shell, append(shellArgs, p.Command)...)
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 
-		if err := cmd.Run(); err != nil {
+		if err := runCommand(cmdCtx, cmd); err != nil {
 			msg := fmt.Sprintf("执行失败: %v", err)
 			if stderr.Len() > 0 {
 				msg += "\n" + strings.TrimSpace(stderr.String())
@@ -93,5 +95,27 @@ func executeWithShell(shell string, shellArgs ...string) func(ctx context.Contex
 			}
 		}
 		return &executor.ToolResult{Success: true, Output: output}
+	}
+}
+
+func runCommand(ctx context.Context, cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		<-done
+		return ctx.Err()
 	}
 }

@@ -128,11 +128,11 @@ make test         # 运行全部 4 个模块的测试
 
 ## 开发进度
 
-### Phase 1 — Mind 核心 + Gateway 通信（完成度 ~90%）
+### Phase 1 — Mind 核心 + Gateway 通信（完成度 ~95%）
 
 #### ✅ 已完成
 
-##### 工具系统（9 个工具）
+##### 工具系统（13 个工具）
 | 工具 | 位置 | 功能 |
 |------|------|------|
 | `read_file` | half-pi-core/tools | 读取文件，支持行号/行范围/字符偏移/双上限 |
@@ -144,6 +144,10 @@ make test         # 运行全部 4 个模块的测试
 | `exec_command` | half-pi-core/tools | 跨平台 Shell 执行（Unix: sh, Windows: cmd），可设超时 |
 | `check_security` | mind/internal/executor/local | 预查安全策略结果 |
 | `view_skill` | mind/internal/executor/local | 按名称加载技能全文 |
+| `list_hands` | mind/internal/executor/local | 列出在线 Hand 及静态信息 |
+| `get_hand_info` | mind/internal/executor/local | 查询 Hand 动态信息与可用工具 |
+| `select_hand` | mind/internal/executor/local | 设置/查询当前会话默认 Hand |
+| `use_hand` | mind/internal/executor/local | 在指定 Hand 上远程执行工具 |
 
 ##### 安全策略 (`half-pi-core/security/`)
 - 四模式：strict / normal / trust / yolo
@@ -206,11 +210,13 @@ make test         # 运行全部 4 个模块的测试
 
 ##### Hand 远程执行器 (`modules/half-pi-hand/`)
 - WebSocket 客户端连接 Mind Hub
-- `executor.Runner` 驱动工具执行（安全策略双检）
-- RPC 消息收发（RPC → 执行工具 → RPCResult）
-- 3 个集成测试（正常执行、未知工具、安全拦截）
+- `executor.Runner` 驱动工具执行（Mind 审批 + Hand 侧最终权限过滤）
+- RPC 消息收发（RPC → 执行工具 → RPCResult），支持 `timeout_ms`
+- Unix `exec_command` 超时取消时杀整个进程组，避免 shell 子进程残留
+- 6 个集成测试（正常执行、未知工具、安全拦截、权限拒绝、取消、远程超时）
 - TOML 配置文件（`~/.half-pi/hand/config.toml`）
-- CLI flag 覆盖 + 环境变量支持
+- CLI flag 覆盖 + 环境变量支持，默认连接 `ws://127.0.0.1:15707/ws`
+- 工作目录切换、工具 allow/deny、输出上限、主动监控事件上报
 
 ##### Mind Hub 服务器
 - HTTP/WS 服务器（`hub.Hub.ServeWS`）+ REPL 并发运行
@@ -219,10 +225,18 @@ make test         # 运行全部 4 个模块的测试
 - 连接/断开事件通过 EventBus 发布到终端
 - `server.enabled` 配置开关
 
+##### Mind → Hand 工具执行路由（MVP）
+- LLM 可通过 `list_hands` / `get_hand_info` 感知在线 Hand
+- `select_hand` 将默认 Hand 持久化到 `sessions.active_hand`
+- `use_hand` 以普通 Tool 形式阻塞等待远程 `RPCResult`，不改 Chat 主循环
+- Mind 本地已知工具经 Mind 安检/审批后可让 Hand 跳过重复检查；远端专属工具保留 Hand 侧检查
+- pending call 校验响应来源，避免其他 Hand 伪造同 ID 结果
+
 ##### 设计文档
 - `docs/architecture.md` — 完整系统架构设计（三层模型、术语定义、通信协议、安全审计）
 - `docs/provider-adapter.md` — LLM 适配器模式设计（内部格式、各厂商适配器细节）
 - `docs/remote-execution.md` — Mind → Hand 远程执行设计（协议扩展、四个 LLM 工具、数据流）
+- `docs/mind-hand-mvp-followups.md` — Mind+Hand MVP 后续重点 TODO
 - `docs/skill-design.md` — 技能系统设计
 - `docs/skill-session-memory-design.md` — 技能/会话/记忆组织设计
 
@@ -231,7 +245,7 @@ make test         # 运行全部 4 个模块的测试
 - [ ] LLM 适配器工厂（根据 `provider.adapter` 自动选择）
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
-- [ ] Mind → Hand 工具执行路由 — 设计文档 `docs/remote-execution.md`，待实现 4 个工具：`list_hands`、`get_hand_info`、`select_hand`、`use_hand`
+- [ ] Mind → Hand 协议 v2 — 审批语义、取消协议、并发状态模型见 `docs/mind-hand-mvp-followups.md`
 
 ---
 
@@ -293,11 +307,18 @@ make test         # 运行全部 4 个模块的测试
 - 连接/断开通过 EventBus 发布 `[HUB]` 事件
 - `/peers` 命令查看在线设备
 
+### 2026-07-16：Mind → Hand 远程执行 MVP
+- 以四个 Mind 本地工具暴露远程执行能力，不改 `Core.Chat()` 主循环
+- `list_hands` / `get_hand_info` / `select_hand` / `use_hand` 通过 `RemoteBridge` 注入 Hub、activeHand、pending call、审批函数
+- RPC 增加 `timeout_ms`，Hand 执行时用该值派生 context；Unix 命令取消时杀进程组
+- Hand 默认连接 Mind Hub `ws://127.0.0.1:15707/ws`，与 Mind 默认监听端口一致
+- 当前协议为 MVP 版本：能完成一轮 RPC → 一次结果，暂不支持进度流、后台任务和显式 cancel RPC
+
 ---
 
 ## 下一步
 
 1. **Face** — 远程交互终端（TUI / IM Bot）
-2. Mind → Hand 工具执行路由（Chat 根据 Hand 可用性选择 local/remote）
+2. Mind → Hand 协议 v2（审批语义、取消协议、并发状态）
 3. LLM 适配器工厂
 4. `/compact` 上下文压缩

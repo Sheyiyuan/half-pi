@@ -31,7 +31,7 @@ func TestClientConnectAndRegister(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(strings.Replace(srv.URL, "http", "ws", 1))
-	conn, err := client.ConnectAndRegister("face-1", hub.PeerFace, "")
+	conn, err := client.ConnectAndRegister("face-1", hub.PeerFace, "", nil)
 	if err != nil {
 		t.Fatalf("ConnectAndRegister: %v", err)
 	}

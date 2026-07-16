@@ -3,6 +3,7 @@ package agentcore
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
@@ -15,7 +16,6 @@ import (
 )
 
 // Core 是 agent core 的主体。
-// TODO: 接入 WSS server 后需为 Mode、history、autoAllow/autoDeny 加并发保护。
 type Core struct {
 	llm       llm.Provider
 	exec      executor.ToolExecutor
@@ -30,6 +30,10 @@ type Core struct {
 	autoAllow map[string]bool // 本会话自动放行的工具
 	autoDeny  map[string]bool // 本会话自动拒绝的工具
 	Hub       *hub.Hub        // WebSocket Hub，管理 Face/Hand 连接
+
+	activeHand   string                  // 当前会话的默认 Hand ID
+	pendingCalls map[string]*pendingCall // 等待 Hand 响应的通道
+	pendingMu    sync.Mutex
 }
 
 // Approver 由 REPL 实现，处理用户确认交互。
@@ -50,16 +54,16 @@ const maxToolCallSteps = 10
 
 func New(llmProvider llm.Provider, exec executor.ToolExecutor) (*Core, error) {
 	return &Core{
-		llm:       llmProvider,
-		exec:      exec,
-		Mode:      "normal",
-		autoAllow: make(map[string]bool),
-		autoDeny:  make(map[string]bool),
+		llm:          llmProvider,
+		exec:         exec,
+		Mode:         "normal",
+		autoAllow:    make(map[string]bool),
+		autoDeny:     make(map[string]bool),
+		pendingCalls: make(map[string]*pendingCall),
 	}, nil
 }
 
 // SetMode 切换安全模式，同时在对话历史中记录。
-// TODO: 被非 REPL 调用方（如 WSS server）调用时，调用方需负责发送事件。
 func (c *Core) SetMode(mode string) {
 	c.Mode = mode
 	security.SetMode(modeToSecurityMode(mode))
@@ -97,11 +101,18 @@ func (c *Core) SetSkills(s *skill.Store) { c.skills = s }
 func (c *Core) SetStore(s *store.Store, sessionID string) error {
 	c.store = s
 	c.sessionID = sessionID
+	c.activeHand = "" // 先重置，避免串到上一条会话的 Hand
+
 	msgs, err := s.GetMessages(sessionID)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
 	}
 	c.history = storeMsgToLLM(msgs)
+
+	if ah, err := s.GetActiveHand(sessionID); err == nil && ah != "" {
+		c.activeHand = ah
+	}
+
 	return nil
 }
 
@@ -139,9 +150,58 @@ func (c *Core) SetHub(h *hub.Hub) {
 			switch msg.Type {
 			case protocol.TypeRPCResult:
 				result, _ := protocol.DecodePayload[protocol.RPCResult](&msg)
-				c.publish(events.LevelDebug, events.TypeToolResult,
-					fmt.Sprintf("[%s] %s: %s", peer.ID, result.ID, truncate(result.Output)))
+				c.pendingMu.Lock()
+				pc, ok := c.pendingCalls[result.ID]
+				if ok && pc.expectedPeer == peer.ID {
+					delete(c.pendingCalls, result.ID)
+					c.pendingMu.Unlock()
+					select {
+					case pc.ch <- msg:
+					default:
+					}
+				} else {
+					c.pendingMu.Unlock()
+					if ok {
+						c.publish(events.LevelWarn, events.TypeSystem,
+							fmt.Sprintf("[%s] RPCResult 来源不匹配: 期望 %s", peer.ID, pc.expectedPeer))
+					} else {
+						c.publish(events.LevelDebug, events.TypeToolResult,
+							fmt.Sprintf("[%s] 孤立 RPCResult: %s", peer.ID, result.ID))
+					}
+				}
+
+			case protocol.TypeHandInfoResp:
+				resp, _ := protocol.DecodePayload[protocol.HandInfoResp](&msg)
+				c.pendingMu.Lock()
+				pc, ok := c.pendingCalls[resp.ID]
+				if ok && pc.expectedPeer == peer.ID {
+					delete(c.pendingCalls, resp.ID)
+					c.pendingMu.Unlock()
+					select {
+					case pc.ch <- msg:
+					default:
+					}
+				} else {
+					c.pendingMu.Unlock()
+					if ok {
+						c.publish(events.LevelWarn, events.TypeSystem,
+							fmt.Sprintf("[%s] HandInfoResp 来源不匹配: 期望 %s", peer.ID, pc.expectedPeer))
+					} else {
+						c.publish(events.LevelDebug, events.TypeToolResult,
+							fmt.Sprintf("[%s] 孤立 HandInfoResp: %s", peer.ID, resp.ID))
+					}
+				}
+
+			case protocol.TypeHandEvent:
+				evt, _ := protocol.DecodePayload[protocol.HandEvent](&msg)
+				level := events.LevelInfo
+				if evt.Status == "triggered" {
+					level = events.LevelWarn
+				}
+				c.publish(level, events.TypeSystem,
+					fmt.Sprintf("[%s/%s] %s\n%s", peer.ID, evt.Name, evt.Status, evt.Output))
 			}
+
 		default:
 			c.publish(events.LevelDebug, events.TypeSystem,
 				fmt.Sprintf("unhandled message from %s type=%s", peer.ID, msg.Type))

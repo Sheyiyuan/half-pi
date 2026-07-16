@@ -18,6 +18,10 @@ const (
 	TypePing       = "ping"
 	TypePong       = "pong"
 	TypeError      = "error"
+
+	TypeHandInfoReq  = "hand_info_req"  // Mind → Hand：查询可用工具列表
+	TypeHandInfoResp = "hand_info_resp" // Hand → Mind：返回工具列表
+	TypeHandEvent    = "hand_event"     // Hand → Mind：主动监控事件上报
 )
 
 // Envelope 是所有 WS 消息的包装，携带路由和加密上下文。
@@ -55,9 +59,18 @@ func (e *Envelope) AAD() []byte {
 
 // Register 是 Face 或 Hand 首次连接时发送的注册消息。
 type Register struct {
-	ClientID string `json:"client_id"`
-	Token    string `json:"token"`
-	Type     string `json:"type"` // "face" | "hand"
+	ClientID string   `json:"client_id"`
+	Token    string   `json:"token"`
+	Type     string   `json:"type"`           // "face" | "hand"
+	Info     HandInfo `json:"info,omitempty"` // Hand 静态设备信息
+}
+
+// HandInfo Hand 注册时上报的静态设备信息。
+type HandInfo struct {
+	OS       string `json:"os"`       // 操作系统：linux / darwin / windows
+	Arch     string `json:"arch"`     // CPU 架构：amd64 / arm64
+	Hostname string `json:"hostname"` // 主机名
+	WorkDir  string `json:"work_dir"` // 工作目录
 }
 
 // Registered 是服务端接受注册后返回给客户端的会话信息。
@@ -76,9 +89,11 @@ type EncryptedPayload struct {
 
 // RPC 由 Mind 发送，请求 Hand 执行工具。
 type RPC struct {
-	ID   string         `json:"id"`
-	Tool string         `json:"tool"`
-	Args map[string]any `json:"args"`
+	ID         string         `json:"id"`
+	Tool       string         `json:"tool"`
+	Args       map[string]any `json:"args"`
+	SkipChecks bool           `json:"skip_checks"` // Mind 已安全检查，Hand 直接执行
+	TimeoutMs  int            `json:"timeout_ms,omitempty"`
 }
 
 // RPCResult 是 Hand 执行工具后的返回。
@@ -87,6 +102,29 @@ type RPCResult struct {
 	Success bool   `json:"success"`
 	Output  string `json:"output,omitempty"`
 	Error   string `json:"error,omitempty"`
+}
+
+// HandInfoReq Mind → Hand：请求 Hand 动态信息（工具列表等）。
+type HandInfoReq struct {
+	ID string `json:"id"` // 请求 ID，用于匹配响应
+}
+
+// HandInfoResp Hand → Mind：返回 Hand 动态信息。
+type HandInfoResp struct {
+	ID      string   `json:"id"`       // 匹配 HandInfoReq.ID
+	Tools   []string `json:"tools"`    // 可用工具名称列表
+	OS      string   `json:"os"`       // 操作系统
+	Host    string   `json:"host"`     // 主机名
+	WorkDir string   `json:"work_dir"` // 工作目录
+}
+
+// HandEvent Hand → Mind：主动监控事件上报。
+type HandEvent struct {
+	Name      string `json:"name"`    // 监控项名称
+	HandID    string `json:"hand_id"` // 发送 Hand 的 ID
+	Status    string `json:"status"`  // "triggered" | "ok"
+	Output    string `json:"output"`  // 检测命令的 stdout
+	Timestamp int64  `json:"ts"`      // unix 时间戳
 }
 
 // Ping 用于心跳检测。

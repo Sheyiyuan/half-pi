@@ -1,10 +1,15 @@
 # Mind → Hand 远程执行设计
 
-## 问题
+## 状态
 
-当前 Hand 已能连接 Hub、接收 RPC、执行工具并回传 `RPCResult`，但 Mind 的 `Core.Chat()` 工具调用循环只用 `LocalExecutor`，完全不看远程 Hand。`Core.OnMessage()` 收到 `RPCResult` 后仅打日志，不喂回对话循环。
+MVP 已实现。Mind 保持 `Core.Chat()` 主循环不变，通过四个本地工具让 LLM 感知、选择并调用远程 Hand：
 
-需要让 LLM 能感知并在远程 Hand 上执行工具。
+- `list_hands`
+- `get_hand_info`
+- `select_hand`
+- `use_hand`
+
+当前版本支持一轮 RPC → 一次 `RPCResult`，并覆盖基础超时、来源校验、Hand 权限过滤和输出截断。完整进度流、后台任务、显式 cancel RPC、审批证明模型属于后续 v2。
 
 ## 方案：LLM 可调用的 Hand 管理工具
 
@@ -24,6 +29,7 @@ LLM 决策层
 - Chat 循环零改动。`use_hand` 是一个普通 Tool，在 Execute 中阻塞等远程结果
 - LLM 持有全部调度权——选择哪台机器、执行哪个工具
 - 会话级 activeHand 持久化到 SQLite，跨重启恢复
+- Hand 保留最终执行守门权：工具 allow/deny、远端专属工具的本地检查和输出限制都在 Hand 侧生效
 
 ---
 
@@ -48,16 +54,17 @@ type HandInfo struct {
 }
 ```
 
-### 1.2 RPC 增加 SkipChecks 标志
+### 1.2 RPC 增加执行控制字段
 
-Mind 侧已完成安全检查后，通知 Hand 跳过二次检查：
+Mind 侧完成审批后，可通知 Hand 对 Mind 本地已知工具跳过重复检查；远端专属工具不跳过 Hand 侧检查。RPC 同时携带超时，让 Hand 执行上下文能随 Mind 等待超时取消。
 
 ```go
 type RPC struct {
     ID         string         `json:"id"`
     Tool       string         `json:"tool"`
     Args       map[string]any `json:"args"`
-    SkipChecks bool           `json:"skip_checks"` // Mind 已确认 → Hand 直接执行
+    SkipChecks bool           `json:"skip_checks"` // Mind 已确认且本地可检查 → Hand 跳过重复检查
+    TimeoutMs  int            `json:"timeout_ms,omitempty"`
 }
 ```
 
@@ -195,9 +202,9 @@ func (h *Hub) PeersByType(pt PeerType) []*Peer
 | 项 | 值 |
 |---|---|
 | 位置 | `modules/half-pi-mind/internal/executor/local/tool_use_hand.go` |
-| 参数 | `tool`（必填）、`args`（必填）、`hand_id`（可选，默认 activeHand）、`confirm`（可选） |
+| 参数 | `tool`（必填）、`args`（必填）、`hand_id`（可选，默认 activeHand）、`confirm`（可选）、`timeout_ms`（可选，默认 30000） |
 
-**安全审批由 Mind 统一处理，Hand 不再重复检查。**
+**安全审批由 Mind 统一处理，Hand 保留最终执行边界。**
 
 **执行流程：**
 
@@ -209,14 +216,15 @@ use_hand.Execute()
   ├─ 3. DefaultConfirm / confirm 参数检查
   ├─     ├─ 需确认 → c.approver.Confirm() → REPL/Face 用户交互
   │       └─ 拒绝 → 返回错误给 LLM（不发送 RPC）
-  ├─ 4. 构造 protocol.RPC{ID, Tool, Args, SkipChecks: true}
-  ├─ 5. 注册 pending: c.pendingCalls[rpcID] = ch
-  ├─ 6. Hub.Send(handID, env)
-  ├─ 7. select { result := <-ch | <-ctx.Done() }
-  └─ 8. 返回 result → LLM
+  ├─ 4. 判断 targetTool 是否为 Mind 本地已知工具，得到 localKnown
+  ├─ 5. 构造 protocol.RPC{ID, Tool, Args, SkipChecks: localKnown, TimeoutMs}
+  ├─ 6. 注册 pending: c.pendingCalls[rpcID] = ch
+  ├─ 7. Hub.Send(handID, env)
+  ├─ 8. select { result := <-ch | <-ctx.Done() }
+  └─ 9. 返回 result → LLM
 ```
 
-**关键点：** 第 2-3 步与 `chat.go` 中本地工具执行的检查路径一致——安全策略、DefaultConfirm、Approver 均复用，Face（REPL/Web UI/IM Bot）统一处确认。Hand 侧 `SkipChecks: true` 直接执行。
+**关键点：** 第 2-3 步与 `chat.go` 中本地工具执行的检查路径一致——安全策略、DefaultConfirm、Approver 均复用，Face（REPL/Web UI/IM Bot）统一处理确认。Hand 侧始终先执行 allow/deny；只有 Mind 本地已知工具才会设置 `SkipChecks: true` 跳过重复检查。跨平台或远端专属工具保留 Hand 本地检查。
 
 **RPCResult 投递路径：**
 
@@ -229,7 +237,7 @@ Hub.OnMessage → Core.OnMessage()
 
 **超时处理：**
 
-执行参数带 `timeout_ms`（默认 `30000`），`use_hand` 创建 `context.WithTimeout` 并取两者较小值。超时返回错误信息告知 LLM。
+执行参数带 `timeout_ms`（默认 `30000`）。Mind 等待结果时使用该超时；RPC 同步携带 `timeout_ms`，Hand 执行工具时用该值派生 context。Unix `exec_command` 取消时会杀整个进程组，避免 shell 子进程残留。
 
 ---
 
@@ -267,7 +275,7 @@ func (s *Store) GetActiveHand(sessionID string) (string, error)
 
 ```toml
 [server]
-url = "ws://localhost:8080/ws"
+url = "ws://127.0.0.1:15707/ws"
 token = ""
 
 [hand]
@@ -306,16 +314,20 @@ type LimitsConfig struct {
 - `allow_tools` 为空 → 全部工具可用
 - `max_output_size` 为 0 → 默认 1MB
 
-### 5.2 安全审批由 Mind 统一
+### 5.2 安全审批与 Hand 最终守门
 
-Hand 不再做安全检查和确认提示。`Runner` 改为 `SkipChecks: true`：
+Hand 使用两个 runner：Mind 本地已知工具经过 Mind 审批后可走 `trustedRunner` 跳过重复检查；远端专属工具或未确认工具走 `checkedRunner`，由 Hand 本地 `Tool.Check` 和 `DefaultConfirm` 决策。无论哪条路径，Hand 都先执行 allow/deny。
 
 ```go
 func New(conn *wss.SessionConn, cfg *config.Config) *Hand {
     return &Hand{
         conn: conn,
         cfg:   cfg,
-        runner: executor.NewRunner(executor.ExecutionPolicy{
+        checkedRunner: executor.NewRunner(executor.ExecutionPolicy{
+            Confirm:    nil,
+            SkipChecks: false,
+        }),
+        trustedRunner: executor.NewRunner(executor.ExecutionPolicy{
             Confirm:    nil,
             SkipChecks: true,
         }),
@@ -583,7 +595,7 @@ flowchart TD
     G --> I[executor.CheckTool + Approver.Confirm<br/>Mind 侧安全检查]
     I --> J{通过？}
     J -- 否 --> K[返回错误给 LLM]
-    J -- 是 --> L[Hub.Send RPC<br/>SkipChecks: true]
+    J -- 是 --> L[Hub.Send RPC<br/>SkipChecks=localKnown<br/>TimeoutMs]
     L --> M[("pendingCalls[rpcID]")]
     M --> N[block on chan<br/>等待 RPCResult]
     N --> O[Hand 执行工具<br/>返回 RPCResult]
@@ -609,7 +621,7 @@ flowchart TD
 
 | 文件 | 变更 |
 |---|---|
-| `gateway-core/protocol/protocol.go` | 扩展 `Register` 加 `HandInfo`，RPC 加 `SkipChecks`，新增 `HandInfoReq`/`HandInfoResp`/`HandEvent` 类型 |
+| `gateway-core/protocol/protocol.go` | 扩展 `Register` 加 `HandInfo`，RPC 加 `SkipChecks` / `TimeoutMs`，新增 `HandInfoReq`/`HandInfoResp`/`HandEvent` 类型 |
 | `gateway-core/hub/peer.go` | `Peer` 加 `Info *protocol.HandInfo` |
 | `gateway-core/hub/hub.go` | `Register()` 提取 `Info`，新增 `PeersByType()` |
 | `half-pi-mind/internal/agentcore/core.go` | 加 `activeHand`/`pendingCalls`、`SetHub` 增加 RPCResult 投递和 HandEvent 处理 |
@@ -621,10 +633,11 @@ flowchart TD
 | `half-pi-mind/internal/executor/local/tool_use_hand.go` | 新文件 |
 | `half-pi-hand/internal/config/config.go` | 扩展 `HandConfig`：`WorkDir` / `Permission` / `Limits` / `Monitors` |
 | `half-pi-hand/internal/hand/hand.go` | 注入配置、白黑名单过滤、并发执行、输出截断、事件监控 |
+| `half-pi-core/tools/tool_exec_unix.go` | Unix 命令超时取消时杀整个进程组 |
 
 ## 9. 实现步骤
 
-1. **协议层** — 扩展 `Register` 加 `HandInfo`、RPC 加 `SkipChecks`、新增 `HandInfoReq`/`HandInfoResp`/`HandEvent`
+1. **协议层** — 扩展 `Register` 加 `HandInfo`、RPC 加 `SkipChecks` / `TimeoutMs`、新增 `HandInfoReq`/`HandInfoResp`/`HandEvent`
 2. **Hand 配置** — 扩展 `config.go`：`WorkDir` / `Permission` / `Limits` / `Monitors`
 3. **Hand 执行器** — 注入配置、白黑名单过滤、goroutine 并发、输出截断、`handleHandInfoReq`、监控上报
 4. **Core 基础设施** — `activeHand`、`pendingCalls`、`SetHub` 中 RPCResult 投递 + HandEvent 处理
@@ -642,8 +655,14 @@ flowchart TD
 
 ### 2026-07-16：统一审批流
 - 安全策略检查和确认提示统一在 Mind 侧完成，经过 `executor.CheckTool()` + `Approver.Confirm()`
-- Hand 侧 `SkipChecks: true` 直接执行，不重复检查
+- Hand 侧先执行 allow/deny；Mind 本地已知工具可用 `SkipChecks: true` 跳过重复检查，远端专属工具保留 Hand 本地检查
 - Face 无论是 REPL、Web UI 还是 IM Bot，所有用户确认请求走同一个 `Approver` 接口
+
+### 2026-07-16：MVP 超时与取消边界
+- RPC 携带 `timeout_ms`，Mind 等待超时和 Hand 执行上下文使用同一参数
+- Hand `Serve(ctx)` 在 context 取消时主动关闭 websocket，打断阻塞读取
+- Unix `exec_command` 使用进程组执行，context 取消时杀整个进程组
+- 当前仍不支持显式 `rpc_cancel` 消息和后台任务生命周期管理，后续见 `docs/mind-hand-mvp-followups.md`
 
 ### 2026-07-16：Hand 配置化
 - 工具权限通过 `allow_tools` / `deny_tools` TOML 配置，用户编辑文件 + 重启 Hand 生效

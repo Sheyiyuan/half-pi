@@ -19,6 +19,7 @@ type Peer struct {
 	JoinedAt time.Time
 	hub      *Hub
 	session  *protocol.Session
+	Info     *protocol.HandInfo // Hand 注册时上报的静态设备信息
 
 	mu        sync.Mutex // 保护 Conn 写入，gorilla/websocket 要求单 writer
 	closeOnce sync.Once

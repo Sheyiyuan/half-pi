@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -59,10 +60,21 @@ func main() {
 		cfg.Hand.ID = hostname
 	}
 	if cfg.Server.URL == "" {
-		cfg.Server.URL = "ws://localhost:8080/ws"
+		cfg.Server.URL = config.DefaultServerURL
 	}
 
-	conn, err := wss.NewClient(cfg.Server.URL).ConnectAndRegister(cfg.Hand.ID, "hand", cfg.Server.Token)
+	// 切换到配置的工作目录（必须在 CollectHandInfo 之前）
+	if cfg.Hand.WorkDir != "" {
+		if err := os.Chdir(cfg.Hand.WorkDir); err != nil {
+			fmt.Fprintf(os.Stderr, "切换工作目录失败: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
+	// 收集 Hand 静态信息
+	info := hand.CollectHandInfo()
+
+	conn, err := wss.NewClient(cfg.Server.URL).ConnectAndRegister(cfg.Hand.ID, "hand", cfg.Server.Token, info)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "连接失败: %v\n", err)
 		os.Exit(1)
@@ -71,12 +83,12 @@ func main() {
 
 	fmt.Fprintf(os.Stderr, "Hand %s 已连接到 %s\n", cfg.Hand.ID, cfg.Server.URL)
 
-	h := hand.New(conn)
+	h := hand.New(conn, cfg)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	if err := h.Serve(ctx); err != nil {
+	if err := h.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
 		fmt.Fprintf(os.Stderr, "Hand 退出: %v\n", err)
 		os.Exit(1)
 	}

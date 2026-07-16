@@ -147,3 +147,29 @@ func (s *Store) FindSessionsByPrefix(groupID, prefix string) ([]Session, error) 
 	}
 	return matches, nil
 }
+
+// SetActiveHand 设置会话默认 Hand。
+func (s *Store) SetActiveHand(sessionID, handID string) error {
+	res, err := s.db.Exec("UPDATE sessions SET active_hand = ? WHERE id = ?", handID, sessionID)
+	if err != nil {
+		return err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+	return nil
+}
+
+// GetActiveHand 读取会话默认 Hand。列不存在或 session 不存在时返回空字符串。
+func (s *Store) GetActiveHand(sessionID string) (string, error) {
+	var handID string
+	err := s.db.QueryRow("SELECT active_hand FROM sessions WHERE id = ?", sessionID).Scan(&handID)
+	if err == sql.ErrNoRows {
+		return "", nil
+	}
+	return handID, err
+}

@@ -81,6 +81,11 @@ func (s *Store) migrate() error {
 			return fmt.Errorf("migration failed: %w", err)
 		}
 	}
+
+	if err := s.addColumnIfNotExists("sessions", "active_hand", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate active_hand: %w", err)
+	}
+
 	return nil
 }
 
@@ -89,4 +94,26 @@ const sqliteTimeFormat = "2006-01-02 15:04:05"
 func parseTime(s string) time.Time {
 	t, _ := time.Parse(sqliteTimeFormat, s)
 	return t
+}
+
+func (s *Store) addColumnIfNotExists(table, column, colDef string) error {
+	rows, err := s.db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, colType string
+		var dfltVal sql.NullString
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dfltVal, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			return nil
+		}
+	}
+	_, err = s.db.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + colDef)
+	return err
 }

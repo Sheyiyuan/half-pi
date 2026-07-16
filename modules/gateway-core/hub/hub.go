@@ -146,6 +146,10 @@ func (h *Hub) Register(raw []byte, conn *websocket.Conn) (*Peer, error) {
 		session:  session,
 	}
 
+	if reg.Info.OS != "" {
+		peer.Info = &reg.Info
+	}
+
 	if h.handshakeFn != nil {
 		if err := h.handshakeFn(peer, env); err != nil {
 			return nil, err
@@ -275,6 +279,26 @@ func (h *Hub) Peers() []string {
 		ids = append(ids, id)
 	}
 	return ids
+}
+
+// Peer 按 ID 返回单个 peer，不存在时返回 nil。
+func (h *Hub) Peer(id string) *Peer {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	return h.peers[id]
+}
+
+// PeersByType 返回指定类型的在线 peer 快照。
+func (h *Hub) PeersByType(pt PeerType) []*Peer {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	result := make([]*Peer, 0, len(h.peers))
+	for _, p := range h.peers {
+		if p.Type == pt {
+			result = append(result, p)
+		}
+	}
+	return result
 }
 
 func newSessionID() (string, error) {

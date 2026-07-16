@@ -3,6 +3,7 @@ package wss
 
 import (
 	"fmt"
+	"sync"
 
 	"github.com/gorilla/websocket"
 
@@ -29,20 +30,25 @@ func (c *Client) Connect() (*websocket.Conn, error) {
 type SessionConn struct {
 	Conn    *websocket.Conn
 	Session *protocol.Session
+	writeMu sync.Mutex // gorilla/websocket 要求单 writer
 }
 
 // ConnectAndRegister 连接服务端并完成 register/registered 握手。
-func (c *Client) ConnectAndRegister(clientID, peerType, token string) (*SessionConn, error) {
+func (c *Client) ConnectAndRegister(clientID, peerType, token string, info *protocol.HandInfo) (*SessionConn, error) {
 	conn, err := c.Connect()
 	if err != nil {
 		return nil, err
 	}
 
-	reg, err := protocol.NewEnvelope("", protocol.TypeRegister, protocol.Register{
+	regPayload := protocol.Register{
 		ClientID: clientID,
 		Token:    token,
 		Type:     peerType,
-	})
+	}
+	if info != nil {
+		regPayload.Info = *info
+	}
+	reg, err := protocol.NewEnvelope("", protocol.TypeRegister, regPayload)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -86,6 +92,8 @@ func (c *Client) ConnectAndRegister(clientID, peerType, token string) (*SessionC
 
 // Send 发送业务消息，并自动填充 session/from/to/seq。
 func (c *SessionConn) Send(env protocol.Envelope) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
 	stamped, err := c.Session.Stamp(env)
 	if err != nil {
 		return err

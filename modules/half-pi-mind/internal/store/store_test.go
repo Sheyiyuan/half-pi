@@ -552,3 +552,37 @@ func TestHandTokenRemoveTwice(t *testing.T) {
 		t.Error("second RemoveHandToken should fail")
 	}
 }
+
+func TestActiveHand(t *testing.T) {
+	s := newTestStore(t)
+	g, _ := s.UpsertGroup("/tmp/test-active-hand")
+	s.CreateSession(g.ID, "ah-session")
+
+	hand, err := s.GetActiveHand("ah-session")
+	if err != nil {
+		t.Fatalf("GetActiveHand: %v", err)
+	}
+	if hand != "" {
+		t.Errorf("default active_hand should be empty, got %q", hand)
+	}
+
+	if err := s.SetActiveHand("ah-session", "hand-42"); err != nil {
+		t.Fatalf("SetActiveHand: %v", err)
+	}
+
+	hand, err = s.GetActiveHand("ah-session")
+	if err != nil {
+		t.Fatalf("GetActiveHand after set: %v", err)
+	}
+	if hand != "hand-42" {
+		t.Errorf("active_hand = %q, want hand-42", hand)
+	}
+}
+
+func TestSetActiveHandMissingSession(t *testing.T) {
+	s := newTestStore(t)
+
+	if err := s.SetActiveHand("missing-session", "hand-42"); err == nil {
+		t.Fatal("SetActiveHand should fail for missing session")
+	}
+}

@@ -91,6 +91,14 @@ func main() {
 	wsHub := hub.New()
 	core.SetHub(wsHub)
 
+	local.SetRemoteBridge(&local.RemoteBridge{
+		Hub:             wsHub,
+		ActiveHand:      core.ActiveHand,
+		SetActiveHand:   core.SetActiveHand,
+		PendingCall:     core.PendingCall,
+		CheckAndConfirm: core.CheckAndConfirm,
+	})
+
 	if cfg.Server.Enabled {
 		addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 		mux := http.NewServeMux()

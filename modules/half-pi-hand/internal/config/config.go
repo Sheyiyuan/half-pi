@@ -9,6 +9,11 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+const (
+	// DefaultServerURL 是 Mind Hub 的默认监听地址。
+	DefaultServerURL = "ws://127.0.0.1:15707/ws"
+)
+
 // Config Hand 运行时配置。
 type Config struct {
 	Server ServerConfig `toml:"server"`
@@ -21,9 +26,32 @@ type ServerConfig struct {
 	Token string `toml:"token"`
 }
 
-// HandConfig Hand 自身标识。
+// HandConfig Hand 自身标识和运行参数。
 type HandConfig struct {
-	ID string `toml:"id"`
+	ID         string           `toml:"id"`
+	WorkDir    string           `toml:"work_dir"`
+	Permission PermissionConfig `toml:"permission"`
+	Limits     LimitsConfig     `toml:"limits"`
+	Monitors   []MonitorConfig  `toml:"monitors"`
+}
+
+// PermissionConfig 工具权限白名单/黑名单。
+type PermissionConfig struct {
+	AllowTools []string `toml:"allow_tools"` // 白名单，空 = 全部允许
+	DenyTools  []string `toml:"deny_tools"`  // 黑名单，优先于 allow
+}
+
+// LimitsConfig 工具执行资源限制。
+type LimitsConfig struct {
+	MaxOutputSize int64 `toml:"max_output_size"` // 工具输出上限（字节），0 = 默认 1MB
+}
+
+// MonitorConfig 主动监控项配置。
+type MonitorConfig struct {
+	Name      string `toml:"name"`
+	Interval  int    `toml:"interval"`
+	Command   string `toml:"command"`
+	Condition string `toml:"condition"`
 }
 
 // DefaultPath 返回默认配置文件路径。
@@ -47,7 +75,11 @@ func Load(path string) (*Config, error) {
 	}
 
 	if cfg.Server.URL == "" {
-		cfg.Server.URL = "ws://localhost:8080/ws"
+		cfg.Server.URL = DefaultServerURL
+	}
+
+	if cfg.Hand.Limits.MaxOutputSize <= 0 {
+		cfg.Hand.Limits.MaxOutputSize = 1 << 20
 	}
 
 	return &cfg, nil
@@ -68,11 +100,25 @@ func WriteDefault(path string) error {
 
 	defaultCfg := `# half-pi Hand 配置文件
 [server]
-url = "ws://localhost:8080/ws"
+url = "ws://127.0.0.1:15707/ws"
 token = ""
 
 [hand]
 id = ""
+work_dir = ""
+
+[hand.permission]
+allow_tools = []
+deny_tools = []
+
+[hand.limits]
+max_output_size = 1048576
+
+# [[hand.monitors]]
+# name = "disk_high"
+# interval = 60
+# command = "df / | awk 'NR==2{print $5}' | tr -d '%'"
+# condition = "> 85"
 `
 	return os.WriteFile(path, []byte(defaultCfg), 0600)
 }

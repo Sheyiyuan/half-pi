@@ -104,53 +104,7 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 			delete(rawArgs, "confirm")
 			cleanArgs, _ := json.Marshal(rawArgs)
 
-			_, decision, reason, found := executor.CheckTool(tc.Name, cleanArgs)
-			shouldBlock := false
-			var blockReason string
-
-			if !found {
-				shouldBlock = true
-				blockReason = reason
-			} else {
-				switch decision {
-				case executor.DecisionDeny:
-					shouldBlock = true
-					blockReason = reason
-				case executor.DecisionConfirm:
-					blockReason = reason
-				}
-			}
-
-			needsConfirm := llmConfirm || blockReason != ""
-			if blockReason == "" && llmConfirm {
-				blockReason = "LLM 标记为需确认操作"
-			}
-
-			if needsConfirm {
-				if c.autoDeny[tc.Name] {
-					shouldBlock = true
-				} else if c.autoAllow[tc.Name] {
-					shouldBlock = false
-				} else if c.Mode == "strict" {
-					shouldBlock = true
-				} else if llmConfirm || c.Mode == "normal" {
-					if c.approver != nil {
-						r := c.approver.Confirm(tc.Name, blockReason)
-						switch r {
-						case ConfirmAllow:
-							shouldBlock = false
-						case ConfirmAllowAlways:
-							shouldBlock = false
-							c.autoAllow[tc.Name] = true
-						case ConfirmDenyAlways:
-							shouldBlock = true
-							c.autoDeny[tc.Name] = true
-						default:
-							shouldBlock = true
-						}
-					}
-				}
-			}
+			shouldBlock, blockReason := c.CheckAndConfirm(tc.Name, cleanArgs, llmConfirm)
 
 			var result *executor.ToolResult
 			if shouldBlock {

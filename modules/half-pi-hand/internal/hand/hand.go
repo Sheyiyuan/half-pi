@@ -3,7 +3,6 @@ package hand
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 
@@ -13,27 +12,47 @@ import (
 
 	// 注册通用工具
 	_ "github.com/Sheyiyuan/half-pi/modules/half-pi-core/tools"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-hand/internal/config"
 )
 
 // Hand 远程执行节点，通过 WebSocket 接收 Mind 的 RPC 请求。
 type Hand struct {
-	conn   *wss.SessionConn
-	runner *executor.Runner
+	conn          *wss.SessionConn
+	cfg           *config.Config
+	checkedRunner *executor.Runner // 走 Tool.Check / DefaultConfirm，Confirm 自动拒绝
+	trustedRunner *executor.Runner // Mind 已安检，跳过所有检查
 }
 
-// New 创建 Hand 实例。Confirm 为 nil，确认类操作自动拒绝。
-func New(conn *wss.SessionConn) *Hand {
+// New 创建 Hand 实例。
+func New(conn *wss.SessionConn, cfg *config.Config) *Hand {
 	return &Hand{
 		conn: conn,
-		runner: executor.NewRunner(executor.ExecutionPolicy{
+		cfg:  cfg,
+		checkedRunner: executor.NewRunner(executor.ExecutionPolicy{
 			Confirm:    nil,
 			SkipChecks: false,
+		}),
+		trustedRunner: executor.NewRunner(executor.ExecutionPolicy{
+			Confirm:    nil,
+			SkipChecks: true,
 		}),
 	}
 }
 
 // Serve 启动消息读取循环，阻塞直到连接断开或 ctx 取消。
 func (h *Hand) Serve(ctx context.Context) error {
+	h.startMonitors(ctx)
+
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			_ = h.conn.Conn.Close()
+		case <-done:
+		}
+	}()
+	defer close(done)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -43,12 +62,17 @@ func (h *Hand) Serve(ctx context.Context) error {
 
 		env, err := h.conn.Read()
 		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 			return fmt.Errorf("read: %w", err)
 		}
 
 		switch env.Type {
 		case protocol.TypeRPC:
-			h.handleRPC(env)
+			go h.handleRPC(ctx, env)
+		case protocol.TypeHandInfoReq:
+			go h.handleHandInfoReq(env)
 		case protocol.TypeError:
 			msg, _ := protocol.DecodePayload[protocol.ErrorMsg](&env)
 			fmt.Fprintf(os.Stderr, "server error [%s]: %s\n", msg.Code, msg.Message)
@@ -58,25 +82,18 @@ func (h *Hand) Serve(ctx context.Context) error {
 	}
 }
 
-// handleRPC 处理工具执行请求，执行后回送 RPCResult。
-func (h *Hand) handleRPC(env protocol.Envelope) {
-	rpc, err := protocol.DecodePayload[protocol.RPC](&env)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "decode rpc failed: %v\n", err)
-		return
+// maxOutputSize 返回输出截断上限。
+func (h *Hand) maxOutputSize() int64 {
+	if h.cfg == nil {
+		return 1 << 20
 	}
-
-	args, err := json.Marshal(rpc.Args)
-	if err != nil {
-		h.sendRPCReply(rpc.ID, env.MsgID, false, "", fmt.Sprintf("marshal args: %v", err))
-		return
+	size := h.cfg.Hand.Limits.MaxOutputSize
+	if size <= 0 {
+		return 1 << 20
 	}
-
-	result := h.runner.ExecuteTool(context.Background(), rpc.Tool, args)
-	h.sendRPCReply(rpc.ID, env.MsgID, result.Success, result.Output, result.Error)
+	return size
 }
 
-// sendRPCReply 发送 RPCResult 回执。
 func (h *Hand) sendRPCReply(rpcID, msgID string, success bool, output, errMsg string) {
 	reply := protocol.RPCResult{
 		ID:      rpcID,
@@ -92,4 +109,11 @@ func (h *Hand) sendRPCReply(rpcID, msgID string, success bool, output, errMsg st
 	if err := h.conn.Send(*env); err != nil {
 		fmt.Fprintf(os.Stderr, "send rpc result failed: %v\n", err)
 	}
+}
+
+func truncateBytes(s string, max int64) string {
+	if int64(len(s)) <= max {
+		return s
+	}
+	return s[:max] + "\n…(truncated)"
 }
