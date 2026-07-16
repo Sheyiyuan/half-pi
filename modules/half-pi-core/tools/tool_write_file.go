@@ -41,6 +41,11 @@ func init() {
 			return &executor.ToolResult{
 				Success: true,
 				Output:  fmt.Sprintf("已写入: %s (%d 字节)", p.Path, len(p.Content)),
+				Data: map[string]any{
+					"path":   p.Path,
+					"bytes":  len(p.Content),
+					"action": "created",
+				},
 			}
 		},
 	})

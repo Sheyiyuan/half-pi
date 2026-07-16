@@ -73,8 +73,70 @@ func editFileExecute(ctx context.Context, args json.RawMessage) *executor.ToolRe
 		return &executor.ToolResult{Error: fmt.Sprintf("failed to write: %v", err)}
 	}
 
+	diff := buildDiff(content, p.OldString, p.NewString)
+
 	return &executor.ToolResult{
 		Success: true,
-		Output:  fmt.Sprintf("已编辑: %s (+%d -%d)", p.Path, len(p.NewString), len(p.OldString)),
+		Output:  fmt.Sprintf("已编辑: %s (%d 处修改)", p.Path, 1),
+		Data: map[string]any{
+			"path":       p.Path,
+			"diff":       diff,
+			"old_string": p.OldString,
+			"new_string": p.NewString,
+		},
 	}
+}
+
+// buildDiff 为单次替换构造简略差异，格式类似 unified diff。
+// 替换位置前后各显示 2 行上下文。
+func buildDiff(content, oldStr, newStr string) string {
+	idx := strings.Index(content, oldStr)
+	if idx < 0 {
+		return ""
+	}
+	before := content[:idx]
+	after := content[idx+len(oldStr):]
+
+	oldLines := strings.Split(oldStr, "\n")
+	newLines := strings.Split(newStr, "\n")
+
+	// 计算 oldStr 起始行号（0-indexed）
+	lineNum := 0
+	for _, line := range strings.Split(before, "\n") {
+		if line == "" && lineNum > 0 {
+			// last newline before empty
+		}
+		lineNum++
+	}
+	lineNum-- // 转为 0-indexed
+
+	// 取上下文（前 2 行）
+	ctxBefore := strings.Split(before, "\n")
+	ctxStart := lineNum - 2
+	if ctxStart < 0 {
+		ctxStart = 0
+	}
+	ctxLines := ctxBefore[ctxStart:lineNum]
+
+	var buf strings.Builder
+	buf.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", ctxStart+1, len(ctxBefore)-ctxStart, ctxStart+1, len(ctxBefore)-ctxStart-len(oldLines)+len(newLines)))
+	for _, l := range ctxLines {
+		buf.WriteString(" " + l + "\n")
+	}
+	for _, l := range oldLines {
+		buf.WriteString("-" + l + "\n")
+	}
+	for _, l := range newLines {
+		buf.WriteString("+" + l + "\n")
+	}
+	// 后 2 行上下文
+	afterLines := strings.Split(after, "\n")
+	ctxEnd := 2
+	if ctxEnd > len(afterLines) {
+		ctxEnd = len(afterLines)
+	}
+	for _, l := range afterLines[:ctxEnd] {
+		buf.WriteString(" " + l + "\n")
+	}
+	return strings.TrimRight(buf.String(), "\n")
 }

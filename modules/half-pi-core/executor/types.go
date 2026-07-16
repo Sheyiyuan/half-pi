@@ -8,10 +8,11 @@ import (
 	"sync"
 )
 
-// ToolResult 是工具执行结果。
+// ToolResult 是工具执行结果。Output 是 LLM 可读的文本，Data 是供 Face 渲染的结构化数据。
 type ToolResult struct {
 	Success bool
 	Output  string
+	Data    any    // 结构化输出，用于 Face 渲染（JSON 序列化）
 	Error   string
 }
 
