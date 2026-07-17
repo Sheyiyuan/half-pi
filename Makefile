@@ -16,7 +16,7 @@ build:
 
 # ── Run modules ──
 run-mind:
-	go run ./modules/half-pi-mind/cmd/half-pi-mind/
+	go run ./modules/half-pi-mind/cmd/half-pi-mind/ --repl
 
 run-face:
 	go run ./modules/half-pi-face/cmd/half-pi-face/

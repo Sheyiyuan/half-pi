@@ -1,26 +1,36 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/repl"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/setup"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/skill"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 
 func main() {
+	var (
+		showVersion bool
+		replMode    bool
+	)
+	flag.BoolVar(&showVersion, "version", false, "打印版本号")
+	flag.BoolVar(&replMode, "repl", false, "交互式 REPL 模式")
+	flag.Parse()
+
+	if showVersion {
+		fmt.Println("half-pi-mind version dev")
+		return
+	}
+
 	env, err := setup.Init()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "init failed: %v\n", err)
@@ -33,25 +43,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	modelID := cfg.LLM.DefaultModel
-	if modelID == "" && len(cfg.LLM.Models) > 0 {
-		modelID = cfg.LLM.Models[0].ID
-	}
-	rm, err := cfg.ResolveModel(modelID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "model resolve error: %v\n", err)
-		os.Exit(1)
-	}
-
-	provider := llm.NewOpenAI(rm.Endpoint, rm.APIKey, rm.Name)
-	exec := local.New()
-
-	skillStore, err := skill.LoadFromDir(env.SkillsDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "skill load failed: %v\n", err)
-	}
-	local.SetSkillStore(skillStore)
-
 	db, err := store.New(env.DBPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "store init failed: %v\n", err)
@@ -59,44 +50,53 @@ func main() {
 	}
 	defer db.Close()
 
-	cwd, _ := os.Getwd()
-	group, err := db.UpsertGroup(cwd)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "group init failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	sessionID := uuid.Must(uuid.NewV7()).String()
-	if err := db.CreateSession(group.ID, sessionID); err != nil {
-		fmt.Fprintf(os.Stderr, "session create failed: %v\n", err)
-		os.Exit(1)
-	}
-
 	bus := events.NewEventBus()
 	defer bus.Close()
-	bus.Subscribe(events.NewConsoleWriter())
 
-	core, err := agentcore.New(provider, exec)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "core init failed: %v\n", err)
-		os.Exit(1)
-	}
-	core.Bus = bus
-	core.SetSkills(skillStore)
-	if err := core.SetStore(db, sessionID); err != nil {
-		fmt.Fprintf(os.Stderr, "session load failed: %v\n", err)
-		os.Exit(1)
+	if replMode {
+		bus.Subscribe(events.NewConsoleWriter())
+	} else {
+		logPath := filepath.Join(env.LogDir, "mind.log")
+		fw, err := events.NewFileWriter(logPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "log file open failed: %v\n", err)
+			bus.Subscribe(events.NewConsoleWriter())
+		} else {
+			bus.Subscribe(fw)
+		}
 	}
 
 	wsHub := hub.New()
-	core.SetHub(wsHub)
-
-	local.SetRemoteBridge(&local.RemoteBridge{
-		Hub:             wsHub,
-		ActiveHand:      core.ActiveHand,
-		SetActiveHand:   core.SetActiveHand,
-		PendingCall:     core.PendingCall,
-		CheckAndConfirm: core.CheckAndConfirm,
+	wsHub.OnHandshake(func(peer *hub.Peer, msg protocol.Envelope) error {
+		reg, err := protocol.DecodePayload[protocol.Register](&msg)
+		if err != nil {
+			return err
+		}
+		if reg.Token == "" {
+			return fmt.Errorf("token is required")
+		}
+		ht, err := db.ValidateHandToken(reg.Token)
+		if err != nil {
+			return fmt.Errorf("invalid token")
+		}
+		bus.Publish(events.New("", "hub", events.LevelInfo, events.TypeSystem,
+			fmt.Sprintf("[HUB] %s (%s) 已连接", peer.ID, ht.Label)))
+		return nil
+	})
+	wsHub.OnDisconnect(func(peer *hub.Peer) {
+		bus.Publish(events.New("", "hub", events.LevelInfo, events.TypeSystem,
+			fmt.Sprintf("[HUB] %s 已断开", peer.ID)))
+	})
+	wsHub.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
+		if msg.Type == protocol.TypeHandEvent {
+			evt, _ := protocol.DecodePayload[protocol.HandEvent](&msg)
+			level := events.LevelInfo
+			if evt.Status == "triggered" {
+				level = events.LevelWarn
+			}
+			bus.Publish(events.New("", peer.ID, level, events.TypeSystem,
+				fmt.Sprintf("[%s/%s] %s\n%s", peer.ID, evt.Name, evt.Status, evt.Output)))
+		}
 	})
 
 	if cfg.Server.Enabled {
@@ -118,5 +118,9 @@ func main() {
 		}()
 	}
 
-	repl.Run(core, bus, db, group.ID, cfg.Server.Enabled)
+	if replMode {
+		runREPL(env, cfg, db, bus, wsHub)
+	} else {
+		runService(env, bus)
+	}
 }

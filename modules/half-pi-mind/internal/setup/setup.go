@@ -67,6 +67,10 @@ enabled = true
 host = "127.0.0.1"
 port = 15707
 
+[storage]
+data_dir = ""
+log_dir = ""
+
 [llm]
 default_provider = "deepseek"
 default_model = "ds-v4-flash"
@@ -89,8 +93,11 @@ api_key = ""
 id = "ds-v4-flash"
 name = "deepseek-v4-flash"
 provider = "deepseek"
+capabilities = []
 max_tokens = 384000
 temperature = 0.3
+input_price_per_1k = 0.0
+output_price_per_1k = 0.0
 `
 	if err := os.WriteFile(path, []byte(defaultCfg), 0600); err != nil {
 		return fmt.Errorf("failed to write default config: %w", err)
