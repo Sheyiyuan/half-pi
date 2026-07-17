@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-hand/internal/config"
@@ -24,11 +25,9 @@ func main() {
 	id := flag.String("id", "", "Hand 唯一标识")
 	flag.Parse()
 
-	// 加载配置文件
 	path := *cfgPath
 	if path == "" {
 		path = config.DefaultPath()
-		// 首次运行写入默认配置
 		if err := config.WriteDefault(path); err != nil {
 			fmt.Fprintf(os.Stderr, "create config: %v\n", err)
 		}
@@ -40,7 +39,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// CLI flag 覆盖
 	if *server != "" {
 		cfg.Server.URL = *server
 	}
@@ -51,7 +49,6 @@ func main() {
 		cfg.Hand.ID = *id
 	}
 
-	// 默认值
 	if cfg.Hand.ID == "" {
 		hostname, err := os.Hostname()
 		if err != nil {
@@ -63,7 +60,6 @@ func main() {
 		cfg.Server.URL = config.DefaultServerURL
 	}
 
-	// 切换到配置的工作目录（必须在 CollectHandInfo 之前）
 	if cfg.Hand.WorkDir != "" {
 		if err := os.Chdir(cfg.Hand.WorkDir); err != nil {
 			fmt.Fprintf(os.Stderr, "切换工作目录失败: %v\n", err)
@@ -71,25 +67,56 @@ func main() {
 		}
 	}
 
-	// 收集 Hand 静态信息
 	info := hand.CollectHandInfo()
-
-	conn, err := wss.NewClient(cfg.Server.URL).ConnectAndRegister(cfg.Hand.ID, "hand", cfg.Server.Token, info)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "连接失败: %v\n", err)
-		os.Exit(1)
-	}
-	defer conn.Conn.Close()
-
-	fmt.Fprintf(os.Stderr, "Hand %s 已连接到 %s\n", cfg.Hand.ID, cfg.Server.URL)
-
-	h := hand.New(conn, cfg)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
 
-	if err := h.Serve(ctx); err != nil && !errors.Is(err, context.Canceled) {
-		fmt.Fprintf(os.Stderr, "Hand 退出: %v\n", err)
-		os.Exit(1)
+	backoff := 1 * time.Second
+	maxBackoff := time.Duration(cfg.Hand.Retry.MaxBackoff) * time.Second
+
+	for {
+		conn, err := wss.NewClient(cfg.Server.URL).ConnectAndRegister(cfg.Hand.ID, "hand", cfg.Server.Token, info)
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			fmt.Fprintf(os.Stderr, "连接失败: %v，%v 后重试\n", err, backoff)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
+				return
+			}
+			backoff = sleepBackoff(backoff, maxBackoff)
+			continue
+		}
+		fmt.Fprintf(os.Stderr, "Hand %s 已连接到 %s\n", cfg.Hand.ID, cfg.Server.URL)
+		backoff = 1 * time.Second
+
+		h := hand.New(conn, cfg)
+		err = h.Serve(ctx)
+		conn.Conn.Close()
+		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
+			return
+		}
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Hand 退出: %v，%v 后重连\n", err, backoff)
+		} else {
+			fmt.Fprintf(os.Stderr, "Hand 连接已断开，%v 后重连\n", backoff)
+		}
+		select {
+		case <-time.After(backoff):
+		case <-ctx.Done():
+			return
+		}
+		backoff = sleepBackoff(backoff, maxBackoff)
 	}
+}
+
+func sleepBackoff(current, max time.Duration) time.Duration {
+	next := current * 2
+	if next > max {
+		return max
+	}
+	return next
 }

@@ -26,6 +26,11 @@ type ServerConfig struct {
 	Token string `toml:"token"`
 }
 
+// RetryConfig 断线重连策略。
+type RetryConfig struct {
+	MaxBackoff int `toml:"max_backoff"` // 最大退避间隔（秒，默认 60）
+}
+
 // HandConfig Hand 自身标识和运行参数。
 type HandConfig struct {
 	ID         string           `toml:"id"`
@@ -33,6 +38,7 @@ type HandConfig struct {
 	Permission PermissionConfig `toml:"permission"`
 	Limits     LimitsConfig     `toml:"limits"`
 	Monitors   []MonitorConfig  `toml:"monitors"`
+	Retry      RetryConfig      `toml:"retry"`
 }
 
 // PermissionConfig 工具权限白名单/黑名单。
@@ -82,6 +88,10 @@ func Load(path string) (*Config, error) {
 		cfg.Hand.Limits.MaxOutputSize = 1 << 20
 	}
 
+	if cfg.Hand.Retry.MaxBackoff <= 0 {
+		cfg.Hand.Retry.MaxBackoff = 60
+	}
+
 	return &cfg, nil
 }
 
@@ -113,6 +123,9 @@ deny_tools = []
 
 [hand.limits]
 max_output_size = 1048576
+
+[hand.retry]
+max_backoff = 60
 
 # [[hand.monitors]]
 # name = "disk_high"
