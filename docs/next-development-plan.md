@@ -35,7 +35,13 @@
 - 每个阶段先冻结协议和验收测试，再接入下一层行为。
 - 不让进度流和后台任务阻塞首个 Face Alpha，但必须保留明确 backlog。
 
-## 主线：Face Alpha
+## 已完成：Face Wire Protocol
+
+2026-07-17 已完成 `gateway-core/protocol` 下的 `face.*` typed payload、scope、错误码、结果/审批/事件枚举、快照 DTO、结构化事件 DTO 和严格结构验证，并通过 gateway-core race 测试。未来单用户 Alpha 采用“有效 Face identity 可访问全部 conversation，写操作由 scope 控制”的访问模型。
+
+Face 独立 token、Mind peer dispatcher、Gateway、Conversation Actor、Chat runtime、异步审批、Headless/TUI/Web 客户端和进程级 E2E 均推迟到后续阶段。本阶段只保留正式协议和 [`ai-face-protocol.md`](ai-face-protocol.md) 接入文档，不落地 Face runtime。
+
+## 后续阶段：Face Alpha Runtime
 
 ### P0：协议与身份边界
 
@@ -149,9 +155,11 @@
 - Headless Face 与首个人类 Face 对同一 conversation 观察一致。
 - 全仓 `make test` 在 race 模式下通过。
 
-## 并行轨道：远程执行收尾
+P0 中 wire contract 已完成，其余 P0 以及 P1-P4 整体延期，不属于当前实施范围。
 
-这些任务不阻塞 P0-P2；涉及 Face 事件投影的部分应在 P1 接口冻结后实施。
+## 当前主线：远程执行收尾
+
+本阶段完成 R0-R3。涉及 Face 事件投影的部分只保持协议兼容，不实现 Face Gateway。
 
 ### R0：补齐闭环回归证据
 
@@ -162,7 +170,8 @@
 
 ### R1：Windows 原生验收
 
-- 在原生 Windows 运行 `modules/half-pi-core/tools/tool_exec_windows_test.go`。
+- 当前 Linux 阶段以 Windows 多架构交叉编译和可复用原生验收脚本为出口。
+- 原生 Windows 运行 `modules/half-pi-core/tools/tool_exec_windows_test.go` 继续作为发布环境验收项。
 - 验证父子孙进程退出、无关进程不受影响、预取消和正常后台进程语义。
 - 验收前继续声明“实现已交叉编译，未完成跨平台取消验收”。
 
@@ -175,18 +184,17 @@
 ### R3：后台任务
 
 - 单独设计 start/status/log/cancel 生命周期和 task ID 与 run ID 的关系。
-- 决定结果与日志保留策略后再实现，不复用同步 RPC 的临时内存结果作为长期存储。
+- 任务元数据和终态写入 SQLite，受限增量日志写入独立日志文件；数据库记录日志路径、大小和截断状态。
 - 后台任务恢复、重连和资源配额不与 R2 隐式捆绑。
 
 ## 推荐执行顺序
 
-1. P0：协议与身份边界。
-2. P1：Conversation Actor 与只读 Gateway。
-3. P2：Chat 生命周期。
-4. P3：异步审批与 run 同步。
-5. P4：Headless Face 与进程级 E2E。
-6. R0 可与 P0-P2 并行；R1 取决于原生 Windows 环境；R2/R3 在 Face Alpha 主链稳定后排期。
+1. R0：补齐闭环回归证据。
+2. R1：Windows 交叉编译和原生验收入口。
+3. R2：可选进度流。
+4. R3：SQLite 元数据加受限日志文件的后台任务。
+5. 后续单独启动 Face Alpha Runtime P0-P4。
 
 ## 完成判定
 
-Face Alpha 以 P0-P4 全部验收为准。`rpc_progress` 和后台任务不是 Face Alpha 门禁；原生 Windows 测试是宣称“跨平台完整取消”的门禁。任何阶段仅在对应 race 测试和文档能力声明与实际行为一致后标记完成。
+当前阶段以 R0-R3 的 Linux/race 测试和 Windows 交叉编译验收通过为准；不据此宣称原生 Windows 已验收。Face Alpha 仍以未来 P0-P4 runtime 全部验收为准。任何阶段仅在对应测试和文档能力声明与实际行为一致后标记完成。

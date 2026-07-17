@@ -240,7 +240,7 @@ REPL 命令：
 - [ ] 默认启用安全传输，并完成密钥管理方案。
 - [ ] 实现工作区级长期记忆和可控的跨组访问。
 
-Face 接入方案见 [`docs/face-protocol.md`](docs/face-protocol.md)，当前执行顺序见 [`docs/next-development-plan.md`](docs/next-development-plan.md)，其他设计与实现记录见 [`docs/`](docs/) 和 [`AGENTS.md`](AGENTS.md)。
+Face 接入方案见 [`docs/face-protocol.md`](docs/face-protocol.md)，AI/自动化客户端约定见 [`docs/ai-face-protocol.md`](docs/ai-face-protocol.md)，当前执行顺序见 [`docs/next-development-plan.md`](docs/next-development-plan.md)。
 
 ## 项目定位
 

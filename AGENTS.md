@@ -242,6 +242,7 @@ make test         # 运行全部 4 个模块的测试
 
 ##### 设计文档
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
+- `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（运行时待实现）
 - `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（核心已落地，保留进度流和后台任务设计）
 - `docs/remote-execution-implementation-plan.md` — 远程执行闭环实施与验收记录
 - `docs/next-development-plan.md` — 当前 Face Alpha 主线与远程执行收尾计划
@@ -344,7 +345,6 @@ make test         # 运行全部 4 个模块的测试
 
 ## 下一步
 
-1. **Face Alpha P0** — typed protocol、Face 独立身份/scope、Mind 级 peer dispatcher
-2. **Face Alpha P1-P2** — Conversation Actor、只读 Gateway、Chat 生命周期
-3. Mind → Hand 收尾 — 回归证据、Windows 原生验收、可选进度流与后台任务
-4. `/compact` 上下文压缩
+1. Mind → Hand 收尾 — 回归证据、Windows 交叉编译验收、进度流与后台任务
+2. **Face Alpha Runtime（后续）** — 独立鉴权、Gateway、Conversation Actor、Chat/审批和客户端
+3. `/compact` 上下文压缩

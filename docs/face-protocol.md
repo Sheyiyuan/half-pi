@@ -2,9 +2,9 @@
 
 ## 状态
 
-设计草案，面向基础 Alpha。本文定义 Web、TUI、IM Bot 和 Headless Agent Face 共用的正式协议，不包含具体 UI 设计。
+协议已冻结，运行时待实现。`gateway-core/protocol` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、稳定枚举和严格结构验证；Face 独立鉴权、Gateway、Session Actor、Chat/审批运行时和客户端按当前阶段决策暂缓。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。本文不包含具体 UI 设计。
 
-当前仓库已有 WebSocket Hub、`Envelope`、连接级防重放、会话持久化、远程执行状态机和 EventBus，但尚未实现正式 Face。
+当前仓库已有 WebSocket Hub、`Envelope`、连接级防重放、Face wire protocol、会话持久化、远程执行状态机和 EventBus，但尚未实现正式 Face runtime。
 
 ## 目标
 
