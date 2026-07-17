@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
@@ -18,16 +19,18 @@ type Repl struct {
 	bus     *events.EventBus
 	store   *store.Store
 	groupID string
+	hub     *hub.Hub
 	scanner *bufio.Scanner
 }
 
 // Run 启动交互式 REPL 循环。
-func Run(core *agentcore.Core, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool) {
+func Run(core *agentcore.Core, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub) {
 	r := &Repl{
 		core:    core,
 		bus:     bus,
 		store:   s,
 		groupID: groupID,
+		hub:     wsHub,
 		scanner: bufio.NewScanner(os.Stdin),
 	}
 	core.SetApprover(&approver{scanner: r.scanner})

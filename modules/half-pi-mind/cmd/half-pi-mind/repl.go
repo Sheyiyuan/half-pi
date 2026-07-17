@@ -6,12 +6,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/repl"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/setup"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/skill"
@@ -19,7 +19,7 @@ import (
 )
 
 // runREPL 初始化 Agent Core 并进入交互式 REPL。
-func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.EventBus, wsHub *hub.Hub) {
+func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.EventBus, authority *remoteexec.Authority) {
 	modelID := cfg.LLM.DefaultModel
 	if modelID == "" && len(cfg.LLM.Models) > 0 {
 		modelID = cfg.LLM.Models[0].ID
@@ -35,7 +35,10 @@ func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.Ev
 		fmt.Fprintf(os.Stderr, "adapter init failed: %v\n", err)
 		os.Exit(1)
 	}
-	exec := local.New()
+	bridge := &local.RemoteBridge{
+		Hub: authority.Hub, Runs: authority.Registry, PendingCall: authority.PendingCall,
+	}
+	exec := local.New(bridge)
 
 	skillStore, err := skill.LoadFromDir(env.SkillsDir)
 	if err != nil {
@@ -68,17 +71,11 @@ func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.Ev
 		os.Exit(1)
 	}
 
-	core.SetHub(wsHub)
+	bridge.ActiveHand = core.ActiveHand
+	bridge.SessionID = core.SessionID
+	bridge.Mode = core.SecurityMode
+	bridge.SetActiveHand = core.SetActiveHand
+	bridge.CheckAndConfirm = core.CheckAndConfirm
 
-	local.SetRemoteBridge(&local.RemoteBridge{
-		Hub:             wsHub,
-		Runs:            core.RemoteRuns(),
-		ActiveHand:      core.ActiveHand,
-		SessionID:       core.SessionID,
-		SetActiveHand:   core.SetActiveHand,
-		PendingCall:     core.PendingCall,
-		CheckAndConfirm: core.CheckAndConfirm,
-	})
-
-	repl.Run(core, bus, db, group.ID, cfg.Server.Enabled)
+	repl.Run(core, bus, db, group.ID, cfg.Server.Enabled, authority.Hub)
 }

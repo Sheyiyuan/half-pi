@@ -28,7 +28,12 @@ type Peer struct {
 }
 
 // SessionID 返回当前连接的会话 ID。
-func (p *Peer) SessionID() string { return p.session.SessionID }
+func (p *Peer) SessionID() string {
+	if p == nil || p.session == nil {
+		return ""
+	}
+	return p.session.SessionID
+}
 
 // WriteJSON 线程安全地写 JSON 到 WebSocket 连接，带写入超时。
 func (p *Peer) WriteJSON(v any) error {

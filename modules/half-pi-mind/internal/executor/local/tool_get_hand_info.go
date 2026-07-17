@@ -22,7 +22,8 @@ func init() {
 			},
 		},
 		Execute: func(ctx context.Context, args json.RawMessage) *executor.ToolResult {
-			if remoteBridge == nil {
+			bridge := remoteBridgeFromContext(ctx)
+			if bridge == nil {
 				return &executor.ToolResult{Error: "远程执行系统未初始化"}
 			}
 
@@ -34,9 +35,9 @@ func init() {
 			const queryTimeout = 10 * time.Second
 
 			if params.HandID != "" {
-				return queryOneHand(ctx, params.HandID, queryTimeout)
+				return queryOneHand(ctx, bridge, params.HandID, queryTimeout)
 			}
-			return queryAllHands(ctx, queryTimeout)
+			return queryAllHands(ctx, bridge, queryTimeout)
 		},
 	})
 }
@@ -49,13 +50,13 @@ type handInfoResult struct {
 	Tools   []string `json:"tools"`
 }
 
-func queryOneHand(ctx context.Context, handID string, timeout time.Duration) *executor.ToolResult {
-	peer := remoteBridge.Hub.Peer(handID)
+func queryOneHand(ctx context.Context, bridge *RemoteBridge, handID string, timeout time.Duration) *executor.ToolResult {
+	peer := bridge.Hub.Peer(handID)
 	if peer == nil || peer.Type != hub.PeerHand {
 		return &executor.ToolResult{Error: fmt.Sprintf("Hand %q 不在线或不存在", handID)}
 	}
 
-	result, ok := doHandInfoQuery(ctx, handID, timeout)
+	result, ok := doHandInfoQuery(ctx, bridge, handID, timeout)
 	if !ok {
 		return &executor.ToolResult{Error: fmt.Sprintf("获取 Hand %q 信息超时", handID)}
 	}
@@ -64,8 +65,8 @@ func queryOneHand(ctx context.Context, handID string, timeout time.Duration) *ex
 	return &executor.ToolResult{Success: true, Output: string(output)}
 }
 
-func queryAllHands(ctx context.Context, timeout time.Duration) *executor.ToolResult {
-	peers := remoteBridge.Hub.PeersByType(hub.PeerHand)
+func queryAllHands(ctx context.Context, bridge *RemoteBridge, timeout time.Duration) *executor.ToolResult {
+	peers := bridge.Hub.PeersByType(hub.PeerHand)
 	if len(peers) == 0 {
 		return &executor.ToolResult{Success: true, Output: `{"hands": []}`}
 	}
@@ -78,7 +79,7 @@ func queryAllHands(ctx context.Context, timeout time.Duration) *executor.ToolRes
 		wg.Add(1)
 		go func(handID string) {
 			defer wg.Done()
-			if info, ok := doHandInfoQuery(ctx, handID, timeout); ok {
+			if info, ok := doHandInfoQuery(ctx, bridge, handID, timeout); ok {
 				mu.Lock()
 				results = append(results, info)
 				mu.Unlock()
@@ -91,16 +92,16 @@ func queryAllHands(ctx context.Context, timeout time.Duration) *executor.ToolRes
 	return &executor.ToolResult{Success: true, Output: string(output)}
 }
 
-func doHandInfoQuery(ctx context.Context, handID string, timeout time.Duration) (handInfoResult, bool) {
+func doHandInfoQuery(ctx context.Context, bridge *RemoteBridge, handID string, timeout time.Duration) (handInfoResult, bool) {
 	reqID := protocol.MustNewMsgID()
-	ch, cancel := remoteBridge.PendingCall(reqID, 0, handID)
+	ch, cancel := bridge.PendingCall(reqID, 0, handID)
 	defer cancel()
 
 	req, err := protocol.NewEnvelope("", protocol.TypeHandInfoReq, protocol.HandInfoReq{ID: reqID})
 	if err != nil {
 		return handInfoResult{}, false
 	}
-	if err := remoteBridge.Hub.Send(handID, *req); err != nil {
+	if err := bridge.Hub.Send(handID, *req); err != nil {
 		return handInfoResult{}, false
 	}
 

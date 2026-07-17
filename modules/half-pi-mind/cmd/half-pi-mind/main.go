@@ -1,18 +1,20 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/gorilla/websocket"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
-	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/setup"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
@@ -49,6 +51,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+	if recovered, err := db.RecoverRemoteRuns(); err != nil {
+		fmt.Fprintf(os.Stderr, "remote run recovery failed: %v\n", err)
+		os.Exit(1)
+	} else if recovered > 0 {
+		fmt.Fprintf(os.Stderr, "recovered %d unfinished remote runs\n", recovered)
+	}
 
 	bus := events.NewEventBus()
 	defer bus.Close()
@@ -67,38 +75,15 @@ func main() {
 	}
 
 	wsHub := hub.New()
-	wsHub.OnHandshake(func(peer *hub.Peer, msg protocol.Envelope) error {
-		reg, err := protocol.DecodePayload[protocol.Register](&msg)
+	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus, func(token string) (string, error) {
+		ht, err := db.ValidateHandToken(token)
 		if err != nil {
-			return err
+			return "", fmt.Errorf("invalid token")
 		}
-		if reg.Token == "" {
-			return fmt.Errorf("token is required")
-		}
-		ht, err := db.ValidateHandToken(reg.Token)
-		if err != nil {
-			return fmt.Errorf("invalid token")
-		}
-		bus.Publish(events.New("", "hub", events.LevelInfo, events.TypeSystem,
-			fmt.Sprintf("[HUB] %s (%s) 已连接", peer.ID, ht.Label)))
-		return nil
-	})
-	wsHub.OnDisconnect(func(peer *hub.Peer) {
-		bus.Publish(events.New("", "hub", events.LevelInfo, events.TypeSystem,
-			fmt.Sprintf("[HUB] %s 已断开", peer.ID)))
-	})
-	wsHub.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
-		if msg.Type == protocol.TypeHandEvent {
-			evt, _ := protocol.DecodePayload[protocol.HandEvent](&msg)
-			level := events.LevelInfo
-			if evt.Status == "triggered" {
-				level = events.LevelWarn
-			}
-			bus.Publish(events.New("", peer.ID, level, events.TypeSystem,
-				fmt.Sprintf("[%s/%s] %s\n%s", peer.ID, evt.Name, evt.Status, evt.Output)))
-		}
+		return ht.Label, nil
 	})
 
+	var httpServer *http.Server
 	if cfg.Server.Enabled {
 		addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
 		mux := http.NewServeMux()
@@ -110,17 +95,26 @@ func main() {
 			}
 			wsHub.ServeWS(conn)
 		})
+		httpServer = &http.Server{Addr: addr, Handler: mux}
 		go func() {
 			fmt.Fprintf(os.Stderr, "WS Hub listening on %s/ws\n", addr)
-			if err := http.ListenAndServe(addr, mux); err != nil {
+			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 				fmt.Fprintf(os.Stderr, "hub server: %v\n", err)
 			}
 		}()
 	}
 
 	if replMode {
-		runREPL(env, cfg, db, bus, wsHub)
+		runREPL(env, cfg, db, bus, authority)
 	} else {
 		runService(env, bus)
+	}
+	if httpServer != nil {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = httpServer.Shutdown(shutdownCtx)
+		cancel()
+	}
+	if err := authority.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "remote execution shutdown: %v\n", err)
 	}
 }

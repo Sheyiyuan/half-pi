@@ -2,26 +2,14 @@ package agentcore
 
 import (
 	"encoding/json"
-	"time"
 
-	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
-
-// pendingCall 记录一个等待中的 Hand 响应及其预期来源。
-type pendingCall struct {
-	ch           chan protocol.Envelope
-	expectedPeer string
-}
 
 // ActiveHand 返回当前会话默认 Hand ID。
 func (c *Core) ActiveHand() string {
 	return c.activeHand
 }
-
-// RemoteRuns 返回 Mind 的远程执行生命周期注册表。
-func (c *Core) RemoteRuns() *remoteexec.Registry { return c.remoteRuns }
 
 // SetActiveHand 设置当前会话默认 Hand，同时持久化到 DB。
 func (c *Core) SetActiveHand(handID string) error {
@@ -32,31 +20,6 @@ func (c *Core) SetActiveHand(handID string) error {
 	}
 	c.activeHand = handID
 	return nil
-}
-
-// PendingCall 注册等待 Hand 响应的通道。返回只读通道和取消函数。
-// expectedPeer 用于校验响应来源，不匹配时拒绝投递。
-func (c *Core) PendingCall(id string, timeout time.Duration, expectedPeer string) (<-chan protocol.Envelope, func()) {
-	ch := make(chan protocol.Envelope, 2)
-	pc := &pendingCall{ch: ch, expectedPeer: expectedPeer}
-	c.pendingMu.Lock()
-	c.pendingCalls[id] = pc
-	c.pendingMu.Unlock()
-
-	cancel := func() {
-		c.pendingMu.Lock()
-		delete(c.pendingCalls, id)
-		c.pendingMu.Unlock()
-	}
-
-	if timeout > 0 {
-		go func() {
-			<-time.After(timeout)
-			cancel()
-		}()
-	}
-
-	return ch, cancel
 }
 
 // CheckAndConfirm 执行工具安全检查并按需请求用户确认。

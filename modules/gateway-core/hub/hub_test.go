@@ -68,6 +68,44 @@ func TestPeerWriterAcquisitionHonorsCancelledContext(t *testing.T) {
 	}
 }
 
+func TestHubCloseClosesPendingHandshake(t *testing.T) {
+	h := New()
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		close(started)
+		_ = h.ServeWS(conn)
+	}))
+	defer srv.Close()
+	conn, _, err := websocket.DefaultDialer.Dial(strings.Replace(srv.URL, "http", "ws", 1), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	<-started
+	h.Close()
+	conn.SetReadDeadline(time.Now().Add(time.Second))
+	if _, _, err := conn.ReadMessage(); err == nil {
+		t.Fatal("pending handshake connection remained open after Hub.Close")
+	}
+}
+
+func TestClosedHubRejectsNewRegistration(t *testing.T) {
+	srv, dial := newTestServer(t)
+	defer srv.Close()
+	conn := dial(strings.Replace(srv.URL, "http", "ws", 1))
+	defer conn.Close()
+	h := New()
+	h.Close()
+	if _, err := h.Register(newRegisterMsg("late-hand", "hand"), conn); err == nil {
+		t.Fatal("closed Hub accepted a new registration")
+	}
+}
+
 func TestHubRegisterAndRemove(t *testing.T) {
 	srv, dial := newTestServer(t)
 	defer srv.Close()
@@ -219,7 +257,10 @@ func TestHubDuplicatePeer(t *testing.T) {
 	disconnected := make(chan *Peer, 1)
 	h.OnDisconnect(func(peer *Peer) { disconnected <- peer })
 	reg := newRegisterMsg("dup-hand", "hand")
-	h.Register(reg, conn1)
+	oldPeer, err := h.Register(reg, conn1)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Second register with same ID should replace old
 	peer, err := h.Register(reg, conn2)
@@ -231,6 +272,9 @@ func TestHubDuplicatePeer(t *testing.T) {
 	}
 	if peer.Conn != conn2 {
 		t.Error("duplicate should use new connection")
+	}
+	if err := h.SendPeerContext(context.Background(), oldPeer, protocol.Envelope{Type: protocol.TypePing}); err == nil {
+		t.Fatal("send to replaced peer should fail")
 	}
 	select {
 	case old := <-disconnected:

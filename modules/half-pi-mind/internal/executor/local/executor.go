@@ -11,12 +11,18 @@ import (
 
 type LocalExecutor struct {
 	runner *executor.Runner
+	bridge *RemoteBridge
 }
 
 // New 创建本地工具执行器。
-func New() *LocalExecutor {
+func New(bridge ...*RemoteBridge) *LocalExecutor {
+	var remote *RemoteBridge
+	if len(bridge) > 0 {
+		remote = bridge[0]
+	}
 	return &LocalExecutor{
 		runner: executor.NewRunner(executor.ExecutionPolicy{SkipChecks: true}),
+		bridge: remote,
 	}
 }
 
@@ -27,5 +33,8 @@ func (e *LocalExecutor) Tools() []executor.Tool {
 
 // ExecuteTool 执行本地工具。
 func (e *LocalExecutor) ExecuteTool(ctx context.Context, name string, args json.RawMessage) *executor.ToolResult {
+	if e.bridge != nil {
+		ctx = WithRemoteBridge(ctx, e.bridge)
+	}
 	return e.runner.ExecuteTool(ctx, name, args)
 }

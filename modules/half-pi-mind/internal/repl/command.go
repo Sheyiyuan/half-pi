@@ -194,11 +194,11 @@ func (r *Repl) handleHandRemove(idStr string) {
 }
 
 func (r *Repl) handlePeers() {
-	if r.core.Hub == nil {
+	if r.hub == nil {
 		fmt.Println("hub not running")
 		return
 	}
-	peers := r.core.Hub.Peers()
+	peers := r.hub.Peers()
 	if len(peers) == 0 {
 		fmt.Println("No connected peers.")
 		return

@@ -19,7 +19,8 @@ func init() {
 			},
 		},
 		Execute: func(ctx context.Context, args json.RawMessage) *executor.ToolResult {
-			if remoteBridge == nil {
+			bridge := remoteBridgeFromContext(ctx)
+			if bridge == nil {
 				return &executor.ToolResult{Error: "远程执行系统未初始化"}
 			}
 
@@ -30,7 +31,7 @@ func init() {
 
 			if params.HandID == "" {
 				// 查询当前
-				current := remoteBridge.ActiveHand()
+				current := bridge.ActiveHand()
 				msg := fmt.Sprintf("当前未设置默认 Hand。可用 list_hands 查看在线设备。")
 				if current != "" {
 					msg = fmt.Sprintf("当前默认 Hand: %s", current)
@@ -42,14 +43,14 @@ func init() {
 			}
 
 			// 校验在线
-			peer := remoteBridge.Hub.Peer(params.HandID)
+			peer := bridge.Hub.Peer(params.HandID)
 			if peer == nil || peer.Type != hub.PeerHand {
 				return &executor.ToolResult{
 					Error: fmt.Sprintf("Hand %q 不在线或不存在，用 list_hands 查看可用设备", params.HandID),
 				}
 			}
 
-			if err := remoteBridge.SetActiveHand(params.HandID); err != nil {
+			if err := bridge.SetActiveHand(params.HandID); err != nil {
 				return &executor.ToolResult{Error: fmt.Sprintf("设置默认 Hand 失败: %v", err)}
 			}
 

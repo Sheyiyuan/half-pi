@@ -29,10 +29,11 @@ const (
 	// DefaultHubID 是 Mind Hub 的默认节点 ID。
 	DefaultHubID = "mind"
 
-	writeTimeout = 10 * time.Second
-	readTimeout  = 60 * time.Second
-	pingInterval = 30 * time.Second
-	pongTimeout  = 10 * time.Second
+	writeTimeout     = 10 * time.Second
+	readTimeout      = 60 * time.Second
+	pingInterval     = 30 * time.Second
+	pongTimeout      = 10 * time.Second
+	handshakeTimeout = 10 * time.Second
 )
 
 // Hub 管理所有 WebSocket 节点和消息投递。
@@ -40,6 +41,8 @@ type Hub struct {
 	ID           string
 	mu           sync.RWMutex
 	peers        map[string]*Peer
+	pendingConns map[*websocket.Conn]struct{}
+	closed       bool
 	handshakeFn  func(peer *Peer, env protocol.Envelope) error
 	onMessage    func(peer *Peer, env protocol.Envelope)
 	disconnectFn func(peer *Peer)
@@ -48,8 +51,9 @@ type Hub struct {
 // New 创建一个新的 Hub。
 func New() *Hub {
 	return &Hub{
-		ID:    DefaultHubID,
-		peers: make(map[string]*Peer),
+		ID:           DefaultHubID,
+		peers:        make(map[string]*Peer),
+		pendingConns: make(map[*websocket.Conn]struct{}),
 	}
 }
 
@@ -70,6 +74,20 @@ func (h *Hub) OnDisconnect(fn func(peer *Peer)) {
 
 // ServeWS 接受 WebSocket 连接并启动 Peer 的读循环。
 func (h *Hub) ServeWS(conn *websocket.Conn) error {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		_ = conn.Close()
+		return fmt.Errorf("hub is closed")
+	}
+	h.pendingConns[conn] = struct{}{}
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		delete(h.pendingConns, conn)
+		h.mu.Unlock()
+	}()
+	conn.SetReadDeadline(time.Now().Add(handshakeTimeout))
 	_, raw, err := conn.ReadMessage()
 	if err != nil {
 		conn.Close()
@@ -89,6 +107,7 @@ func (h *Hub) ServeWS(conn *websocket.Conn) error {
 		conn.Close()
 		return err
 	}
+	conn.SetReadDeadline(time.Time{})
 
 	registered, err := protocol.NewEnvelope("", protocol.TypeRegistered, protocol.Registered{
 		ClientID:  peer.ID,
@@ -162,6 +181,11 @@ func (h *Hub) Register(raw []byte, conn *websocket.Conn) (*Peer, error) {
 	}
 
 	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		peer.Close()
+		return nil, fmt.Errorf("hub is closed")
+	}
 	old, exists := h.peers[peer.ID]
 	h.peers[peer.ID] = peer
 	h.mu.Unlock()
@@ -221,6 +245,22 @@ func (h *Hub) SendContext(ctx context.Context, peerID string, env protocol.Envel
 		return fmt.Errorf("peer %q not found", peerID)
 	}
 	return peer.SendContext(ctx, env)
+}
+
+// SendPeerContext 仅当 target 仍是当前连接时发送，避免重连切换执行目标。
+func (h *Hub) SendPeerContext(ctx context.Context, target *Peer, env protocol.Envelope) error {
+	if target == nil {
+		return fmt.Errorf("target peer is nil")
+	}
+	h.mu.RLock()
+	current, ok := h.peers[target.ID]
+	if !ok || current != target {
+		h.mu.RUnlock()
+		return fmt.Errorf("peer %q connection changed", target.ID)
+	}
+	err := target.SendContext(ctx, env)
+	h.mu.RUnlock()
+	return err
 }
 
 // Broadcast 向除排除节点外的所有节点广播消息。
@@ -303,6 +343,31 @@ func (h *Hub) PeersByType(pt PeerType) []*Peer {
 		}
 	}
 	return result
+}
+
+// Close 关闭并移除所有在线 Peer。
+func (h *Hub) Close() {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		return
+	}
+	h.closed = true
+	peers := make([]*Peer, 0, len(h.peers))
+	for _, peer := range h.peers {
+		peers = append(peers, peer)
+	}
+	pending := make([]*websocket.Conn, 0, len(h.pendingConns))
+	for conn := range h.pendingConns {
+		pending = append(pending, conn)
+	}
+	h.mu.Unlock()
+	for _, conn := range pending {
+		_ = conn.Close()
+	}
+	for _, peer := range peers {
+		h.RemovePeer(peer)
+	}
 }
 
 func newSessionID() (string, error) {

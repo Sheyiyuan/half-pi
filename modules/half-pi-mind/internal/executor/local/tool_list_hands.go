@@ -14,7 +14,8 @@ func init() {
 		Description: "列出所有在线 Hand 设备及其静态信息（OS/主机名/工作目录）。无需 RPC 查询，瞬时返回。",
 		Parameters:  &executor.ObjectSchema{},
 		Execute: func(ctx context.Context, args json.RawMessage) *executor.ToolResult {
-			if remoteBridge == nil {
+			bridge := remoteBridgeFromContext(ctx)
+			if bridge == nil {
 				return &executor.ToolResult{Error: "远程执行系统未初始化"}
 			}
 
@@ -25,7 +26,7 @@ func init() {
 				WorkDir  string `json:"work_dir"`
 			}
 
-			peers := remoteBridge.Hub.PeersByType(hub.PeerHand)
+			peers := bridge.Hub.PeersByType(hub.PeerHand)
 			hands := make([]handEntry, 0, len(peers))
 			for _, p := range peers {
 				entry := handEntry{ID: p.ID}

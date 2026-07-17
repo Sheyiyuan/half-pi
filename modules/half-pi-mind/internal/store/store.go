@@ -38,6 +38,9 @@ func (s *Store) migrate() error {
 	if _, err := s.db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		return fmt.Errorf("enable WAL: %w", err)
 	}
+	if _, err := s.db.Exec("PRAGMA foreign_keys=ON"); err != nil {
+		return fmt.Errorf("enable foreign keys: %w", err)
+	}
 
 	statements := []string{
 		`CREATE TABLE IF NOT EXISTS session_groups (
@@ -75,6 +78,40 @@ func (s *Store) migrate() error {
 			token      TEXT NOT NULL UNIQUE,
 			created_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
+		`CREATE TABLE IF NOT EXISTS remote_runs (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL DEFAULT '',
+			hand_id TEXT NOT NULL,
+			tool TEXT NOT NULL,
+			args_digest TEXT NOT NULL DEFAULT '',
+			approval_source TEXT NOT NULL DEFAULT '',
+			approval_mode TEXT NOT NULL DEFAULT '',
+			approval_reason TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			reject_code TEXT NOT NULL DEFAULT '',
+			error TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			sent_at INTEGER NOT NULL DEFAULT 0,
+			accepted_at INTEGER NOT NULL DEFAULT 0,
+			finished_at INTEGER NOT NULL DEFAULT 0,
+			duration_ms INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE TABLE IF NOT EXISTS remote_run_events (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			run_id TEXT NOT NULL,
+			seq INTEGER NOT NULL,
+			from_status TEXT NOT NULL DEFAULT '',
+			to_status TEXT NOT NULL,
+			type TEXT NOT NULL,
+			message TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			UNIQUE(run_id, seq),
+			FOREIGN KEY (run_id) REFERENCES remote_runs(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_remote_runs_session ON remote_runs(session_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_remote_runs_hand ON remote_runs(hand_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_remote_runs_status ON remote_runs(status)`,
+		`CREATE INDEX IF NOT EXISTS idx_remote_run_events_run ON remote_run_events(run_id, seq)`,
 	}
 	for _, stmt := range statements {
 		if _, err := s.db.Exec(stmt); err != nil {
