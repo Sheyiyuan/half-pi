@@ -1,4 +1,4 @@
-// Hub WebSocket 节点管理器，负责连接注册、消息路由和防重放校验。
+// Package hub 管理 Mind WebSocket Hub，负责节点注册、消息路由和防重放校验。
 package hub
 
 import (
@@ -18,10 +18,14 @@ import (
 type PeerType = string
 
 const (
-	PeerFace    PeerType = "face"
-	PeerHand    PeerType = "hand"
+	// PeerFace 表示用户交互节点。
+	PeerFace PeerType = "face"
+	// PeerHand 表示远程执行节点。
+	PeerHand PeerType = "hand"
+	// PeerUnknown 表示未识别或未注册节点。
 	PeerUnknown PeerType = ""
 
+	// DefaultHubID 是 Mind Hub 的默认节点 ID。
 	DefaultHubID = "mind"
 
 	writeTimeout = 10 * time.Second

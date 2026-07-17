@@ -41,7 +41,7 @@ type ToolCall struct {
 
 // LLMRequest 是内部请求格式。
 type LLMRequest struct {
-	System      string     // soul.md 内容（拼成 system prompt）
+	System      string // soul.md 内容（拼成 system prompt）
 	Messages    []Message
 	Tools       []ToolDef
 	Temperature float32

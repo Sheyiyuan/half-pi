@@ -1,3 +1,4 @@
+// Package repl 实现 Mind 的交互式命令行界面。
 package repl
 
 import (
@@ -20,6 +21,7 @@ type Repl struct {
 	scanner *bufio.Scanner
 }
 
+// Run 启动交互式 REPL 循环。
 func Run(core *agentcore.Core, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool) {
 	r := &Repl{
 		core:    core,

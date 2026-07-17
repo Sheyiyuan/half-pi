@@ -35,15 +35,15 @@ const (
 // ── 事件类型 ──
 
 const (
-	TypeSystem     = "system"
-	TypeUserInput  = "user_input"
-	TypeLLMRequest = "llm_request"
+	TypeSystem      = "system"
+	TypeUserInput   = "user_input"
+	TypeLLMRequest  = "llm_request"
 	TypeLLMResponse = "llm_response"
-	TypeToolCall   = "tool_call"
-	TypeToolResult = "tool_result"
-	TypeToolBlock  = "tool_blocked"
-	TypeSecurity   = "security"
-	TypeModeChange = "mode_change"
+	TypeToolCall    = "tool_call"
+	TypeToolResult  = "tool_result"
+	TypeToolBlock   = "tool_blocked"
+	TypeSecurity    = "security"
+	TypeModeChange  = "mode_change"
 )
 
 // New 创建一条事件。会话 ID 和来源由调用方传入，其余字段自动填充。

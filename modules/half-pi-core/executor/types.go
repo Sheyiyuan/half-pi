@@ -12,7 +12,7 @@ import (
 type ToolResult struct {
 	Success bool
 	Output  string
-	Data    any    // 结构化输出，用于 Face 渲染（JSON 序列化）
+	Data    any // 结构化输出，用于 Face 渲染（JSON 序列化）
 	Error   string
 }
 
