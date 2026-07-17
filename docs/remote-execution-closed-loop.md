@@ -317,7 +317,7 @@ handleCancel(runID)
   5. 返回 rpc_cancel_result
 ```
 
-Unix `exec_command` 已能在 context 取消时杀进程组。Windows 进程树取消策略需要单独补齐。
+Unix `exec_command` 在 context 取消时终止进程组。Windows 实现使用 kill-on-close Job Object：命令先挂起启动，加入独立 job 后恢复，取消时终止 job 内完整进程树；正常完成时解除 kill-on-close，避免误杀有意启动的后台进程。该实现已通过多架构交叉编译，仍需原生 Windows 集成测试后才能宣称跨平台完整取消。
 
 ## 并发状态模型
 

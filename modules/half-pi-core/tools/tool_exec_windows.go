@@ -107,12 +107,12 @@ func executeWithShell(shell string, shellArgs ...string) func(ctx context.Contex
 		cmdCtx, cancel := context.WithTimeout(ctx, dur)
 		defer cancel()
 
-		cmd := exec.CommandContext(cmdCtx, shell, append(shellArgs, p.Command)...)
+		cmd := exec.Command(shell, append(shellArgs, p.Command)...)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 
-		if err := cmd.Run(); err != nil {
+		if err := runCommand(cmdCtx, cmd); err != nil {
 			msg := fmt.Sprintf("执行失败: %v", err)
 			if stderr.Len() > 0 {
 				msg += "\n" + strings.TrimSpace(stderr.String())
@@ -130,5 +130,35 @@ func executeWithShell(shell string, shellArgs ...string) func(ctx context.Contex
 			}
 		}
 		return &executor.ToolResult{Success: true, Output: output}
+	}
+}
+
+func runCommand(ctx context.Context, cmd *exec.Cmd) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	job, err := startCommandInJob(cmd)
+	if err != nil {
+		return err
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		if releaseErr := job.Release(); err == nil && releaseErr != nil {
+			return releaseErr
+		}
+		return err
+	case <-ctx.Done():
+		if err := job.Terminate(); err != nil && cmd.Process != nil {
+			_ = cmd.Process.Kill()
+		}
+		<-done
+		_ = job.Close()
+		return ctx.Err()
 	}
 }

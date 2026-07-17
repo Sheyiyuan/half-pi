@@ -2,7 +2,9 @@
 
 ## 文档状态
 
-实施中。Phase 0 至 Phase 4（T0-T9）已于 2026-07-17 完成并通过全仓 race 测试；Phase 5 为可选增强。
+实施中。Phase 0 至 Phase 4（T0-T9）已于 2026-07-17 完成并通过全仓 race 测试及总 review；Phase 5 为可选增强。T10 已使用 Windows Job Object 完成实现并通过 Windows 386/amd64/arm/arm64 交叉编译，仍需在原生 Windows 环境运行进程树取消测试后验收。
+
+Phase 4 review 已确认：每个已加载 session 保留独立 actor；远端专属或跨平台工具必须经 Mind 一次性确认，并继续由 Hand 执行本地最终守门；审计写入失败时 run 在内存中 fail-closed，取消请求仍会发往 Hand，避免无主执行。
 
 本文承接以下文档：
 
@@ -442,8 +444,13 @@ T4。
 
 **交付物**
 
-- Windows 进程树取消实现。
-- Windows 单元或集成测试。
+- Windows Job Object 进程树取消实现（挂起启动、加入 job、恢复执行、取消时终止整个 job）。
+- Windows 集成测试（父进程、子孙进程、无关进程、预取消和正常后台进程语义）。
+
+**当前状态**
+
+- 代码、vet 和 Windows 386/amd64/arm/arm64 测试二进制交叉编译已通过。
+- 原生 Windows 集成测试尚未执行，因此 T10 尚未完成最终验收，也不宣称跨平台完整取消。
 
 **验收标准**
 

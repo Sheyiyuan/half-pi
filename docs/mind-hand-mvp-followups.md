@@ -1,5 +1,7 @@
 # Mind + Hand MVP 后续重点 TODO
 
+> 文档状态：历史设计债清单。审批闭环、显式取消、审计持久化和会话并发边界已由 `docs/remote-execution-implementation-plan.md` 的 Phase 0 至 Phase 4 完成；当前未验收项以该实施计划的 Phase 5 为准。
+
 ## 背景
 
 当前 Mind + Hand 已完成 MVP：Mind 能启动 Hub，Hand 能注册，LLM 能通过 `list_hands` / `get_hand_info` / `select_hand` / `use_hand` 完成远程工具调用，RPC 支持 `timeout_ms`，Hand 侧具备基础权限过滤、输出截断和监控事件上报。
@@ -38,7 +40,7 @@ TODO：
 - `use_hand` 在本地 context 取消或等待超时时向 Hand 发送 cancel。
 - Hand 为正在执行的 RPC 维护任务表：`rpcID -> cancel func / started_at / tool / status`。
 - 定义取消结果：已取消、已完成、未知 RPC、取消失败。
-- 补充 Windows 进程树取消策略。
+- Windows 已使用 Job Object 实现进程树取消并通过多架构交叉编译；待原生 Windows 集成测试验收。
 
 验收标准：
 - Mind 主动取消后，Hand 能尽快停止对应 RPC。
