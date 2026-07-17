@@ -232,17 +232,21 @@ make test         # 运行全部 4 个模块的测试
 - 连接/断开事件通过 EventBus 发布到日志/终端
 - `server.enabled` 配置开关
 
-##### Mind → Hand 工具执行路由（MVP）
+##### Mind → Hand 远程执行闭环
 - LLM 可通过 `list_hands` / `get_hand_info` 感知在线 Hand
 - `select_hand` 将默认 Hand 持久化到 `sessions.active_hand`
-- `use_hand` 以普通 Tool 形式阻塞等待远程 `RPCResult`，不改 Chat 主循环
-- Mind 本地已知工具经 Mind 安检/审批后可让 Hand 跳过重复检查；远端专属工具保留 Hand 侧检查
-- pending call 校验响应来源，避免其他 Hand 伪造同 ID 结果
+- `use_hand` 以普通 Tool 形式等待 `RemoteRun` 终态，不改 Chat 主循环
+- RPC 使用一次性 Approval 摘要绑定 run、Hand、工具和参数，Hand 始终保留本地最终守门
+- 服务级 `remoteexec.Authority` 统一路由 accepted/rejected/result/cancel，registry 校验 Hand 和连接来源
+- `remote_runs` / `remote_run_events` 持久化状态迁移，原始参数不进入审计表
 
 ##### 设计文档
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
-- `docs/remote-execution.md` — Mind → Hand 远程执行设计（协议扩展、四个 LLM 工具、数据流）
-- `docs/mind-hand-mvp-followups.md` — Mind+Hand MVP 后续重点 TODO
+- `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（核心已落地，保留进度流和后台任务设计）
+- `docs/remote-execution-implementation-plan.md` — 远程执行闭环实施与验收记录
+- `docs/next-development-plan.md` — 当前 Face Alpha 主线与远程执行收尾计划
+- `docs/archived/remote-execution.md` — 已归档的 Mind → Hand MVP 设计
+- `docs/archived/mind-hand-mvp-followups.md` — 已归档的 MVP 设计债清单
 - `docs/archived/architecture.md` — 完整系统架构设计（三层模型、术语定义、通信协议、安全审计）
 - `docs/archived/mind-service-mode.md` — Mind 服务模式设计（默认后台，`--repl` 选交互）
 - `docs/archived/provider-adapter.md` — LLM 适配器模式设计（内部格式、各厂商适配器细节）
@@ -253,7 +257,7 @@ make test         # 运行全部 4 个模块的测试
 - [ ] **Face** 远程交互终端（TUI / IM Bot）——占位 stub 已创建（`modules/half-pi-face/`，仅打印一行字），go.work 已注册，可编译
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
-- [ ] Mind → Hand 远程执行闭环 — 审批语义、取消协议、并发状态模型见 `docs/mind-hand-mvp-followups.md`
+- [ ] Mind → Hand 增强项 — Windows 原生验收、进度流和后台任务见 `docs/next-development-plan.md`
 
 ---
 
@@ -340,6 +344,7 @@ make test         # 运行全部 4 个模块的测试
 
 ## 下一步
 
-1. **Face** — 远程交互终端（TUI / IM Bot）
-2. Mind → Hand 远程执行闭环（审批语义、取消协议、并发状态）
-3. `/compact` 上下文压缩
+1. **Face Alpha P0** — typed protocol、Face 独立身份/scope、Mind 级 peer dispatcher
+2. **Face Alpha P1-P2** — Conversation Actor、只读 Gateway、Chat 生命周期
+3. Mind → Hand 收尾 — 回归证据、Windows 原生验收、可选进度流与后台任务
+4. `/compact` 上下文压缩

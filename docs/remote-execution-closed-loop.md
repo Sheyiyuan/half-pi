@@ -2,17 +2,17 @@
 
 ## 状态
 
-设计草案。本文承接 `remote-execution.md` 的 MVP 设计，目标是把当前“一轮 RPC → 一次 RPCResult”的远程调用升级为可审批、可追踪、可取消、可审计的执行生命周期。
+部分落地。本文承接 [`archived/remote-execution.md`](archived/remote-execution.md) 的 MVP 设计。审批证明、accepted/rejected、显式取消、唯一终态、服务级 Authority、SQLite 审计和会话隔离已经实现；`rpc_progress` 与后台任务生命周期仍未实现，Windows 进程树取消仍待原生环境验收。工程状态和后续安排分别以 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md) 和 [`next-development-plan.md`](next-development-plan.md) 为准。
 
 ## 背景
 
-当前 MVP 已经能完成 Mind 调度 Hand 执行工具：
+最初 MVP 已经能完成 Mind 调度 Hand 执行工具：
 
 ```text
 use_hand → Hub.Send(RPC) → Hand 执行 → RPCResult → use_hand 返回
 ```
 
-这个链路能跑通 demo，但它还不是完整闭环：
+当时这个链路能跑通 demo，但还不是完整闭环。以下缺口除进度流和后台任务外现已落地：
 
 - Mind 只知道是否等到了最终结果，不知道 Hand 是否接收、何时开始、为何拒绝。
 - Mind 超时后没有显式取消协议，Hand 只能依赖 RPC 自带 timeout。

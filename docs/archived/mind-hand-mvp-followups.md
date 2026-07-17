@@ -1,6 +1,6 @@
-# Mind + Hand MVP 后续重点 TODO
+# Mind + Hand MVP 后续重点 TODO（已归档）
 
-> 文档状态：历史设计债清单。审批闭环、显式取消、审计持久化和会话并发边界已由 `docs/remote-execution-implementation-plan.md` 的 Phase 0 至 Phase 4 完成；当前未验收项以该实施计划的 Phase 5 为准。
+> 文档状态：已归档的历史设计债清单。审批闭环、显式取消、审计持久化和会话并发边界已由 [`../remote-execution-implementation-plan.md`](../remote-execution-implementation-plan.md) 的 Phase 0 至 Phase 4 完成；进度流、后台任务和 Windows 原生验收已转入 [`../next-development-plan.md`](../next-development-plan.md)。
 
 ## 背景
 
@@ -8,7 +8,7 @@
 
 当前协议足够支撑一版 demo，但还不是长期稳定协议。本文件记录 demo 后优先收敛的设计债。
 
-远程执行闭环的集中方案见 `docs/remote-execution-closed-loop.md`。
+远程执行闭环的集中方案见 [`../remote-execution-closed-loop.md`](../remote-execution-closed-loop.md)。
 
 ## 1. 审批语义与 Hand 最终守门
 
