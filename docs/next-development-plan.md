@@ -171,6 +171,7 @@ P0 中 wire contract 已完成，其余 P0 以及 P1-P4 整体延期，不属于
 ### R1：Windows 原生验收
 
 - 当前 Linux 阶段以 Windows 多架构交叉编译和可复用原生验收脚本为出口。
+- 使用 `scripts/test-windows.ps1 -CompileOnly` 复现交叉编译；原生 Windows 使用 `scripts/test-windows.ps1` 执行 race 测试。
 - 原生 Windows 运行 `modules/half-pi-core/tools/tool_exec_windows_test.go` 继续作为发布环境验收项。
 - 验证父子孙进程退出、无关进程不受影响、预取消和正常后台进程语义。
 - 验收前继续声明“实现已交叉编译，未完成跨平台取消验收”。

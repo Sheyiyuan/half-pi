@@ -451,6 +451,7 @@ T4。
 **当前状态**
 
 - 代码、vet 和 Windows 386/amd64/arm/arm64 测试二进制交叉编译已通过。
+- 仓库提供 `scripts/test-windows.ps1 -CompileOnly` 复现多架构交叉编译；在原生 Windows 上不带参数运行同一脚本执行 race 测试。
 - 原生 Windows 集成测试尚未执行，因此 T10 尚未完成最终验收，也不宣称跨平台完整取消。
 
 **验收标准**
