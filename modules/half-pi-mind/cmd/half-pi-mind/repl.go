@@ -72,7 +72,9 @@ func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.Ev
 
 	local.SetRemoteBridge(&local.RemoteBridge{
 		Hub:             wsHub,
+		Runs:            core.RemoteRuns(),
 		ActiveHand:      core.ActiveHand,
+		SessionID:       core.SessionID,
 		SetActiveHand:   core.SetActiveHand,
 		PendingCall:     core.PendingCall,
 		CheckAndConfirm: core.CheckAndConfirm,

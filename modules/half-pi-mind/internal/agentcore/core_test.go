@@ -3,16 +3,12 @@ package agentcore
 import (
 	"context"
 	"encoding/json"
-	"strings"
-	"testing"
-	"time"
-
-	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
-	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
+	"strings"
+	"testing"
 )
 
 // stubLLM is a no-op LLM provider for testing.
@@ -79,29 +75,6 @@ func TestCheckAndConfirmRequiresApprover(t *testing.T) {
 	blocked, _ := core.CheckAndConfirm(toolName, json.RawMessage(`{}`), false)
 	if !blocked {
 		t.Fatal("confirmation-required tool must be blocked without an approver")
-	}
-}
-
-func TestPendingDuplicateRejectionDoesNotOverrideAcceptedRun(t *testing.T) {
-	core, err := New(&stubLLM{}, &stubExecutor{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	ch, cancel := core.PendingCall("run-1", 0, "hand-1")
-	defer cancel()
-	peer := &hub.Peer{ID: "hand-1"}
-	accepted, _ := protocol.NewEnvelope("", protocol.TypeRPCAccepted, protocol.RPCAccepted{RunID: "run-1", StartedAt: time.Now().UnixMilli()})
-	core.deliverPending(peer, "run-1", *accepted, false, "RPCAccepted")
-	rejected, _ := protocol.NewEnvelope("", protocol.TypeRPCRejected, protocol.RPCRejected{RunID: "run-1", Code: protocol.RejectDuplicateRun})
-	core.deliverPending(peer, "run-1", *rejected, true, "RPCRejected")
-	result, _ := protocol.NewEnvelope("", protocol.TypeRPCResult, protocol.RPCResult{RunID: "run-1", Success: true})
-	core.deliverPending(peer, "run-1", *result, true, "RPCResult")
-
-	if got := <-ch; got.Type != protocol.TypeRPCAccepted {
-		t.Fatalf("first message = %q", got.Type)
-	}
-	if got := <-ch; got.Type != protocol.TypeRPCResult {
-		t.Fatalf("second message = %q, duplicate rejection should be ignored", got.Type)
 	}
 }
 

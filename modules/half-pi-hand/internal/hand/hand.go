@@ -21,22 +21,24 @@ type Hand struct {
 	conn *wss.SessionConn
 	cfg  *config.Config
 
-	seenMu   sync.Mutex
-	seenRuns map[string]struct{}
+	tasksMu sync.Mutex
+	tasks   map[string]*task
 }
 
 // New 创建 Hand 实例。
 func New(conn *wss.SessionConn, cfg *config.Config) *Hand {
 	return &Hand{
-		conn:     conn,
-		cfg:      cfg,
-		seenRuns: make(map[string]struct{}),
+		conn:  conn,
+		cfg:   cfg,
+		tasks: make(map[string]*task),
 	}
 }
 
 // Serve 启动消息读取循环，阻塞直到连接断开或 ctx 取消。
 func (h *Hand) Serve(ctx context.Context) error {
-	h.startMonitors(ctx)
+	runCtx, cancelRuns := context.WithCancel(ctx)
+	defer cancelRuns()
+	h.startMonitors(runCtx)
 
 	done := make(chan struct{})
 	go func() {
@@ -65,7 +67,9 @@ func (h *Hand) Serve(ctx context.Context) error {
 
 		switch env.Type {
 		case protocol.TypeRPC:
-			go h.handleRPC(ctx, env)
+			go h.handleRPC(runCtx, env)
+		case protocol.TypeRPCCancel:
+			go h.handleRPCCancel(env)
 		case protocol.TypeHandInfoReq:
 			go h.handleHandInfoReq(env)
 		case protocol.TypeError:

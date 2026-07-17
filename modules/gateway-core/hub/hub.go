@@ -2,6 +2,7 @@
 package hub
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -98,7 +99,7 @@ func (h *Hub) ServeWS(conn *websocket.Conn) error {
 		h.RemovePeer(peer)
 		return err
 	}
-	if err := h.Send(peer.ID, *registered); err != nil {
+	if err := peer.SendContext(context.Background(), *registered); err != nil {
 		h.RemovePeer(peer)
 		return err
 	}
@@ -162,13 +163,14 @@ func (h *Hub) Register(raw []byte, conn *websocket.Conn) (*Peer, error) {
 
 	h.mu.Lock()
 	old, exists := h.peers[peer.ID]
-	if exists {
-		h.mu.Unlock()
-		old.Close()
-		h.mu.Lock()
-	}
 	h.peers[peer.ID] = peer
 	h.mu.Unlock()
+	if exists {
+		old.Close()
+		if h.disconnectFn != nil {
+			h.disconnectFn(old)
+		}
+	}
 
 	return peer, nil
 }
@@ -207,17 +209,18 @@ func (h *Hub) RemovePeer(target *Peer) {
 
 // Send 向指定节点发送消息，自动 stamp outgoing。
 func (h *Hub) Send(peerID string, env protocol.Envelope) error {
+	return h.SendContext(context.Background(), peerID, env)
+}
+
+// SendContext 向指定节点发送消息，并允许上下文中断阻塞写入。
+func (h *Hub) SendContext(ctx context.Context, peerID string, env protocol.Envelope) error {
 	h.mu.RLock()
 	peer, ok := h.peers[peerID]
 	h.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("peer %q not found", peerID)
 	}
-	stamped, err := peer.stampOutgoing(env)
-	if err != nil {
-		return err
-	}
-	return peer.WriteJSON(stamped)
+	return peer.SendContext(ctx, env)
 }
 
 // Broadcast 向除排除节点外的所有节点广播消息。
@@ -233,10 +236,7 @@ func (h *Hub) Broadcast(env protocol.Envelope, excludeID string) {
 	h.mu.RUnlock()
 
 	for _, peer := range snapshot {
-		stamped, err := peer.stampOutgoing(env)
-		if err == nil {
-			err = peer.WriteJSON(stamped)
-		}
+		err := peer.SendContext(context.Background(), env)
 		if err != nil {
 			h.RemovePeer(peer)
 		}

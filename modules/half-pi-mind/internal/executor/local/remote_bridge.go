@@ -6,12 +6,15 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
 
 // RemoteBridge 提供远程 Hand 工具所需的核心依赖。
 type RemoteBridge struct {
 	Hub           *hub.Hub
+	Runs          *remoteexec.Registry
 	ActiveHand    func() string
+	SessionID     func() string
 	SetActiveHand func(string) error
 	// PendingCall 注册一次等待远程 Hand 响应的调用，并返回清理函数。
 	PendingCall func(id string, timeout time.Duration, expectedPeer string) (<-chan protocol.Envelope, func())

@@ -6,19 +6,22 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
 
 // pendingCall 记录一个等待中的 Hand 响应及其预期来源。
 type pendingCall struct {
 	ch           chan protocol.Envelope
 	expectedPeer string
-	accepted     bool
 }
 
 // ActiveHand 返回当前会话默认 Hand ID。
 func (c *Core) ActiveHand() string {
 	return c.activeHand
 }
+
+// RemoteRuns 返回 Mind 的远程执行生命周期注册表。
+func (c *Core) RemoteRuns() *remoteexec.Registry { return c.remoteRuns }
 
 // SetActiveHand 设置当前会话默认 Hand，同时持久化到 DB。
 func (c *Core) SetActiveHand(handID string) error {

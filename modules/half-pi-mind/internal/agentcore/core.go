@@ -11,6 +11,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/skill"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
@@ -34,6 +35,7 @@ type Core struct {
 	activeHand   string                  // 当前会话的默认 Hand ID
 	pendingCalls map[string]*pendingCall // 等待 Hand 响应的通道
 	pendingMu    sync.Mutex
+	remoteRuns   *remoteexec.Registry
 }
 
 // Approver 由 REPL 实现，处理用户确认交互。
@@ -60,6 +62,7 @@ func New(llmProvider llm.Provider, exec executor.ToolExecutor) (*Core, error) {
 		autoAllow:    make(map[string]bool),
 		autoDeny:     make(map[string]bool),
 		pendingCalls: make(map[string]*pendingCall),
+		remoteRuns:   remoteexec.NewRegistry(),
 	}, nil
 }
 
@@ -141,6 +144,7 @@ func (c *Core) SetHub(h *hub.Hub) {
 		return nil
 	})
 	h.OnDisconnect(func(peer *hub.Peer) {
+		c.remoteRuns.MarkLostByHand(peer.ID)
 		c.publish(events.LevelInfo, events.TypeSystem,
 			fmt.Sprintf("[HUB] %s 已断开", peer.ID))
 	})
@@ -153,21 +157,36 @@ func (c *Core) SetHub(h *hub.Hub) {
 				if err != nil || protocol.ValidateRPCAccepted(accepted) != nil {
 					return
 				}
-				c.deliverPending(peer, accepted.RunID, msg, false, "RPCAccepted")
+				if err := c.remoteRuns.ApplyAccepted(peer.ID, accepted); err != nil {
+					c.publish(events.LevelWarn, events.TypeSystem, err.Error())
+				}
 
 			case protocol.TypeRPCRejected:
 				rejected, err := protocol.DecodePayload[protocol.RPCRejected](&msg)
 				if err != nil || protocol.ValidateRPCRejected(rejected) != nil {
 					return
 				}
-				c.deliverPending(peer, rejected.RunID, msg, true, "RPCRejected")
+				if err := c.remoteRuns.ApplyRejected(peer.ID, rejected); err != nil {
+					c.publish(events.LevelWarn, events.TypeSystem, err.Error())
+				}
 
 			case protocol.TypeRPCResult:
 				result, err := protocol.DecodePayload[protocol.RPCResult](&msg)
 				if err != nil || protocol.ValidateRPCResult(result) != nil {
 					return
 				}
-				c.deliverPending(peer, result.RunID, msg, true, "RPCResult")
+				if err := c.remoteRuns.ApplyResult(peer.ID, result); err != nil {
+					c.publish(events.LevelWarn, events.TypeSystem, err.Error())
+				}
+
+			case protocol.TypeRPCCancelResult:
+				result, err := protocol.DecodePayload[protocol.RPCCancelResult](&msg)
+				if err != nil || protocol.ValidateRPCCancelResult(result) != nil {
+					return
+				}
+				if err := c.remoteRuns.ApplyCancelResult(peer.ID, result); err != nil {
+					c.publish(events.LevelWarn, events.TypeSystem, err.Error())
+				}
 
 			case protocol.TypeHandInfoResp:
 				resp, _ := protocol.DecodePayload[protocol.HandInfoResp](&msg)
@@ -206,40 +225,6 @@ func (c *Core) SetHub(h *hub.Hub) {
 				fmt.Sprintf("unhandled message from %s type=%s", peer.ID, msg.Type))
 		}
 	})
-}
-
-func (c *Core) deliverPending(peer *hub.Peer, id string, msg protocol.Envelope, terminal bool, label string) {
-	c.pendingMu.Lock()
-	pc, ok := c.pendingCalls[id]
-	if ok && pc.expectedPeer == peer.ID {
-		if msg.Type == protocol.TypeRPCAccepted {
-			pc.accepted = true
-		}
-		if msg.Type == protocol.TypeRPCRejected && pc.accepted {
-			rejected, err := protocol.DecodePayload[protocol.RPCRejected](&msg)
-			if err == nil && rejected.Code == protocol.RejectDuplicateRun {
-				c.pendingMu.Unlock()
-				return
-			}
-		}
-		if terminal {
-			delete(c.pendingCalls, id)
-		}
-		c.pendingMu.Unlock()
-		select {
-		case pc.ch <- msg:
-		default:
-		}
-		return
-	}
-	c.pendingMu.Unlock()
-	if ok {
-		c.publish(events.LevelWarn, events.TypeSystem,
-			fmt.Sprintf("[%s] %s 来源不匹配: 期望 %s", peer.ID, label, pc.expectedPeer))
-		return
-	}
-	c.publish(events.LevelDebug, events.TypeToolResult,
-		fmt.Sprintf("[%s] 孤立 %s: %s", peer.ID, label, id))
 }
 
 func truncate(s string) string {

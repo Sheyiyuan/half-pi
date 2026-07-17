@@ -2,6 +2,7 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
 	"sync"
 	"time"
@@ -21,7 +22,8 @@ type Peer struct {
 	session  *protocol.Session
 	Info     *protocol.HandInfo // Hand 注册时上报的静态设备信息
 
-	mu        sync.Mutex // 保护 Conn 写入，gorilla/websocket 要求单 writer
+	writeOnce sync.Once
+	writeGate chan struct{} // 保护 Conn 写入，gorilla/websocket 要求单 writer
 	closeOnce sync.Once
 }
 
@@ -30,17 +32,59 @@ func (p *Peer) SessionID() string { return p.session.SessionID }
 
 // WriteJSON 线程安全地写 JSON 到 WebSocket 连接，带写入超时。
 func (p *Peer) WriteJSON(v any) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.Conn.SetWriteDeadline(time.Now().Add(writeTimeout))
+	return p.WriteJSONContext(context.Background(), v)
+}
+
+// WriteJSONContext 线程安全地写 JSON，并允许上下文中断阻塞写入。
+func (p *Peer) WriteJSONContext(ctx context.Context, v any) error {
+	if err := p.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer p.releaseWriter()
+	return p.writeJSONLocked(ctx, v)
+}
+
+// SendContext 在同一写锁内分配序号并发送，保证线序与写入顺序一致。
+func (p *Peer) SendContext(ctx context.Context, env protocol.Envelope) error {
+	if err := p.acquireWriter(ctx); err != nil {
+		return err
+	}
+	defer p.releaseWriter()
+	stamped, err := p.stampOutgoing(env)
+	if err != nil {
+		return err
+	}
+	return p.writeJSONLocked(ctx, stamped)
+}
+
+func (p *Peer) writeJSONLocked(ctx context.Context, v any) error {
+	deadline := time.Now().Add(writeTimeout)
+	if contextDeadline, ok := ctx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	if err := p.Conn.SetWriteDeadline(deadline); err != nil {
+		return err
+	}
+	interruptDone := make(chan struct{})
+	stopInterrupt := context.AfterFunc(ctx, func() {
+		_ = p.Conn.SetWriteDeadline(time.Now())
+		close(interruptDone)
+	})
+	defer func() {
+		if !stopInterrupt() {
+			<-interruptDone
+		}
+	}()
 	return p.Conn.WriteJSON(v)
 }
 
 // Close 关闭连接并清理。
 func (p *Peer) Close() {
 	p.closeOnce.Do(func() {
-		p.mu.Lock()
-		defer p.mu.Unlock()
+		if err := p.acquireWriter(context.Background()); err != nil {
+			return
+		}
+		defer p.releaseWriter()
 		p.Conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 		_ = p.Conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 		_ = p.Conn.Close()
@@ -82,14 +126,36 @@ func (p *Peer) keepalive() {
 	ticker := time.NewTicker(pingInterval)
 	defer ticker.Stop()
 	for range ticker.C {
-		p.mu.Lock()
+		if err := p.acquireWriter(context.Background()); err != nil {
+			return
+		}
 		p.Conn.SetWriteDeadline(time.Now().Add(writeTimeout))
 		err := p.Conn.WriteMessage(websocket.PingMessage, nil)
-		p.mu.Unlock()
+		p.releaseWriter()
 		if err != nil {
 			return
 		}
 	}
+}
+
+func (p *Peer) acquireWriter(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.writeOnce.Do(func() {
+		p.writeGate = make(chan struct{}, 1)
+		p.writeGate <- struct{}{}
+	})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-p.writeGate:
+		return nil
+	}
+}
+
+func (p *Peer) releaseWriter() {
+	p.writeGate <- struct{}{}
 }
 
 func (p *Peer) sendError(msgID, code, message string) {
@@ -101,11 +167,7 @@ func (p *Peer) sendError(msgID, code, message string) {
 	if err != nil {
 		return
 	}
-	stamped, err := p.stampOutgoing(*env)
-	if err != nil {
-		return
-	}
-	_ = p.WriteJSON(stamped)
+	_ = p.SendContext(context.Background(), *env)
 }
 
 func (p *Peer) stampOutgoing(env protocol.Envelope) (protocol.Envelope, error) {

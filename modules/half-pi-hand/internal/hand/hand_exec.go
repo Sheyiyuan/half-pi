@@ -75,22 +75,28 @@ func (h *Hand) handleRPC(ctx context.Context, env protocol.Envelope) {
 		}
 	}
 
-	accepted, err := h.acceptRun(rpc.RunID)
+	execCtx, cancel := context.WithDeadline(ctx, time.UnixMilli(rpc.DeadlineAt))
+	accepted, err := h.acceptTask(rpc.RunID, rpc.Tool, cancel)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "send rpc accepted failed: %v\n", err)
 		return
 	}
 	if !accepted {
+		cancel()
 		h.rejectRPC(rpc.RunID, protocol.RejectDuplicateRun, "run_id has already been accepted")
 		return
 	}
 
-	execCtx, cancel := context.WithDeadline(ctx, time.UnixMilli(rpc.DeadlineAt))
 	defer cancel()
 	if err := execCtx.Err(); err != nil {
+		if h.taskCancellationRequested(rpc.RunID) {
+			h.finishTask(rpc.RunID, taskCancelled)
+			return
+		}
 		if sendErr := h.sendRPCReply(rpc.RunID, false, "", err.Error(), false); sendErr != nil {
 			fmt.Fprintf(os.Stderr, "send expired rpc result failed: %v\n", sendErr)
 		}
+		h.finishTask(rpc.RunID, taskDone)
 		return
 	}
 
@@ -108,10 +114,15 @@ func (h *Hand) handleRPC(ctx context.Context, env protocol.Envelope) {
 		errMsg, errorTruncated = truncateBytes(errMsg, maxSize)
 		truncated = outputTruncated || errorTruncated
 	}
+	if h.taskCancellationRequested(rpc.RunID) && execCtx.Err() != nil && !result.Success {
+		h.finishTask(rpc.RunID, taskCancelled)
+		return
+	}
 
 	if err := h.sendRPCReply(rpc.RunID, result.Success, output, errMsg, truncated); err != nil {
 		fmt.Fprintf(os.Stderr, "send rpc result failed: %v\n", err)
 	}
+	h.finishTask(rpc.RunID, taskDone)
 }
 
 func (h *Hand) rejectRPC(runID string, code protocol.RejectCode, reason string) {
@@ -122,20 +133,6 @@ func (h *Hand) rejectRPC(runID string, code protocol.RejectCode, reason string) 
 	}); err != nil {
 		fmt.Fprintf(os.Stderr, "send rpc rejection failed: %v\n", err)
 	}
-}
-
-func (h *Hand) acceptRun(runID string) (bool, error) {
-	h.seenMu.Lock()
-	defer h.seenMu.Unlock()
-	if _, exists := h.seenRuns[runID]; exists {
-		return false, nil
-	}
-	h.seenRuns[runID] = struct{}{}
-	err := h.sendRPCMessage(protocol.TypeRPCAccepted, protocol.RPCAccepted{
-		RunID:     runID,
-		StartedAt: time.Now().UnixMilli(),
-	})
-	return true, err
 }
 
 // handleHandInfoReq 返回 Hand 的动态信息（工具列表等）。

@@ -4,6 +4,7 @@ package wss
 import (
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/gorilla/websocket"
 
@@ -32,6 +33,8 @@ type SessionConn struct {
 	Session *protocol.Session
 	writeMu sync.Mutex // gorilla/websocket 要求单 writer
 }
+
+const clientWriteTimeout = 10 * time.Second
 
 // ConnectAndRegister 连接服务端并完成 register/registered 握手。
 func (c *Client) ConnectAndRegister(clientID, peerType, token string, info *protocol.HandInfo) (*SessionConn, error) {
@@ -94,6 +97,9 @@ func (c *Client) ConnectAndRegister(clientID, peerType, token string, info *prot
 func (c *SessionConn) Send(env protocol.Envelope) error {
 	c.writeMu.Lock()
 	defer c.writeMu.Unlock()
+	if err := c.Conn.SetWriteDeadline(time.Now().Add(clientWriteTimeout)); err != nil {
+		return err
+	}
 	stamped, err := c.Session.Stamp(env)
 	if err != nil {
 		return err

@@ -34,7 +34,7 @@ var runTransitions = map[RunStatus]map[RunStatus]bool{
 		RunTimedOut: true, RunLost: true,
 	},
 	RunCancelRequested: {
-		RunSucceeded: true, RunFailed: true, RunCancelled: true,
+		RunSucceeded: true, RunFailed: true, RunRejected: true, RunCancelled: true,
 		RunTimedOut: true, RunLost: true,
 	},
 }

@@ -1,11 +1,14 @@
 package hub
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -53,6 +56,15 @@ func TestNewHub(t *testing.T) {
 	h := New()
 	if h.Count() != 0 {
 		t.Error("new hub should have 0 peers")
+	}
+}
+
+func TestPeerWriterAcquisitionHonorsCancelledContext(t *testing.T) {
+	peer := &Peer{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := peer.acquireWriter(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("acquireWriter error = %v, want context.Canceled", err)
 	}
 }
 
@@ -204,6 +216,8 @@ func TestHubDuplicatePeer(t *testing.T) {
 	defer conn2.Close()
 
 	h := New()
+	disconnected := make(chan *Peer, 1)
+	h.OnDisconnect(func(peer *Peer) { disconnected <- peer })
 	reg := newRegisterMsg("dup-hand", "hand")
 	h.Register(reg, conn1)
 
@@ -217,6 +231,53 @@ func TestHubDuplicatePeer(t *testing.T) {
 	}
 	if peer.Conn != conn2 {
 		t.Error("duplicate should use new connection")
+	}
+	select {
+	case old := <-disconnected:
+		if old.Conn != conn1 {
+			t.Fatal("disconnect callback received wrong peer")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("replaced peer did not emit disconnect callback")
+	}
+}
+
+func TestHubConcurrentDuplicatePeers(t *testing.T) {
+	srv, dial := newTestServer(t)
+	defer srv.Close()
+	const peerCount = 20
+	connections := make([]*websocket.Conn, peerCount)
+	for i := range connections {
+		connections[i] = dial(strings.Replace(srv.URL, "http", "ws", 1))
+		defer connections[i].Close()
+	}
+
+	h := New()
+	disconnected := make(chan *Peer, peerCount)
+	h.OnDisconnect(func(peer *Peer) { disconnected <- peer })
+	reg := newRegisterMsg("same-hand", "hand")
+	errs := make(chan error, peerCount)
+	var wg sync.WaitGroup
+	for i := range connections {
+		wg.Add(1)
+		go func(conn *websocket.Conn) {
+			defer wg.Done()
+			_, err := h.Register(reg, conn)
+			errs <- err
+		}(connections[i])
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if h.Count() != 1 {
+		t.Fatalf("peer count = %d, want 1", h.Count())
+	}
+	if len(disconnected) != peerCount-1 {
+		t.Fatalf("disconnect callbacks = %d, want %d", len(disconnected), peerCount-1)
 	}
 }
 

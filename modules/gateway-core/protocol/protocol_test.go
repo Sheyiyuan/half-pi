@@ -185,7 +185,8 @@ func TestRunStatusTransitions(t *testing.T) {
 		{RunRunning, RunSucceeded}: true, {RunRunning, RunFailed}: true,
 		{RunRunning, RunCancelRequested}: true, {RunRunning, RunTimedOut}: true, {RunRunning, RunLost}: true,
 		{RunCancelRequested, RunSucceeded}: true, {RunCancelRequested, RunFailed}: true,
-		{RunCancelRequested, RunCancelled}: true, {RunCancelRequested, RunTimedOut}: true, {RunCancelRequested, RunLost}: true,
+		{RunCancelRequested, RunRejected}: true, {RunCancelRequested, RunCancelled}: true,
+		{RunCancelRequested, RunTimedOut}: true, {RunCancelRequested, RunLost}: true,
 	}
 	for _, from := range statuses {
 		for _, to := range statuses {

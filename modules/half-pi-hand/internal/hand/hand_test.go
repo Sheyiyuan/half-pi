@@ -359,6 +359,162 @@ func TestHandConcurrentDuplicateRunExecutesOnce(t *testing.T) {
 	}
 }
 
+func TestHandCancelRunningRPC(t *testing.T) {
+	acceptedCh := make(chan protocol.RPCAccepted, 1)
+	cancelCh := make(chan protocol.RPCCancelResult, 1)
+	resultCh := make(chan protocol.RPCResult, 1)
+	h := startTestHand(t, "cancel-hand", nil, func(msg protocol.Envelope) {
+		switch msg.Type {
+		case protocol.TypeRPCAccepted:
+			accepted, _ := protocol.DecodePayload[protocol.RPCAccepted](&msg)
+			acceptedCh <- accepted
+		case protocol.TypeRPCCancelResult:
+			result, _ := protocol.DecodePayload[protocol.RPCCancelResult](&msg)
+			cancelCh <- result
+		case protocol.TypeRPCResult:
+			result, _ := protocol.DecodePayload[protocol.RPCResult](&msg)
+			resultCh <- result
+		}
+	})
+	rpcEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC,
+		testRPC("cancel-run", "exec_command", map[string]any{"command": "sleep 5", "timeout": 10}, 10*time.Second))
+	if err := h.Send("cancel-hand", *rpcEnv); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-acceptedCh:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for accepted")
+	}
+	cancelEnv, _ := protocol.NewEnvelope("", protocol.TypeRPCCancel, protocol.RPCCancel{RunID: "cancel-run", Reason: "user"})
+	if err := h.Send("cancel-hand", *cancelEnv); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-cancelCh:
+		if result.Status != protocol.CancelCancelled {
+			t.Fatalf("cancel status = %q, want cancelled", result.Status)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timeout waiting for cancel result")
+	}
+	select {
+	case result := <-resultCh:
+		t.Fatalf("cancelled run should not also send RPCResult: %+v", result)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestHandCancelUnknownAndCompletedRun(t *testing.T) {
+	cancelCh := make(chan protocol.RPCCancelResult, 2)
+	resultCh := make(chan protocol.RPCResult, 1)
+	h := startTestHand(t, "cancel-status-hand", nil, func(msg protocol.Envelope) {
+		switch msg.Type {
+		case protocol.TypeRPCCancelResult:
+			result, _ := protocol.DecodePayload[protocol.RPCCancelResult](&msg)
+			cancelCh <- result
+		case protocol.TypeRPCResult:
+			result, _ := protocol.DecodePayload[protocol.RPCResult](&msg)
+			resultCh <- result
+		}
+	})
+	unknownEnv, _ := protocol.NewEnvelope("", protocol.TypeRPCCancel, protocol.RPCCancel{RunID: "unknown-run", Reason: "user"})
+	if err := h.Send("cancel-status-hand", *unknownEnv); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-cancelCh; result.Status != protocol.CancelUnknownRun {
+		t.Fatalf("unknown cancel status = %q", result.Status)
+	}
+
+	rpcEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC,
+		testRPC("done-run", "exec_command", map[string]any{"command": "echo done"}, time.Second))
+	if err := h.Send("cancel-status-hand", *rpcEnv); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-resultCh:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for completed result")
+	}
+	doneCancel, _ := protocol.NewEnvelope("", protocol.TypeRPCCancel, protocol.RPCCancel{RunID: "done-run", Reason: "user"})
+	if err := h.Send("cancel-status-hand", *doneCancel); err != nil {
+		t.Fatal(err)
+	}
+	if result := <-cancelCh; result.Status != protocol.CancelAlreadyDone {
+		t.Fatalf("completed cancel status = %q", result.Status)
+	}
+}
+
+func TestHandDisconnectCancelsRunningRPC(t *testing.T) {
+	hubServer := hub.New()
+	acceptedCh := make(chan struct{}, 1)
+	hubServer.OnMessage(func(_ *hub.Peer, msg protocol.Envelope) {
+		if msg.Type == protocol.TypeRPCAccepted {
+			acceptedCh <- struct{}{}
+		}
+	})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err == nil {
+			hubServer.ServeWS(conn)
+		}
+	}))
+	defer srv.Close()
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
+	session, err := wss.NewClient(wsURL).ConnectAndRegister("disconnect-hand", hub.PeerHand, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	hand := New(session, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go hand.Serve(ctx)
+	time.Sleep(50 * time.Millisecond)
+	rpcEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC,
+		testRPC("disconnect-run", "exec_command", map[string]any{"command": "sleep 5", "timeout": 10}, 10*time.Second))
+	if err := hubServer.Send("disconnect-hand", *rpcEnv); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-acceptedCh:
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for accepted")
+	}
+	hubServer.Remove("disconnect-hand")
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		hand.tasksMu.Lock()
+		task := hand.tasks["disconnect-run"]
+		stopped := task != nil && task.status != taskRunning
+		hand.tasksMu.Unlock()
+		if stopped {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("running RPC did not stop after disconnect")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+func TestHandPrunesCompletedTasks(t *testing.T) {
+	hand := &Hand{tasks: make(map[string]*task)}
+	now := time.Now()
+	hand.tasks["old"] = &task{status: taskDone, finishedAt: now.Add(-completedTaskRetention)}
+	hand.tasks["running"] = &task{status: taskRunning}
+	hand.tasksMu.Lock()
+	hand.pruneTasksLocked(now)
+	hand.tasksMu.Unlock()
+	if _, ok := hand.tasks["old"]; ok {
+		t.Fatal("expired completed task should be pruned")
+	}
+	if _, ok := hand.tasks["running"]; !ok {
+		t.Fatal("running task must not be pruned")
+	}
+}
+
 func TestHandServeStopsOnContextCancel(t *testing.T) {
 	h := hub.New()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
