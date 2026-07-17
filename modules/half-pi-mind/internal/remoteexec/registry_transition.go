@@ -89,6 +89,22 @@ func (r *Registry) RejectLocal(id string, code protocol.RejectCode, reason strin
 	return nil
 }
 
+// FailClosed 在审计或状态持久化失败时强制终结内存 run，避免留下无主执行。
+// 该路径不再写审计；调用方必须保留并返回原始持久化错误。
+func (r *Registry) FailClosed(id, reason string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run := r.runs[id]
+	if run == nil || protocol.IsTerminalRunStatus(run.Status) {
+		return
+	}
+	run.Status = protocol.RunRejected
+	run.FinishedAt = time.Now()
+	run.Error = reason
+	run.Rejection = &protocol.RPCRejected{RunID: id, Code: protocol.RejectInvalidRequest, Reason: reason}
+	close(run.done)
+}
+
 // ApplyResult 应用最终执行结果。
 func (r *Registry) ApplyResult(handID string, msg protocol.RPCResult) error {
 	return r.ApplyResultFrom(handID, "", msg)
@@ -145,7 +161,7 @@ func (r *Registry) transitionLocked(run *Run, to protocol.RunStatus, now time.Ti
 		audit.ToStatus = to
 		audit.At = now
 		if err := r.auditor.TransitionRemoteRun(audit); err != nil {
-			return err
+			return auditFailure{err: err}
 		}
 	}
 	run.Status = to
@@ -174,5 +190,8 @@ func (r *Registry) recordEventLocked(run *Run, audit AuditTransition) error {
 	if audit.At.IsZero() {
 		audit.At = time.Now()
 	}
-	return r.auditor.TransitionRemoteRun(audit)
+	if err := r.auditor.TransitionRemoteRun(audit); err != nil {
+		return auditFailure{err: err}
+	}
+	return nil
 }

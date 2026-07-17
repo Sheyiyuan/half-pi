@@ -66,7 +66,8 @@ func init() {
 			// 2. 生成 run 并完成 Mind 侧安全检查
 			runID := protocol.MustNewMsgID()
 			cleanArgs, _ := json.Marshal(params.Args)
-			blocked, reason := bridge.CheckAndConfirm(params.Tool, cleanArgs, params.Confirm)
+			_, knownLocally := executor.FindTool(params.Tool)
+			blocked, reason := bridge.CheckAndConfirm(params.Tool, cleanArgs, params.Confirm || !knownLocally)
 			// 3. 超时
 			timeoutMs := params.TimeoutMs
 			if timeoutMs <= 0 {
@@ -96,7 +97,7 @@ func init() {
 			}
 			if blocked {
 				if err := bridge.Runs.RejectLocal(runID, protocol.RejectCheckFailed, reason); err != nil {
-					return &executor.ToolResult{Error: fmt.Sprintf("记录本地拒绝失败: %v", err)}
+					return remoteRunFailure(bridge, runID, fmt.Sprintf("记录本地拒绝失败: %v", err))
 				}
 				view, _ := RemoteRunSnapshot(bridge, runID)
 				return &executor.ToolResult{
@@ -123,7 +124,9 @@ func init() {
 				Approval:   approval,
 			})
 			if err != nil {
-				_ = bridge.Runs.RejectLocal(runID, protocol.RejectInvalidRequest, err.Error())
+				if rejectErr := bridge.Runs.RejectLocal(runID, protocol.RejectInvalidRequest, err.Error()); rejectErr != nil {
+					return remoteRunFailure(bridge, runID, fmt.Sprintf("记录无效 RPC 失败: %v", rejectErr))
+				}
 				return remoteRunResult(bridge, runID, handID, timeout)
 			}
 
@@ -133,7 +136,9 @@ func init() {
 			operationCtx, stopOperation := context.WithTimeout(ctx, timeout)
 			defer stopOperation()
 			if err := bridge.Hub.SendPeerContext(operationCtx, peer, *rpcEnv); err != nil {
-				_ = bridge.Runs.Transition(runID, protocol.RunLost)
+				if transitionErr := bridge.Runs.Transition(runID, protocol.RunLost); transitionErr != nil {
+					return remoteRunFailure(bridge, runID, fmt.Sprintf("记录 RPC 发送失败: %v", transitionErr))
+				}
 				return remoteRunResult(bridge, runID, handID, timeout)
 			}
 			notifyRunStarted(ctx, runID)
@@ -154,6 +159,7 @@ func init() {
 }
 
 func remoteRunFailure(bridge *RemoteBridge, runID, message string) *executor.ToolResult {
+	bridge.Runs.FailClosed(runID, message)
 	view, err := RemoteRunSnapshot(bridge, runID)
 	if err != nil {
 		return &executor.ToolResult{Error: message}
@@ -165,19 +171,27 @@ const cancelAckTimeout = 3 * time.Second
 
 func requestRemoteCancel(bridge *RemoteBridge, peer *hub.Peer, runID, handID, reason string) {
 	requested, err := bridge.Runs.RequestCancel(runID, reason)
-	if err != nil || !requested {
+	if err == nil && !requested {
 		return
 	}
 	env, err := protocol.NewEnvelope("", protocol.TypeRPCCancel, protocol.RPCCancel{RunID: runID, Reason: reason})
 	if err != nil || bridge.Hub.SendPeerContext(context.Background(), peer, *env) != nil {
-		_ = bridge.Runs.Transition(runID, protocol.RunLost)
+		if transitionErr := bridge.Runs.Transition(runID, protocol.RunLost); transitionErr != nil {
+			bridge.Runs.FailClosed(runID, fmt.Sprintf("记录取消发送失败: %v", transitionErr))
+		}
 		return
 	}
 	done, _ := bridge.Runs.Done(runID)
 	select {
 	case <-done:
 	case <-time.After(cancelAckTimeout):
-		_ = bridge.Runs.MarkCancelUnconfirmed(runID)
+		if err != nil {
+			bridge.Runs.FailClosed(runID, fmt.Sprintf("记录取消请求失败: %v", err))
+			return
+		}
+		if err := bridge.Runs.MarkCancelUnconfirmed(runID); err != nil {
+			bridge.Runs.FailClosed(runID, fmt.Sprintf("记录取消超时失败: %v", err))
+		}
 	}
 }
 

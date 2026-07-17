@@ -58,6 +58,9 @@ func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 		Runs:       runs,
 		ActiveHand: func() string { return "remote-hand" },
 		CheckAndConfirm: func(toolName string, args json.RawMessage, llmConfirm bool) (bool, string) {
+			if !llmConfirm {
+				t.Error("remote-only tool did not force Mind approval")
+			}
 			return false, ""
 		},
 	}

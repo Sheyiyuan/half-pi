@@ -1,6 +1,7 @@
 package remoteexec
 
 import (
+	"errors"
 	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
@@ -42,4 +43,17 @@ type AuditTransition struct {
 type Auditor interface {
 	CreateRemoteRun(AuditRun) error
 	TransitionRemoteRun(AuditTransition) error
+}
+
+type auditFailure struct {
+	err error
+}
+
+func (e auditFailure) Error() string { return e.err.Error() }
+func (e auditFailure) Unwrap() error { return e.err }
+
+// IsAuditFailure 判断状态更新是否因审计持久化失败而中止。
+func IsAuditFailure(err error) bool {
+	var target auditFailure
+	return errors.As(err, &target)
 }

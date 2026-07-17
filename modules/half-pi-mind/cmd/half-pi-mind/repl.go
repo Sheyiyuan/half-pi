@@ -61,17 +61,10 @@ func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.Ev
 	}
 	var actorsMu sync.Mutex
 	actors := make(map[string]actor)
-	actorOrder := make([]string, 0, 16)
 	getActor := func(id string) (*agentcore.Core, *local.RemoteBridge, error) {
 		actorsMu.Lock()
 		defer actorsMu.Unlock()
 		if existing, ok := actors[id]; ok {
-			for i, existingID := range actorOrder {
-				if existingID == id {
-					actorOrder = append(append(actorOrder[:i], actorOrder[i+1:]...), id)
-					break
-				}
-			}
 			return existing.core, existing.bridge, nil
 		}
 		bridge := &local.RemoteBridge{Hub: authority.Hub, Runs: authority.Registry, PendingCall: authority.PendingCall}
@@ -90,12 +83,7 @@ func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.Ev
 		bridge.Mode = core.SecurityMode
 		bridge.SetActiveHand = core.SetActiveHand
 		bridge.CheckAndConfirm = core.CheckAndConfirm
-		if len(actorOrder) >= 16 {
-			delete(actors, actorOrder[0])
-			actorOrder = actorOrder[1:]
-		}
 		actors[id] = actor{core: core, bridge: bridge}
-		actorOrder = append(actorOrder, id)
 		return core, bridge, nil
 	}
 

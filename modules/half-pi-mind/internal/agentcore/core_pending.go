@@ -31,8 +31,12 @@ func (c *Core) CheckAndConfirm(toolName string, args json.RawMessage, llmConfirm
 	c.stateMu.Lock()
 	tool, decision, reason, found := executor.CheckToolWithPolicy(toolName, args, c.policy)
 	if !found {
-		c.stateMu.Unlock()
-		return true, reason
+		if !llmConfirm {
+			c.stateMu.Unlock()
+			return true, reason
+		}
+		decision = executor.DecisionConfirm
+		reason = "Mind 无法验证远端专属工具，需用户确认"
 	}
 	if decision == executor.DecisionDeny {
 		c.stateMu.Unlock()
@@ -40,7 +44,7 @@ func (c *Core) CheckAndConfirm(toolName string, args json.RawMessage, llmConfirm
 	}
 
 	needsConfirm := llmConfirm || decision == executor.DecisionConfirm
-	oneShotConfirm := llmConfirm || tool.DefaultConfirm
+	oneShotConfirm := llmConfirm || (found && tool.DefaultConfirm)
 	if reason == "" && llmConfirm {
 		reason = "LLM 标记为需确认操作"
 	}

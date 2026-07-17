@@ -211,3 +211,18 @@ func TestExecuteToolCannotBypassSecurity(t *testing.T) {
 		t.Fatalf("manual execution bypassed security: %+v", result)
 	}
 }
+
+func TestRemoteOnlyToolRequiresExplicitApproval(t *testing.T) {
+	core, _ := New(&stubLLM{}, &stubExecutor{})
+	if blocked, _ := core.CheckAndConfirm("remote_only_tool", json.RawMessage(`{}`), false); !blocked {
+		t.Fatal("unknown local tool was allowed without remote confirmation")
+	}
+	core.SetApprover(allowAlwaysApprover{})
+	if blocked, _ := core.CheckAndConfirm("remote_only_tool", json.RawMessage(`{}`), true); blocked {
+		t.Fatal("approved remote-only tool was blocked")
+	}
+	core.SetApprover(nil)
+	if blocked, _ := core.CheckAndConfirm("remote_only_tool", json.RawMessage(`{}`), true); !blocked {
+		t.Fatal("remote-only approval was incorrectly cached")
+	}
+}

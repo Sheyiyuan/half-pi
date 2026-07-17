@@ -30,6 +30,35 @@ func TestAuthorityRoutesLifecycleWithoutCore(t *testing.T) {
 	}
 }
 
+func TestAuthorityFailClosesTerminalAuditFailure(t *testing.T) {
+	auditor := &recordingAuditor{}
+	registry := NewRegistry(auditor)
+	authority := NewAuthority(hub.New(), registry, nil, func(string) (string, error) { return "test", nil })
+	createSentRun(t, registry, "run-audit-failure", "hand-1")
+	if err := registry.ApplyAccepted("hand-1", protocol.RPCAccepted{
+		RunID: "run-audit-failure", StartedAt: time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	done, _ := registry.Done("run-audit-failure")
+	auditor.mu.Lock()
+	auditor.failTransitions = true
+	auditor.mu.Unlock()
+	result, _ := protocol.NewEnvelope("", protocol.TypeRPCResult, protocol.RPCResult{
+		RunID: "run-audit-failure", Success: true,
+	})
+	authority.handleMessage(&hub.Peer{ID: "hand-1", Type: hub.PeerHand}, *result)
+	select {
+	case <-done:
+	default:
+		t.Fatal("terminal audit failure left run open")
+	}
+	run, _ := registry.Snapshot("run-audit-failure")
+	if run.Status != protocol.RunRejected {
+		t.Fatalf("status = %s, want rejected", run.Status)
+	}
+}
+
 func TestAuthorityDisconnectMarksRunsLost(t *testing.T) {
 	registry := NewRegistry()
 	wsHub := hub.New()

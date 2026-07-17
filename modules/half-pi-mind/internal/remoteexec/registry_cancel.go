@@ -25,6 +25,13 @@ func (r *Registry) ApplyCancelResultFrom(handID, connectionID string, msg protoc
 	}
 	switch msg.Status {
 	case protocol.CancelCancelled:
+		if run.Status != protocol.RunCancelRequested && run.CancelReason != "" {
+			if err := r.transitionLocked(run, protocol.RunCancelRequested, time.Now(), AuditTransition{
+				EventType: "cancel_request_recovered", Message: run.CancelReason,
+			}); err != nil {
+				return err
+			}
+		}
 		status := protocol.RunCancelled
 		if run.CancelReason == "timeout" {
 			status = protocol.RunTimedOut
@@ -54,10 +61,14 @@ func (r *Registry) RequestCancel(id, reason string) (bool, error) {
 	if !ok || protocol.IsTerminalRunStatus(run.Status) || run.Status == protocol.RunCancelRequested {
 		return false, nil
 	}
+	previousReason := run.CancelReason
+	run.CancelReason = reason
 	if err := r.transitionLocked(run, protocol.RunCancelRequested, time.Now(), AuditTransition{Message: reason}); err != nil {
+		if !IsAuditFailure(err) {
+			run.CancelReason = previousReason
+		}
 		return false, err
 	}
-	run.CancelReason = reason
 	return true, nil
 }
 

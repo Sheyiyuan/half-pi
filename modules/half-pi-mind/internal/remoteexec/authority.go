@@ -107,8 +107,11 @@ func (a *Authority) handleMessage(peer *hub.Peer, msg protocol.Envelope) {
 		if err == nil && protocol.ValidateRPCRejected(rejected) == nil {
 			err = a.Registry.ApplyRejectedFrom(peer.ID, peer.SessionID(), rejected)
 		}
+		if IsAuditFailure(err) {
+			a.Registry.FailClosed(rejected.RunID, fmt.Sprintf("记录 Hand 拒绝失败: %v", err))
+		}
 		a.publishError(err)
-		if err == nil {
+		if err == nil || IsAuditFailure(err) {
 			a.publishRun(rejected.RunID)
 		}
 	case protocol.TypeRPCResult:
@@ -116,8 +119,11 @@ func (a *Authority) handleMessage(peer *hub.Peer, msg protocol.Envelope) {
 		if err == nil && protocol.ValidateRPCResult(result) == nil {
 			err = a.Registry.ApplyResultFrom(peer.ID, peer.SessionID(), result)
 		}
+		if IsAuditFailure(err) {
+			a.Registry.FailClosed(result.RunID, fmt.Sprintf("记录 Hand 结果失败: %v", err))
+		}
 		a.publishError(err)
-		if err == nil {
+		if err == nil || IsAuditFailure(err) {
 			a.publishRun(result.RunID)
 		}
 	case protocol.TypeRPCCancelResult:
@@ -125,8 +131,11 @@ func (a *Authority) handleMessage(peer *hub.Peer, msg protocol.Envelope) {
 		if err == nil && protocol.ValidateRPCCancelResult(result) == nil {
 			err = a.Registry.ApplyCancelResultFrom(peer.ID, peer.SessionID(), result)
 		}
+		if IsAuditFailure(err) {
+			a.Registry.FailClosed(result.RunID, fmt.Sprintf("记录 Hand 取消结果失败: %v", err))
+		}
 		a.publishError(err)
-		if err == nil {
+		if err == nil || IsAuditFailure(err) {
 			a.publishRun(result.RunID)
 		}
 	case protocol.TypeHandInfoResp:

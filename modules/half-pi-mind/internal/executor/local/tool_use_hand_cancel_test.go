@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -17,6 +18,24 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
+
+type toggledAuditor struct {
+	fail chan bool
+}
+
+func (a *toggledAuditor) CreateRemoteRun(remoteexec.AuditRun) error { return nil }
+
+func (a *toggledAuditor) TransitionRemoteRun(remoteexec.AuditTransition) error {
+	select {
+	case fail := <-a.fail:
+		a.fail <- fail
+		if fail {
+			return errors.New("audit unavailable")
+		}
+	default:
+	}
+	return nil
+}
 
 func TestRequestRemoteCancelSendsRPCAndMarksTimeout(t *testing.T) {
 	h := hub.New()
@@ -86,6 +105,71 @@ func TestRequestRemoteCancelSendsRPCAndMarksTimeout(t *testing.T) {
 		t.Fatal("requestRemoteCancel did not finish")
 	}
 	run, _ := runs.Snapshot("cancel-run")
+	if run.Status != protocol.RunTimedOut {
+		t.Fatalf("status = %s, want timed_out", run.Status)
+	}
+}
+
+func TestRequestRemoteCancelStillSendsWhenAuditFails(t *testing.T) {
+	h := hub.New()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upgrader := websocket.Upgrader{}
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err == nil {
+			h.ServeWS(conn)
+		}
+	}))
+	defer srv.Close()
+	session, err := wss.NewClient("ws"+strings.TrimPrefix(srv.URL, "http")).ConnectAndRegister("audit-hand", hub.PeerHand, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer session.Conn.Close()
+
+	auditor := &toggledAuditor{fail: make(chan bool, 1)}
+	runs := remoteexec.NewRegistry(auditor)
+	if err := runs.Create("audit-cancel-run", "session-1", "audit-hand", "exec_command"); err != nil {
+		t.Fatal(err)
+	}
+	if err := runs.Transition("audit-cancel-run", protocol.RunApproved); err != nil {
+		t.Fatal(err)
+	}
+	if err := runs.Transition("audit-cancel-run", protocol.RunSent); err != nil {
+		t.Fatal(err)
+	}
+	h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
+		if msg.Type == protocol.TypeRPCCancelResult {
+			result, decodeErr := protocol.DecodePayload[protocol.RPCCancelResult](&msg)
+			if decodeErr == nil {
+				_ = runs.ApplyCancelResult(peer.ID, result)
+			}
+		}
+	})
+	auditor.fail <- true
+	finished := make(chan struct{})
+	go func() {
+		requestRemoteCancel(&RemoteBridge{Hub: h, Runs: runs}, h.Peer("audit-hand"), "audit-cancel-run", "audit-hand", "timeout")
+		close(finished)
+	}()
+
+	var env protocol.Envelope
+	if err := session.Conn.ReadJSON(&env); err != nil || env.Type != protocol.TypeRPCCancel {
+		t.Fatalf("cancel was not sent after audit failure: type=%q err=%v", env.Type, err)
+	}
+	<-auditor.fail
+	auditor.fail <- false
+	reply, _ := protocol.NewEnvelope("", protocol.TypeRPCCancelResult, protocol.RPCCancelResult{
+		RunID: "audit-cancel-run", Status: protocol.CancelCancelled,
+	})
+	if err := session.Send(*reply); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("cancel did not finish after Hand acknowledgement")
+	}
+	run, _ := runs.Snapshot("audit-cancel-run")
 	if run.Status != protocol.RunTimedOut {
 		t.Fatalf("status = %s, want timed_out", run.Status)
 	}

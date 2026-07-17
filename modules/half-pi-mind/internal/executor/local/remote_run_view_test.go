@@ -45,7 +45,16 @@ func TestRemoteRunFailureIncludesRunIdentity(t *testing.T) {
 	bridge := &RemoteBridge{Runs: runs, SessionID: func() string { return "session-1" }}
 	result := remoteRunFailure(bridge, "run-failure", "audit failed")
 	view, ok := result.Data.(RemoteRunView)
-	if result.Error == "" || !ok || view.RunID != "run-failure" || view.Status != protocol.RunCreated {
+	if result.Error == "" || !ok || view.RunID != "run-failure" || view.Status != protocol.RunRejected {
 		t.Fatalf("unstable failure result: %+v", result)
+	}
+	if done, ok := runs.Done("run-failure"); !ok {
+		t.Fatal("failed run disappeared")
+	} else {
+		select {
+		case <-done:
+		default:
+			t.Fatal("failed run did not reach a terminal state")
+		}
 	}
 }
