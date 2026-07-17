@@ -405,6 +405,91 @@ func TestHandCancelRunningRPC(t *testing.T) {
 	}
 }
 
+func TestHandCancelConcurrentRunDoesNotCancelSurvivor(t *testing.T) {
+	const toolName = "phase1_context_aware_concurrent_tool"
+	started := make(chan string, 2)
+	releaseSurvivor := make(chan struct{})
+	executor.Register(executor.Tool{
+		Name: toolName,
+		Execute: func(ctx context.Context, args json.RawMessage) *executor.ToolResult {
+			var params struct {
+				ID string `json:"id"`
+			}
+			if err := json.Unmarshal(args, &params); err != nil {
+				return &executor.ToolResult{Error: err.Error()}
+			}
+			started <- params.ID
+			select {
+			case <-ctx.Done():
+				return &executor.ToolResult{Error: ctx.Err().Error()}
+			case <-releaseSurvivor:
+				return &executor.ToolResult{Success: true, Output: params.ID}
+			}
+		},
+	})
+
+	acceptedCh := make(chan protocol.RPCAccepted, 2)
+	cancelCh := make(chan protocol.RPCCancelResult, 1)
+	resultCh := make(chan protocol.RPCResult, 1)
+	h := startTestHand(t, "concurrent-cancel-hand", nil, func(msg protocol.Envelope) {
+		switch msg.Type {
+		case protocol.TypeRPCAccepted:
+			accepted, _ := protocol.DecodePayload[protocol.RPCAccepted](&msg)
+			acceptedCh <- accepted
+		case protocol.TypeRPCCancelResult:
+			result, _ := protocol.DecodePayload[protocol.RPCCancelResult](&msg)
+			cancelCh <- result
+		case protocol.TypeRPCResult:
+			result, _ := protocol.DecodePayload[protocol.RPCResult](&msg)
+			resultCh <- result
+		}
+	})
+
+	for _, run := range []string{"cancelled-run", "survivor-run"} {
+		env, _ := protocol.NewEnvelope("", protocol.TypeRPC,
+			testRPC(run, toolName, map[string]any{"id": run}, 5*time.Second))
+		if err := h.Send("concurrent-cancel-hand", *env); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for range 2 {
+		select {
+		case <-acceptedCh:
+		case <-time.After(time.Second):
+			t.Fatal("timeout waiting for both runs to be accepted")
+		}
+		select {
+		case <-started:
+		case <-time.After(time.Second):
+			t.Fatal("timeout waiting for both tools to start")
+		}
+	}
+
+	cancelEnv, _ := protocol.NewEnvelope("", protocol.TypeRPCCancel,
+		protocol.RPCCancel{RunID: "cancelled-run", Reason: "user"})
+	if err := h.Send("concurrent-cancel-hand", *cancelEnv); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-cancelCh:
+		if result.RunID != "cancelled-run" || result.Status != protocol.CancelCancelled {
+			t.Fatalf("unexpected cancel result: %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for cancellation result")
+	}
+
+	close(releaseSurvivor)
+	select {
+	case result := <-resultCh:
+		if result.RunID != "survivor-run" || !result.Success || result.Output != "survivor-run" {
+			t.Fatalf("survivor result = %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("surviving run did not complete")
+	}
+}
+
 func TestHandCancelUnknownAndCompletedRun(t *testing.T) {
 	cancelCh := make(chan protocol.RPCCancelResult, 2)
 	resultCh := make(chan protocol.RPCResult, 1)
