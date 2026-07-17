@@ -30,7 +30,11 @@ func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.Ev
 		os.Exit(1)
 	}
 
-	provider := llm.NewOpenAI(rm.Endpoint, rm.APIKey, rm.Name)
+	provider, err := llm.New(rm.Adapter, rm.Endpoint, rm.APIKey, rm.Name)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "adapter init failed: %v\n", err)
+		os.Exit(1)
+	}
 	exec := local.New()
 
 	skillStore, err := skill.LoadFromDir(env.SkillsDir)

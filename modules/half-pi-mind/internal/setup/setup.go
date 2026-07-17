@@ -85,6 +85,20 @@ adapter = "openai"
 base_url = "https://api.deepseek.com/v1"
 api_key = ""
 
+# Gemini adapter 示例：base_url 为 Gemini API 基础地址
+# [[llm.providers]]
+# name = "gemini"
+# adapter = "gemini"
+# base_url = "https://generativelanguage.googleapis.com/v1beta"
+# api_key = ""
+
+# Anthropic adapter 示例：
+# [[llm.providers]]
+# name = "anthropic"
+# adapter = "anthropic"
+# base_url = "https://api.anthropic.com"
+# api_key = ""
+
   # ── Model 定义 ──
   # id       配置标识（路由时使用）
   # name     传给 API 的实际模型名，省略时等于 id

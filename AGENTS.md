@@ -183,7 +183,9 @@ make test         # 运行全部 4 个模块的测试
 
 ##### LLM 适配器 (`internal/llm/`)
 - OpenAI 兼容适配器完整实现（DeepSeek、Groq、OpenRouter 等）
-- Gemini / Anthropic 适配器骨架
+- Gemini 适配器完整实现
+- Anthropic Claude 适配器完整实现
+- `llm.New(adapter, ...)` 工厂函数，根据配置中 `provider.adapter` 自动选择
 
 ##### 技能系统 (`internal/skill/`)
 - `skill.Store`：加载、缓存、查询 `.skill.md` 文件
@@ -238,17 +240,16 @@ make test         # 运行全部 4 个模块的测试
 - pending call 校验响应来源，避免其他 Hand 伪造同 ID 结果
 
 ##### 设计文档
-- `docs/archived/mind-service-mode.md` — Mind 服务模式设计（默认后台，`--repl` 选交互）
-- `docs/provider-adapter.md` — LLM 适配器模式设计（内部格式、各厂商适配器细节）
 - `docs/remote-execution.md` — Mind → Hand 远程执行设计（协议扩展、四个 LLM 工具、数据流）
 - `docs/mind-hand-mvp-followups.md` — Mind+Hand MVP 后续重点 TODO
 - `docs/archived/architecture.md` — 完整系统架构设计（三层模型、术语定义、通信协议、安全审计）
+- `docs/archived/mind-service-mode.md` — Mind 服务模式设计（默认后台，`--repl` 选交互）
+- `docs/archived/provider-adapter.md` — LLM 适配器模式设计（内部格式、各厂商适配器细节）
 - `docs/archived/skill-design.md` — 技能系统设计
 - `docs/archived/skill-session-memory-design.md` — 技能/会话/记忆组织设计
 
 #### ⏳ 待完成
 - [ ] **Face** 远程交互终端（TUI / IM Bot）——占位 stub 已创建（`modules/half-pi-face/`，仅打印一行字），go.work 已注册，可编译
-- [ ] LLM 适配器工厂（根据 `provider.adapter` 自动选择）
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
 - [ ] Mind → Hand 协议 v2 — 审批语义、取消协议、并发状态模型见 `docs/mind-hand-mvp-followups.md`
@@ -332,5 +333,4 @@ make test         # 运行全部 4 个模块的测试
 
 1. **Face** — 远程交互终端（TUI / IM Bot）
 2. Mind → Hand 协议 v2（审批语义、取消协议、并发状态）
-3. LLM 适配器工厂
-4. `/compact` 上下文压缩
+3. `/compact` 上下文压缩
