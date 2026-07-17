@@ -695,6 +695,8 @@ Windows 进程树测试未通过时，不宣称跨平台完整取消；progress 
 
 需要完成 Phase 0 至 Phase 4。
 
+Face 自身的正式协议、独立鉴权、快照恢复、有序事件投影和 Headless Agent E2E 还必须满足 [`face-protocol.md`](face-protocol.md) 的 Alpha 完成定义；本计划只覆盖远程执行侧的接入门槛。
+
 必须满足：
 
 - 多 session 并发隔离通过 race 测试。

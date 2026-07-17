@@ -240,6 +240,7 @@ make test         # 运行全部 4 个模块的测试
 - pending call 校验响应来源，避免其他 Hand 伪造同 ID 结果
 
 ##### 设计文档
+- `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
 - `docs/remote-execution.md` — Mind → Hand 远程执行设计（协议扩展、四个 LLM 工具、数据流）
 - `docs/mind-hand-mvp-followups.md` — Mind+Hand MVP 后续重点 TODO
 - `docs/archived/architecture.md` — 完整系统架构设计（三层模型、术语定义、通信协议、安全审计）
@@ -271,7 +272,7 @@ make test         # 运行全部 4 个模块的测试
 ### 2026-07-13：事件系统
 - 所有输出通过 EventBus，不再是 `fmt.Fprintf`
 - REPL 交互消息用 `PublishSync` 保证顺序
-- 远程 Face 通过订阅同一条总线获取输出
+- EventBus 是进程内观察总线；远程 Face 不直接注册为 Writer，而由 Face Gateway 做鉴权、过滤、有序投递和结构化事件投影
 
 ### 2026-07-14：配置设计
 - `[[llm.providers]]` 数组，每个提供商独立配置
@@ -326,6 +327,14 @@ make test         # 运行全部 4 个模块的测试
 - 服务模式写 PID 文件（`~/.half-pi/mind.pid`），日志写 `~/.half-pi/logs/mind.log`，SIGINT 优雅退出
 - Hand 断线自动重连，指数退避上限可配置（`hand.retry.max_backoff`，默认 60s）
 - Hub 回调（握手鉴权、连接/断开、HandEvent）从 core 移到 main.go，服务模式不启动 Agent Core
+
+### 2026-07-17：统一 Face 协议
+- Web、TUI、IM 和 Headless Agent Face 共用同一正式协议，不建立测试旁路
+- `Envelope.SessionID` 保持连接级防重放语义，Face payload 使用 `conversation_id` 表示持久化对话
+- Face Gateway 负责 Face 鉴权、command 路由、快照、事件投影、有序发送和背压
+- EventBus 保持进程内观察职责，SQLite 保持恢复和审计的权威来源
+- Face token 与 Hand token 分离，审批能力通过显式 scope 授予
+- Headless Agent Face 使用 JSONL，支持其他 Agent 和进程级 E2E 测试
 
 ---
 
