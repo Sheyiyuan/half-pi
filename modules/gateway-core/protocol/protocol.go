@@ -2,6 +2,7 @@
 package protocol
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
@@ -11,13 +12,17 @@ import (
 )
 
 const (
-	TypeRegister   = "register"
-	TypeRegistered = "registered"
-	TypeRPC        = "rpc"
-	TypeRPCResult  = "rpc_result"
-	TypePing       = "ping"
-	TypePong       = "pong"
-	TypeError      = "error"
+	TypeRegister        = "register"
+	TypeRegistered      = "registered"
+	TypeRPC             = "rpc"
+	TypeRPCAccepted     = "rpc_accepted"
+	TypeRPCRejected     = "rpc_rejected"
+	TypeRPCResult       = "rpc_result"
+	TypeRPCCancel       = "rpc_cancel"
+	TypeRPCCancelResult = "rpc_cancel_result"
+	TypePing            = "ping"
+	TypePong            = "pong"
+	TypeError           = "error"
 
 	TypeHandInfoReq  = "hand_info_req"  // Mind → Hand：查询可用工具列表
 	TypeHandInfoResp = "hand_info_resp" // Hand → Mind：返回工具列表
@@ -87,23 +92,6 @@ type EncryptedPayload struct {
 	Data string `json:"data"`
 }
 
-// RPC 由 Mind 发送，请求 Hand 执行工具。
-type RPC struct {
-	ID         string         `json:"id"`
-	Tool       string         `json:"tool"`
-	Args       map[string]any `json:"args"`
-	SkipChecks bool           `json:"skip_checks"` // Mind 已安全检查，Hand 直接执行
-	TimeoutMs  int            `json:"timeout_ms,omitempty"`
-}
-
-// RPCResult 是 Hand 执行工具后的返回。
-type RPCResult struct {
-	ID      string `json:"id"`
-	Success bool   `json:"success"`
-	Output  string `json:"output,omitempty"`
-	Error   string `json:"error,omitempty"`
-}
-
 // HandInfoReq Mind → Hand：请求 Hand 动态信息（工具列表等）。
 type HandInfoReq struct {
 	ID string `json:"id"` // 请求 ID，用于匹配响应
@@ -163,7 +151,9 @@ func NewEnvelope(msgID, typ string, payload any) (*Envelope, error) {
 // DecodePayload 将 Envelope 的 Payload 反序列化为目标类型。
 func DecodePayload[T any](env *Envelope) (T, error) {
 	var v T
-	if err := json.Unmarshal(env.Payload, &v); err != nil {
+	decoder := json.NewDecoder(bytes.NewReader(env.Payload))
+	decoder.UseNumber()
+	if err := decoder.Decode(&v); err != nil {
 		return v, err
 	}
 	return v, nil

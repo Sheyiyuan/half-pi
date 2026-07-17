@@ -84,7 +84,7 @@ func (h *Hand) checkAndSend(parent context.Context, m config.MonitorConfig) {
 			output = timeoutMsg
 		}
 	}
-	output = truncateBytes(output, limit)
+	output, _ = truncateBytes(output, limit)
 
 	// 命令失败（exit code ≠ 0）始终触发；有 condition 时按表达式决策
 	triggered := err != nil

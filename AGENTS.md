@@ -252,7 +252,7 @@ make test         # 运行全部 4 个模块的测试
 - [ ] **Face** 远程交互终端（TUI / IM Bot）——占位 stub 已创建（`modules/half-pi-face/`，仅打印一行字），go.work 已注册，可编译
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
-- [ ] Mind → Hand 协议 v2 — 审批语义、取消协议、并发状态模型见 `docs/mind-hand-mvp-followups.md`
+- [ ] Mind → Hand 远程执行闭环 — 审批语义、取消协议、并发状态模型见 `docs/mind-hand-mvp-followups.md`
 
 ---
 
@@ -332,5 +332,5 @@ make test         # 运行全部 4 个模块的测试
 ## 下一步
 
 1. **Face** — 远程交互终端（TUI / IM Bot）
-2. Mind → Hand 协议 v2（审批语义、取消协议、并发状态）
+2. Mind → Hand 远程执行闭环（审批语义、取消协议、并发状态）
 3. `/compact` 上下文压缩

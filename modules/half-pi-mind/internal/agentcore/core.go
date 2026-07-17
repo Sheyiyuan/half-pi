@@ -148,27 +148,26 @@ func (c *Core) SetHub(h *hub.Hub) {
 		switch peer.Type {
 		case hub.PeerHand:
 			switch msg.Type {
-			case protocol.TypeRPCResult:
-				result, _ := protocol.DecodePayload[protocol.RPCResult](&msg)
-				c.pendingMu.Lock()
-				pc, ok := c.pendingCalls[result.ID]
-				if ok && pc.expectedPeer == peer.ID {
-					delete(c.pendingCalls, result.ID)
-					c.pendingMu.Unlock()
-					select {
-					case pc.ch <- msg:
-					default:
-					}
-				} else {
-					c.pendingMu.Unlock()
-					if ok {
-						c.publish(events.LevelWarn, events.TypeSystem,
-							fmt.Sprintf("[%s] RPCResult 来源不匹配: 期望 %s", peer.ID, pc.expectedPeer))
-					} else {
-						c.publish(events.LevelDebug, events.TypeToolResult,
-							fmt.Sprintf("[%s] 孤立 RPCResult: %s", peer.ID, result.ID))
-					}
+			case protocol.TypeRPCAccepted:
+				accepted, err := protocol.DecodePayload[protocol.RPCAccepted](&msg)
+				if err != nil || protocol.ValidateRPCAccepted(accepted) != nil {
+					return
 				}
+				c.deliverPending(peer, accepted.RunID, msg, false, "RPCAccepted")
+
+			case protocol.TypeRPCRejected:
+				rejected, err := protocol.DecodePayload[protocol.RPCRejected](&msg)
+				if err != nil || protocol.ValidateRPCRejected(rejected) != nil {
+					return
+				}
+				c.deliverPending(peer, rejected.RunID, msg, true, "RPCRejected")
+
+			case protocol.TypeRPCResult:
+				result, err := protocol.DecodePayload[protocol.RPCResult](&msg)
+				if err != nil || protocol.ValidateRPCResult(result) != nil {
+					return
+				}
+				c.deliverPending(peer, result.RunID, msg, true, "RPCResult")
 
 			case protocol.TypeHandInfoResp:
 				resp, _ := protocol.DecodePayload[protocol.HandInfoResp](&msg)
@@ -207,6 +206,40 @@ func (c *Core) SetHub(h *hub.Hub) {
 				fmt.Sprintf("unhandled message from %s type=%s", peer.ID, msg.Type))
 		}
 	})
+}
+
+func (c *Core) deliverPending(peer *hub.Peer, id string, msg protocol.Envelope, terminal bool, label string) {
+	c.pendingMu.Lock()
+	pc, ok := c.pendingCalls[id]
+	if ok && pc.expectedPeer == peer.ID {
+		if msg.Type == protocol.TypeRPCAccepted {
+			pc.accepted = true
+		}
+		if msg.Type == protocol.TypeRPCRejected && pc.accepted {
+			rejected, err := protocol.DecodePayload[protocol.RPCRejected](&msg)
+			if err == nil && rejected.Code == protocol.RejectDuplicateRun {
+				c.pendingMu.Unlock()
+				return
+			}
+		}
+		if terminal {
+			delete(c.pendingCalls, id)
+		}
+		c.pendingMu.Unlock()
+		select {
+		case pc.ch <- msg:
+		default:
+		}
+		return
+	}
+	c.pendingMu.Unlock()
+	if ok {
+		c.publish(events.LevelWarn, events.TypeSystem,
+			fmt.Sprintf("[%s] %s 来源不匹配: 期望 %s", peer.ID, label, pc.expectedPeer))
+		return
+	}
+	c.publish(events.LevelDebug, events.TypeToolResult,
+		fmt.Sprintf("[%s] 孤立 %s: %s", peer.ID, label, id))
 }
 
 func truncate(s string) string {

@@ -3,6 +3,7 @@ package wss
 import (
 	"bytes"
 	"testing"
+	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 )
@@ -119,7 +120,12 @@ func TestEncryptDecryptEnvelopePayload(t *testing.T) {
 		To:        "hand-1",
 		Seq:       1,
 	}
-	payload := protocol.RPC{ID: "rpc-1", Tool: "read_file", Args: map[string]any{"path": "README.md"}}
+	payload := protocol.RPC{
+		RunID:      "rpc-1",
+		Tool:       "read_file",
+		Args:       map[string]any{"path": "README.md"},
+		DeadlineAt: time.Now().Add(time.Minute).UnixMilli(),
+	}
 
 	if err := c.EncryptEnvelopePayload(&env, payload); err != nil {
 		t.Fatalf("EncryptEnvelopePayload: %v", err)
@@ -132,7 +138,7 @@ func TestEncryptDecryptEnvelopePayload(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DecryptEnvelopePayload: %v", err)
 	}
-	if got.ID != payload.ID || got.Tool != payload.Tool {
+	if got.RunID != payload.RunID || got.Tool != payload.Tool {
 		t.Fatalf("payload mismatch: %+v", got)
 	}
 

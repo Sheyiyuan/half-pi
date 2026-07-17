@@ -12,6 +12,7 @@ import (
 type pendingCall struct {
 	ch           chan protocol.Envelope
 	expectedPeer string
+	accepted     bool
 }
 
 // ActiveHand 返回当前会话默认 Hand ID。
@@ -33,7 +34,7 @@ func (c *Core) SetActiveHand(handID string) error {
 // PendingCall 注册等待 Hand 响应的通道。返回只读通道和取消函数。
 // expectedPeer 用于校验响应来源，不匹配时拒绝投递。
 func (c *Core) PendingCall(id string, timeout time.Duration, expectedPeer string) (<-chan protocol.Envelope, func()) {
-	ch := make(chan protocol.Envelope, 1)
+	ch := make(chan protocol.Envelope, 2)
 	pc := &pendingCall{ch: ch, expectedPeer: expectedPeer}
 	c.pendingMu.Lock()
 	c.pendingCalls[id] = pc
@@ -58,19 +59,15 @@ func (c *Core) PendingCall(id string, timeout time.Duration, expectedPeer string
 // CheckAndConfirm 执行工具安全检查并按需请求用户确认。
 func (c *Core) CheckAndConfirm(toolName string, args json.RawMessage, llmConfirm bool) (blocked bool, reason string) {
 	_, decision, reason, found := executor.CheckTool(toolName, args)
-	shouldBlock := false
-
 	if !found {
-		shouldBlock = true
-	} else {
-		switch decision {
-		case executor.DecisionDeny:
-			shouldBlock = true
-		case executor.DecisionConfirm:
-		}
+		return true, reason
+	}
+	if decision == executor.DecisionDeny {
+		return true, reason
 	}
 
-	needsConfirm := llmConfirm || reason != ""
+	shouldBlock := false
+	needsConfirm := llmConfirm || decision == executor.DecisionConfirm
 	if reason == "" && llmConfirm {
 		reason = "LLM 标记为需确认操作"
 	}
@@ -83,7 +80,9 @@ func (c *Core) CheckAndConfirm(toolName string, args json.RawMessage, llmConfirm
 		} else if c.Mode == "strict" {
 			shouldBlock = true
 		} else if llmConfirm || c.Mode == "normal" {
-			if c.approver != nil {
+			if c.approver == nil {
+				shouldBlock = true
+			} else {
 				r := c.approver.Confirm(toolName, reason)
 				switch r {
 				case ConfirmAllow:

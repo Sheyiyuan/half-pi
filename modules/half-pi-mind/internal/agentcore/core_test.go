@@ -5,7 +5,10 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
@@ -22,12 +25,84 @@ func (s *stubLLM) Chat(ctx context.Context, req *llm.LLMRequest) (*llm.LLMRespon
 // stubExecutor is a no-op tool executor for testing.
 type stubExecutor struct{}
 
+type allowApprover struct{}
+
+func (allowApprover) Confirm(string, string) ConfirmResult { return ConfirmAllow }
+
 func (s *stubExecutor) ExecuteTool(ctx context.Context, name string, args json.RawMessage) *executor.ToolResult {
 	return &executor.ToolResult{Success: true, Output: "ok"}
 }
 
 func (s *stubExecutor) Tools() []executor.Tool {
 	return nil
+}
+
+func TestCheckAndConfirmCannotOverrideDeny(t *testing.T) {
+	const toolName = "phase1_mind_deny_tool"
+	executor.Register(executor.Tool{
+		Name: toolName,
+		Check: func(json.RawMessage) (executor.Decision, string) {
+			return executor.DecisionDeny, "hard deny"
+		},
+		Execute: func(context.Context, json.RawMessage) *executor.ToolResult {
+			t.Fatal("denied tool must not execute")
+			return nil
+		},
+	})
+	core, err := New(&stubLLM{}, &stubExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	core.SetApprover(allowApprover{})
+	blocked, reason := core.CheckAndConfirm(toolName, json.RawMessage(`{}`), true)
+	if !blocked {
+		t.Fatal("DecisionDeny must not be overridden by approval")
+	}
+	if reason != "hard deny" {
+		t.Fatalf("reason = %q, want hard deny", reason)
+	}
+}
+
+func TestCheckAndConfirmRequiresApprover(t *testing.T) {
+	const toolName = "phase1_mind_confirm_tool"
+	executor.Register(executor.Tool{
+		Name:           toolName,
+		DefaultConfirm: true,
+		Execute: func(context.Context, json.RawMessage) *executor.ToolResult {
+			return &executor.ToolResult{Success: true}
+		},
+	})
+	core, err := New(&stubLLM{}, &stubExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked, _ := core.CheckAndConfirm(toolName, json.RawMessage(`{}`), false)
+	if !blocked {
+		t.Fatal("confirmation-required tool must be blocked without an approver")
+	}
+}
+
+func TestPendingDuplicateRejectionDoesNotOverrideAcceptedRun(t *testing.T) {
+	core, err := New(&stubLLM{}, &stubExecutor{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ch, cancel := core.PendingCall("run-1", 0, "hand-1")
+	defer cancel()
+	peer := &hub.Peer{ID: "hand-1"}
+	accepted, _ := protocol.NewEnvelope("", protocol.TypeRPCAccepted, protocol.RPCAccepted{RunID: "run-1", StartedAt: time.Now().UnixMilli()})
+	core.deliverPending(peer, "run-1", *accepted, false, "RPCAccepted")
+	rejected, _ := protocol.NewEnvelope("", protocol.TypeRPCRejected, protocol.RPCRejected{RunID: "run-1", Code: protocol.RejectDuplicateRun})
+	core.deliverPending(peer, "run-1", *rejected, true, "RPCRejected")
+	result, _ := protocol.NewEnvelope("", protocol.TypeRPCResult, protocol.RPCResult{RunID: "run-1", Success: true})
+	core.deliverPending(peer, "run-1", *result, true, "RPCResult")
+
+	if got := <-ch; got.Type != protocol.TypeRPCAccepted {
+		t.Fatalf("first message = %q", got.Type)
+	}
+	if got := <-ch; got.Type != protocol.TypeRPCResult {
+		t.Fatalf("second message = %q, duplicate rejection should be ignored", got.Type)
+	}
 }
 
 func TestNewDefaults(t *testing.T) {

@@ -41,10 +41,22 @@ func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 		Hub:        h,
 		ActiveHand: func() string { return "remote-hand" },
 		PendingCall: func(id string, timeout time.Duration, expectedPeer string) (<-chan protocol.Envelope, func()) {
-			ch := make(chan protocol.Envelope, 1)
+			ch := make(chan protocol.Envelope, 2)
 			h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
-				result, err := protocol.DecodePayload[protocol.RPCResult](&msg)
-				if err == nil && msg.Type == protocol.TypeRPCResult && result.ID == id && peer.ID == expectedPeer {
+				var runID string
+				switch msg.Type {
+				case protocol.TypeRPCAccepted:
+					accepted, err := protocol.DecodePayload[protocol.RPCAccepted](&msg)
+					if err == nil {
+						runID = accepted.RunID
+					}
+				case protocol.TypeRPCResult:
+					result, err := protocol.DecodePayload[protocol.RPCResult](&msg)
+					if err == nil {
+						runID = result.RunID
+					}
+				}
+				if runID == id && peer.ID == expectedPeer {
 					ch <- msg
 				}
 			})
@@ -79,15 +91,26 @@ func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 	if err != nil {
 		t.Fatalf("decode rpc: %v", err)
 	}
-	if rpc.SkipChecks {
-		t.Fatal("remote-only tool should not skip Hand checks")
+	if rpc.DeadlineAt <= time.Now().UnixMilli() || rpc.DeadlineAt > time.Now().Add(1100*time.Millisecond).UnixMilli() {
+		t.Fatalf("rpc deadline is outside expected range: %d", rpc.DeadlineAt)
 	}
-	if rpc.TimeoutMs != 1000 {
-		t.Fatalf("rpc timeout_ms = %d, want 1000", rpc.TimeoutMs)
+	if err := protocol.ValidateApproval(rpc.Approval, rpc.RunID, "remote-hand", rpc.Tool, rpc.Args, time.Now()); err != nil {
+		t.Fatalf("invalid Mind approval: %v", err)
+	}
+
+	accepted, err := protocol.NewEnvelope("", protocol.TypeRPCAccepted, protocol.RPCAccepted{
+		RunID:     rpc.RunID,
+		StartedAt: time.Now().UnixMilli(),
+	})
+	if err != nil {
+		t.Fatalf("create accepted: %v", err)
+	}
+	if err := session.Send(*accepted); err != nil {
+		t.Fatalf("send accepted: %v", err)
 	}
 
 	reply, err := protocol.NewEnvelope("", protocol.TypeRPCResult, protocol.RPCResult{
-		ID:      rpc.ID,
+		RunID:   rpc.RunID,
 		Success: true,
 		Output:  "ok",
 	})

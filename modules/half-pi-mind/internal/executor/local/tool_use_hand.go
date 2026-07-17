@@ -1,6 +1,7 @@
 package local
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -37,7 +38,9 @@ func init() {
 				Confirm   bool           `json:"confirm"`
 				TimeoutMs int            `json:"timeout_ms"`
 			}
-			if err := json.Unmarshal(args, &params); err != nil {
+			decoder := json.NewDecoder(bytes.NewReader(args))
+			decoder.UseNumber()
+			if err := decoder.Decode(&params); err != nil {
 				return &executor.ToolResult{Error: fmt.Sprintf("参数解析失败: %v", err)}
 			}
 			if params.Tool == "" {
@@ -58,7 +61,8 @@ func init() {
 				return &executor.ToolResult{Error: fmt.Sprintf("Hand %q 不在线或不存在", handID)}
 			}
 
-			// 2. 安全检查
+			// 2. 生成 run 并完成 Mind 侧安全检查
+			runID := protocol.MustNewMsgID()
 			cleanArgs, _ := json.Marshal(params.Args)
 			blocked, reason := remoteBridge.CheckAndConfirm(params.Tool, cleanArgs, params.Confirm)
 			if blocked {
@@ -67,26 +71,38 @@ func init() {
 					Output:  fmt.Sprintf("⚠️ 操作被拒绝: %s", reason),
 				}
 			}
-			_, localKnown := executor.FindTool(params.Tool)
-
 			// 3. 超时
 			timeoutMs := params.TimeoutMs
 			if timeoutMs <= 0 {
 				timeoutMs = 30000
 			}
 			timeout := time.Duration(timeoutMs) * time.Millisecond
+			now := time.Now()
+			deadline := now.Add(timeout)
+			digest, err := protocol.ApprovalDigest(runID, handID, params.Tool, params.Args)
+			if err != nil {
+				return &executor.ToolResult{Error: fmt.Sprintf("创建审批摘要失败: %v", err)}
+			}
+			approval := &protocol.Approval{
+				Approved:   true,
+				Source:     "mind",
+				Reason:     reason,
+				OneShot:    true,
+				ArgsDigest: digest,
+				ApprovedAt: now.UnixMilli(),
+				ExpiresAt:  deadline.UnixMilli(),
+			}
 
 			// 4. 发送 RPC
-			rpcID := protocol.MustNewMsgID()
-			ch, cancel := remoteBridge.PendingCall(rpcID, 0, handID)
+			ch, cancel := remoteBridge.PendingCall(runID, 0, handID)
 			defer cancel()
 
 			rpcEnv, err := protocol.NewEnvelope("", protocol.TypeRPC, protocol.RPC{
-				ID:         rpcID,
+				RunID:      runID,
 				Tool:       params.Tool,
 				Args:       params.Args,
-				SkipChecks: localKnown,
-				TimeoutMs:  timeoutMs,
+				DeadlineAt: deadline.UnixMilli(),
+				Approval:   approval,
 			})
 			if err != nil {
 				return &executor.ToolResult{Error: fmt.Sprintf("创建 RPC 失败: %v", err)}
@@ -97,29 +113,44 @@ func init() {
 			}
 
 			// 5. 等待结果
-			select {
-			case env := <-ch:
-				result, err := protocol.DecodePayload[protocol.RPCResult](&env)
-				if err != nil {
-					return &executor.ToolResult{Error: fmt.Sprintf("解析 RPC 结果失败: %v", err)}
+			timer := time.NewTimer(timeout)
+			defer timer.Stop()
+			for {
+				select {
+				case env := <-ch:
+					switch env.Type {
+					case protocol.TypeRPCAccepted:
+						continue
+					case protocol.TypeRPCRejected:
+						rejected, err := protocol.DecodePayload[protocol.RPCRejected](&env)
+						if err != nil {
+							return &executor.ToolResult{Error: fmt.Sprintf("解析 RPC 拒绝失败: %v", err)}
+						}
+						return &executor.ToolResult{
+							Error: fmt.Sprintf("[%s] Hand 拒绝执行 (%s): %s", handID, rejected.Code, rejected.Reason),
+							Data:  rejected,
+						}
+					case protocol.TypeRPCResult:
+						result, err := protocol.DecodePayload[protocol.RPCResult](&env)
+						if err != nil {
+							return &executor.ToolResult{Error: fmt.Sprintf("解析 RPC 结果失败: %v", err)}
+						}
+						toolResult := &executor.ToolResult{
+							Success: result.Success,
+							Output:  fmt.Sprintf("[%s] %s", handID, result.Output),
+							Error:   result.Error,
+							Data:    result,
+						}
+						if toolResult.Error != "" {
+							toolResult.Error = fmt.Sprintf("[%s] %s", handID, toolResult.Error)
+						}
+						return toolResult
+					}
+				case <-timer.C:
+					return &executor.ToolResult{Error: fmt.Sprintf("Hand %q 执行超时 (%v)", handID, timeout)}
+				case <-ctx.Done():
+					return &executor.ToolResult{Error: "操作已取消"}
 				}
-				toolResult := &executor.ToolResult{
-					Success: result.Success,
-					Output:  result.Output,
-					Error:   result.Error,
-				}
-				// 前方加上 Hand 来源标识
-				toolResult.Output = fmt.Sprintf("[%s] %s", handID, toolResult.Output)
-				if toolResult.Error != "" {
-					toolResult.Error = fmt.Sprintf("[%s] %s", handID, toolResult.Error)
-				}
-				return toolResult
-
-			case <-time.After(timeout):
-				return &executor.ToolResult{Error: fmt.Sprintf("Hand %q 执行超时 (%v)", handID, timeout)}
-
-			case <-ctx.Done():
-				return &executor.ToolResult{Error: "操作已取消"}
 			}
 		},
 	})

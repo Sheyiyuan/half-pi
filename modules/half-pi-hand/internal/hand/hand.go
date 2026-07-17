@@ -5,10 +5,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
+	"unicode/utf8"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 
 	// 注册通用工具
 	_ "github.com/Sheyiyuan/half-pi/modules/half-pi-core/tools"
@@ -17,25 +18,19 @@ import (
 
 // Hand 远程执行节点，通过 WebSocket 接收 Mind 的 RPC 请求。
 type Hand struct {
-	conn          *wss.SessionConn
-	cfg           *config.Config
-	checkedRunner *executor.Runner // 走 Tool.Check / DefaultConfirm，Confirm 自动拒绝
-	trustedRunner *executor.Runner // Mind 已安检，跳过所有检查
+	conn *wss.SessionConn
+	cfg  *config.Config
+
+	seenMu   sync.Mutex
+	seenRuns map[string]struct{}
 }
 
 // New 创建 Hand 实例。
 func New(conn *wss.SessionConn, cfg *config.Config) *Hand {
 	return &Hand{
-		conn: conn,
-		cfg:  cfg,
-		checkedRunner: executor.NewRunner(executor.ExecutionPolicy{
-			Confirm:    nil,
-			SkipChecks: false,
-		}),
-		trustedRunner: executor.NewRunner(executor.ExecutionPolicy{
-			Confirm:    nil,
-			SkipChecks: true,
-		}),
+		conn:     conn,
+		cfg:      cfg,
+		seenRuns: make(map[string]struct{}),
 	}
 }
 
@@ -94,26 +89,35 @@ func (h *Hand) maxOutputSize() int64 {
 	return size
 }
 
-func (h *Hand) sendRPCReply(rpcID, msgID string, success bool, output, errMsg string) {
+func (h *Hand) sendRPCReply(runID string, success bool, output, errMsg string, truncated bool) error {
 	reply := protocol.RPCResult{
-		ID:      rpcID,
-		Success: success,
-		Output:  output,
-		Error:   errMsg,
+		RunID:     runID,
+		Success:   success,
+		Output:    output,
+		Error:     errMsg,
+		Truncated: truncated,
 	}
-	env, err := protocol.NewEnvelope(msgID, protocol.TypeRPCResult, reply)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "create rpc result failed: %v\n", err)
-		return
-	}
-	if err := h.conn.Send(*env); err != nil {
-		fmt.Fprintf(os.Stderr, "send rpc result failed: %v\n", err)
-	}
+	return h.sendRPCMessage(protocol.TypeRPCResult, reply)
 }
 
-func truncateBytes(s string, max int64) string {
-	if int64(len(s)) <= max {
-		return s
+func (h *Hand) sendRPCMessage(typ string, payload any) error {
+	env, err := protocol.NewEnvelope("", typ, payload)
+	if err != nil {
+		return fmt.Errorf("create %s: %w", typ, err)
 	}
-	return s[:max] + "\n…(truncated)"
+	if err := h.conn.Send(*env); err != nil {
+		return fmt.Errorf("send %s: %w", typ, err)
+	}
+	return nil
+}
+
+func truncateBytes(s string, max int64) (string, bool) {
+	if int64(len(s)) <= max {
+		return s, false
+	}
+	end := int(max)
+	for end > 0 && !utf8.ValidString(s[:end]) {
+		end--
+	}
+	return s[:end] + "\n…(truncated)", true
 }

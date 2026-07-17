@@ -3,6 +3,7 @@ package hand
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"time"
@@ -15,44 +16,126 @@ import (
 func (h *Hand) handleRPC(ctx context.Context, env protocol.Envelope) {
 	rpc, err := protocol.DecodePayload[protocol.RPC](&env)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "decode rpc failed: %v\n", err)
+		var header struct {
+			RunID string `json:"run_id"`
+		}
+		if headerErr := json.Unmarshal(env.Payload, &header); headerErr == nil && header.RunID != "" {
+			h.rejectRPC(header.RunID, protocol.RejectInvalidRequest, fmt.Sprintf("decode rpc: %v", err))
+		} else {
+			fmt.Fprintf(os.Stderr, "decode rpc failed: %v\n", err)
+		}
+		return
+	}
+	now := time.Now()
+	if err := protocol.ValidateRPC(rpc, now); err != nil {
+		code := protocol.RejectInvalidRequest
+		if rpc.DeadlineAt > 0 && rpc.DeadlineAt <= now.UnixMilli() {
+			code = protocol.RejectDeadlineExceeded
+		}
+		h.rejectRPC(rpc.RunID, code, err.Error())
 		return
 	}
 
-	if !h.checkToolAllowed(rpc.Tool) {
-		h.sendRPCReply(rpc.ID, env.MsgID, false, "",
-			fmt.Sprintf("tool %q is not allowed by hand policy", rpc.Tool))
+	tool, found := executor.FindTool(rpc.Tool)
+	if !found {
+		h.rejectRPC(rpc.RunID, protocol.RejectUnknownTool, fmt.Sprintf("tool %q is not registered", rpc.Tool))
+		return
+	}
+	if tool.Execute == nil {
+		h.rejectRPC(rpc.RunID, protocol.RejectInternalError, fmt.Sprintf("tool %q has no execute function", rpc.Tool))
+		return
+	}
+	if code := h.toolPermissionRejection(rpc.Tool); code != "" {
+		h.rejectRPC(rpc.RunID, code, fmt.Sprintf("tool %q is not allowed by Hand policy", rpc.Tool))
 		return
 	}
 
 	args, err := json.Marshal(rpc.Args)
 	if err != nil {
-		h.sendRPCReply(rpc.ID, env.MsgID, false, "", fmt.Sprintf("marshal args: %v", err))
+		h.rejectRPC(rpc.RunID, protocol.RejectInvalidRequest, fmt.Sprintf("marshal args: %v", err))
 		return
 	}
 
-	// Mind 通过 use_hand 已安检 → 跳过 Hand 侧 Tool.Check / DefaultConfirm
-	runner := h.trustedRunner
-	if !rpc.SkipChecks {
-		runner = h.checkedRunner
+	_, decision, reason, _ := executor.CheckTool(rpc.Tool, args)
+	switch decision {
+	case executor.DecisionDeny:
+		h.rejectRPC(rpc.RunID, protocol.RejectCheckFailed, reason)
+		return
+	case executor.DecisionConfirm:
+		if err := protocol.ValidateApproval(rpc.Approval, rpc.RunID, h.conn.Session.LocalID, rpc.Tool, rpc.Args, now); err != nil {
+			code := protocol.RejectApprovalRequired
+			switch {
+			case errors.Is(err, protocol.ErrApprovalExpired):
+				code = protocol.RejectApprovalExpired
+			case errors.Is(err, protocol.ErrApprovalDigestMismatch):
+				code = protocol.RejectApprovalDigestMismatch
+			}
+			h.rejectRPC(rpc.RunID, code, err.Error())
+			return
+		}
 	}
-	execCtx := ctx
-	cancel := func() {}
-	if rpc.TimeoutMs > 0 {
-		execCtx, cancel = context.WithTimeout(ctx, time.Duration(rpc.TimeoutMs)*time.Millisecond)
-	}
-	defer cancel()
 
-	result := runner.ExecuteTool(execCtx, rpc.Tool, args)
+	accepted, err := h.acceptRun(rpc.RunID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "send rpc accepted failed: %v\n", err)
+		return
+	}
+	if !accepted {
+		h.rejectRPC(rpc.RunID, protocol.RejectDuplicateRun, "run_id has already been accepted")
+		return
+	}
+
+	execCtx, cancel := context.WithDeadline(ctx, time.UnixMilli(rpc.DeadlineAt))
+	defer cancel()
+	if err := execCtx.Err(); err != nil {
+		if sendErr := h.sendRPCReply(rpc.RunID, false, "", err.Error(), false); sendErr != nil {
+			fmt.Fprintf(os.Stderr, "send expired rpc result failed: %v\n", sendErr)
+		}
+		return
+	}
+
+	result := tool.Execute(execCtx, args)
+	if result == nil {
+		result = &executor.ToolResult{Error: "tool returned nil result"}
+	}
 
 	output := result.Output
 	errMsg := result.Error
+	truncated := false
 	if maxSize := h.maxOutputSize(); maxSize > 0 {
-		output = truncateBytes(output, maxSize)
-		errMsg = truncateBytes(errMsg, maxSize)
+		var outputTruncated, errorTruncated bool
+		output, outputTruncated = truncateBytes(output, maxSize)
+		errMsg, errorTruncated = truncateBytes(errMsg, maxSize)
+		truncated = outputTruncated || errorTruncated
 	}
 
-	h.sendRPCReply(rpc.ID, env.MsgID, result.Success, output, errMsg)
+	if err := h.sendRPCReply(rpc.RunID, result.Success, output, errMsg, truncated); err != nil {
+		fmt.Fprintf(os.Stderr, "send rpc result failed: %v\n", err)
+	}
+}
+
+func (h *Hand) rejectRPC(runID string, code protocol.RejectCode, reason string) {
+	if err := h.sendRPCMessage(protocol.TypeRPCRejected, protocol.RPCRejected{
+		RunID:  runID,
+		Code:   code,
+		Reason: reason,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "send rpc rejection failed: %v\n", err)
+	}
+}
+
+func (h *Hand) acceptRun(runID string) (bool, error) {
+	h.seenMu.Lock()
+	defer h.seenMu.Unlock()
+	if _, exists := h.seenRuns[runID]; exists {
+		return false, nil
+	}
+	h.seenRuns[runID] = struct{}{}
+	err := h.sendRPCMessage(protocol.TypeRPCAccepted, protocol.RPCAccepted{
+		RunID:     runID,
+		StartedAt: time.Now().UnixMilli(),
+	})
+	return true, err
 }
 
 // handleHandInfoReq 返回 Hand 的动态信息（工具列表等）。
@@ -93,23 +176,27 @@ func (h *Hand) handleHandInfoReq(env protocol.Envelope) {
 
 // checkToolAllowed 检查工具是否在权限范围内。
 // 优先级：deny > allow；allow 为空时全部放行。
-func (h *Hand) checkToolAllowed(name string) bool {
+func (h *Hand) toolPermissionRejection(name string) protocol.RejectCode {
 	if h.cfg == nil {
-		return true
+		return ""
 	}
 	p := h.cfg.Hand.Permission
 	for _, d := range p.DenyTools {
 		if d == name {
-			return false
+			return protocol.RejectDenyTools
 		}
 	}
 	if len(p.AllowTools) == 0 {
-		return true
+		return ""
 	}
 	for _, a := range p.AllowTools {
 		if a == name {
-			return true
+			return ""
 		}
 	}
-	return false
+	return protocol.RejectAllowToolsMiss
+}
+
+func (h *Hand) checkToolAllowed(name string) bool {
+	return h.toolPermissionRejection(name) == ""
 }
