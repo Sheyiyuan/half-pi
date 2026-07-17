@@ -126,28 +126,28 @@ func TestSetModeUpdatesSecurityPolicy(t *testing.T) {
 	core, _ := New(&stubLLM{}, &stubExecutor{})
 
 	// default is normal → ls should be allowed
-	decision, _ := security.Check("ls -la")
+	decision, _ := core.policy.Check("ls -la")
 	if decision != security.Allow {
 		t.Fatalf("default policy should allow ls, got %v", decision)
 	}
 
 	// switch to strict → ls should NOT be allowed
 	core.SetMode("strict")
-	decision, _ = security.Check("ls -la")
+	decision, _ = core.policy.Check("ls -la")
 	if decision == security.Allow {
 		t.Fatal("strict mode should not allow ls")
 	}
 
 	// switch to trust → ls should be allowed
 	core.SetMode("trust")
-	decision, _ = security.Check("ls -la")
+	decision, _ = core.policy.Check("ls -la")
 	if decision != security.Allow {
 		t.Errorf("trust mode should allow ls, got %v", decision)
 	}
 
 	// switch to yolo → ls should be allowed (unless blacklisted)
 	core.SetMode("yolo")
-	decision, _ = security.Check("ls -la")
+	decision, _ = core.policy.Check("ls -la")
 	if decision != security.Allow {
 		t.Errorf("yolo mode should allow ls, got %v", decision)
 	}

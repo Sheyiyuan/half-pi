@@ -10,12 +10,11 @@ import (
 func (r *Repl) handleCommand(input string) bool {
 	switch {
 	case input == "/debug":
-		r.core.Debug = !r.core.Debug
-		r.emit(events.LevelInfo, events.TypeSystem, fmt.Sprintf("debug mode: %v", r.core.Debug))
+		r.emit(events.LevelInfo, events.TypeSystem, fmt.Sprintf("debug mode: %v", r.core.ToggleDebug()))
 		return true
 
 	case input == "/mode":
-		r.emit(events.LevelInfo, events.TypeSystem, fmt.Sprintf("current mode: %s", r.core.Mode))
+		r.emit(events.LevelInfo, events.TypeSystem, fmt.Sprintf("current mode: %s", r.core.SecurityMode()))
 		return true
 
 	case strings.HasPrefix(input, "/mode "):
@@ -44,6 +43,30 @@ func (r *Repl) handleCommand(input string) bool {
 
 	case input == "/hand":
 		r.handleHandList()
+		return true
+
+	case strings.HasPrefix(input, "/hand select "):
+		r.handleHandSelect(strings.TrimSpace(strings.TrimPrefix(input, "/hand select ")))
+		return true
+
+	case input == "/hand online":
+		r.handleHandOnline()
+		return true
+
+	case strings.HasPrefix(input, "/hand info "):
+		r.handleHandInfo(strings.TrimSpace(strings.TrimPrefix(input, "/hand info ")))
+		return true
+
+	case strings.HasPrefix(input, "/hand exec "):
+		r.handleHandExec(strings.TrimSpace(strings.TrimPrefix(input, "/hand exec ")))
+		return true
+
+	case strings.HasPrefix(input, "/hand cancel "):
+		r.handleHandCancel(strings.TrimSpace(strings.TrimPrefix(input, "/hand cancel ")))
+		return true
+
+	case strings.HasPrefix(input, "/hand run "):
+		r.handleHandRun(strings.TrimSpace(strings.TrimPrefix(input, "/hand run ")))
 		return true
 
 	case strings.HasPrefix(input, "/hand add "):
@@ -124,15 +147,22 @@ func (r *Repl) handleSessionSwitch(targetPrefix string) {
 	if err := r.core.SaveSession(); err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("save session: %v", err))
 	}
-	if err := r.core.SetStore(r.store, targetID); err != nil {
+	core, bridge, err := r.switchActor(targetID)
+	if err != nil {
 		fmt.Printf("session not found: %s\n", targetID)
 		return
 	}
+	core.SetApprover(r.approver)
+	r.core, r.bridge = core, bridge
 	fmt.Printf("switched to session %s\n", shortID(targetID))
 }
 
 func (r *Repl) emit(level, typ, msg string) {
-	r.bus.PublishSync(events.New("", "repl", level, typ, msg))
+	r.emitForSession(r.core.SessionID(), level, typ, msg)
+}
+
+func (r *Repl) emitForSession(sessionID, level, typ, msg string) {
+	r.bus.PublishSync(events.New(sessionID, "repl", level, typ, msg))
 }
 
 func shortID(id string) string {

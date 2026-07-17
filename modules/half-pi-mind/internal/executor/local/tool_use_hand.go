@@ -98,14 +98,19 @@ func init() {
 				if err := bridge.Runs.RejectLocal(runID, protocol.RejectCheckFailed, reason); err != nil {
 					return &executor.ToolResult{Error: fmt.Sprintf("记录本地拒绝失败: %v", err)}
 				}
-				return &executor.ToolResult{Success: true, Output: fmt.Sprintf("⚠️ 操作被拒绝: %s", reason)}
+				view, _ := RemoteRunSnapshot(bridge, runID)
+				return &executor.ToolResult{
+					Success: true,
+					Output:  fmt.Sprintf("[run=%s hand=%s status=%s] 操作被拒绝: %s", runID, handID, view.Status, reason),
+					Data:    view,
+				}
 			}
 			approval := &protocol.Approval{
 				Approved: true, Source: "mind", Mode: mode, Reason: reason, OneShot: true,
 				ArgsDigest: digest, ApprovedAt: now.UnixMilli(), ExpiresAt: deadline.UnixMilli(),
 			}
 			if err := bridge.Runs.Transition(runID, protocol.RunApproved); err != nil {
-				return &executor.ToolResult{Error: fmt.Sprintf("审批状态更新失败: %v", err)}
+				return remoteRunFailure(bridge, runID, fmt.Sprintf("审批状态更新失败: %v", err))
 			}
 			done, release, _ := bridge.Runs.Wait(runID)
 			defer release()
@@ -118,18 +123,20 @@ func init() {
 				Approval:   approval,
 			})
 			if err != nil {
-				return &executor.ToolResult{Error: fmt.Sprintf("创建 RPC 失败: %v", err)}
+				_ = bridge.Runs.RejectLocal(runID, protocol.RejectInvalidRequest, err.Error())
+				return remoteRunResult(bridge, runID, handID, timeout)
 			}
 
 			if err := bridge.Runs.Transition(runID, protocol.RunSent); err != nil {
-				return &executor.ToolResult{Error: fmt.Sprintf("发送状态更新失败: %v", err)}
+				return remoteRunFailure(bridge, runID, fmt.Sprintf("发送状态更新失败: %v", err))
 			}
 			operationCtx, stopOperation := context.WithTimeout(ctx, timeout)
 			defer stopOperation()
 			if err := bridge.Hub.SendPeerContext(operationCtx, peer, *rpcEnv); err != nil {
 				_ = bridge.Runs.Transition(runID, protocol.RunLost)
-				return &executor.ToolResult{Error: fmt.Sprintf("发送 RPC 失败: %v", err)}
+				return remoteRunResult(bridge, runID, handID, timeout)
 			}
+			notifyRunStarted(ctx, runID)
 
 			// 5. 等待终态；本地取消或超时会显式通知 Hand。
 			select {
@@ -141,9 +148,17 @@ func init() {
 				}
 				requestRemoteCancel(bridge, peer, runID, handID, reason)
 			}
-			return remoteRunResult(bridge, runID, handID, params.Tool, timeout)
+			return remoteRunResult(bridge, runID, handID, timeout)
 		},
 	})
+}
+
+func remoteRunFailure(bridge *RemoteBridge, runID, message string) *executor.ToolResult {
+	view, err := RemoteRunSnapshot(bridge, runID)
+	if err != nil {
+		return &executor.ToolResult{Error: message}
+	}
+	return &executor.ToolResult{Error: fmt.Sprintf("[run=%s status=%s] %s", runID, view.Status, message), Data: view}
 }
 
 const cancelAckTimeout = 3 * time.Second
@@ -166,40 +181,39 @@ func requestRemoteCancel(bridge *RemoteBridge, peer *hub.Peer, runID, handID, re
 	}
 }
 
-func remoteRunResult(bridge *RemoteBridge, runID, handID, tool string, timeout time.Duration) *executor.ToolResult {
+func remoteRunResult(bridge *RemoteBridge, runID, handID string, timeout time.Duration) *executor.ToolResult {
 	run, ok := bridge.Runs.Snapshot(runID)
 	if !ok {
 		return &executor.ToolResult{Error: fmt.Sprintf("远程执行记录 %q 不存在", runID)}
 	}
+	view := remoteRunView(run)
 	switch run.Status {
 	case protocol.RunSucceeded, protocol.RunFailed:
 		if run.Result == nil {
-			return &executor.ToolResult{Error: fmt.Sprintf("[%s] 远程执行缺少最终结果", handID)}
+			return &executor.ToolResult{Error: fmt.Sprintf("[run=%s hand=%s status=%s] 远程执行缺少最终结果", runID, handID, run.Status), Data: view}
 		}
 		result := run.Result
 		toolResult := &executor.ToolResult{
 			Success: result.Success,
-			Output:  fmt.Sprintf("[%s] %s", handID, result.Output),
-			Error:   result.Error,
-			Data: map[string]any{
-				"run_id": runID, "hand_id": handID, "tool": tool,
-				"status": run.Status, "truncated": result.Truncated,
-			},
+			Output: fmt.Sprintf("[run=%s hand=%s status=%s duration_ms=%d truncated=%t]\n%s",
+				runID, handID, run.Status, view.DurationMs, view.Truncated, result.Output),
+			Error: result.Error,
+			Data:  view,
 		}
 		if toolResult.Error != "" {
-			toolResult.Error = fmt.Sprintf("[%s] %s", handID, toolResult.Error)
+			toolResult.Error = fmt.Sprintf("[run=%s hand=%s status=%s] %s", runID, handID, run.Status, toolResult.Error)
 		}
 		return toolResult
 	case protocol.RunRejected:
 		if run.Rejection != nil {
-			return &executor.ToolResult{Error: fmt.Sprintf("[%s] Hand 拒绝执行 (%s): %s", handID, run.Rejection.Code, run.Rejection.Reason), Data: run.Rejection}
+			return &executor.ToolResult{Error: fmt.Sprintf("[run=%s hand=%s status=%s] Hand 拒绝执行 (%s): %s", runID, handID, run.Status, run.Rejection.Code, run.Rejection.Reason), Data: view}
 		}
 	case protocol.RunCancelled:
-		return &executor.ToolResult{Error: fmt.Sprintf("[%s] 操作已取消", handID), Data: run}
+		return &executor.ToolResult{Error: fmt.Sprintf("[run=%s hand=%s status=%s] 操作已取消", runID, handID, run.Status), Data: view}
 	case protocol.RunTimedOut:
-		return &executor.ToolResult{Error: fmt.Sprintf("Hand %q 执行超时 (%v)", handID, timeout), Data: run}
+		return &executor.ToolResult{Error: fmt.Sprintf("[run=%s hand=%s status=%s] 执行超时 (%v)", runID, handID, run.Status, timeout), Data: view}
 	case protocol.RunLost:
-		return &executor.ToolResult{Error: fmt.Sprintf("Hand %q 连接中断，执行状态未知", handID), Data: run}
+		return &executor.ToolResult{Error: fmt.Sprintf("[run=%s hand=%s status=%s] 连接中断，执行状态未知", runID, handID, run.Status), Data: view}
 	}
-	return &executor.ToolResult{Error: fmt.Sprintf("[%s] 远程执行未进入终态: %s", handID, run.Status), Data: run}
+	return &executor.ToolResult{Error: fmt.Sprintf("[%s] 远程执行未进入终态: %s", handID, run.Status), Data: view}
 }

@@ -11,29 +11,36 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 
 type Repl struct {
-	core    *agentcore.Core
-	bus     *events.EventBus
-	store   *store.Store
-	groupID string
-	hub     *hub.Hub
-	scanner *bufio.Scanner
+	core        *agentcore.Core
+	bus         *events.EventBus
+	store       *store.Store
+	groupID     string
+	hub         *hub.Hub
+	bridge      *local.RemoteBridge
+	switchActor func(string) (*agentcore.Core, *local.RemoteBridge, error)
+	approver    *approver
+	scanner     *bufio.Scanner
 }
 
 // Run 启动交互式 REPL 循环。
-func Run(core *agentcore.Core, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub) {
+func Run(core *agentcore.Core, bridge *local.RemoteBridge, switchActor func(string) (*agentcore.Core, *local.RemoteBridge, error), bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub) {
 	r := &Repl{
-		core:    core,
-		bus:     bus,
-		store:   s,
-		groupID: groupID,
-		hub:     wsHub,
-		scanner: bufio.NewScanner(os.Stdin),
+		core:        core,
+		bus:         bus,
+		store:       s,
+		groupID:     groupID,
+		hub:         wsHub,
+		bridge:      bridge,
+		switchActor: switchActor,
+		scanner:     bufio.NewScanner(os.Stdin),
 	}
-	core.SetApprover(&approver{scanner: r.scanner})
+	r.approver = &approver{scanner: r.scanner}
+	core.SetApprover(r.approver)
 
 	r.printBanner(serverEnabled)
 	for r.loop() {
@@ -52,6 +59,12 @@ func (r *Repl) printBanner(serverEnabled bool) {
 	fmt.Println("/hand                 list hand tokens")
 	fmt.Println("/hand add <label>     create hand token")
 	fmt.Println("/hand remove <id>     revoke hand token")
+	fmt.Println("/hand select <id>     select session default Hand")
+	fmt.Println("/hand online          list online Hands")
+	fmt.Println("/hand info <id>       show Hand tool schemas")
+	fmt.Println("/hand exec <tool> <json>  start remote run")
+	fmt.Println("/hand cancel <run_id> cancel remote run")
+	fmt.Println("/hand run <run_id>    show remote run")
 	fmt.Println("/peers                list connected peers")
 	fmt.Println("/mode <normal|trust|yolo>  switch mode")
 	fmt.Println("/debug                toggle debug")

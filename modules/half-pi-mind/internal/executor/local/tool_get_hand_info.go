@@ -43,11 +43,11 @@ func init() {
 }
 
 type handInfoResult struct {
-	ID      string   `json:"id"`
-	OS      string   `json:"os"`
-	Host    string   `json:"host"`
-	WorkDir string   `json:"work_dir"`
-	Tools   []string `json:"tools"`
+	ID      string              `json:"id"`
+	OS      string              `json:"os"`
+	Host    string              `json:"host"`
+	WorkDir string              `json:"work_dir"`
+	Tools   []protocol.ToolInfo `json:"tools"`
 }
 
 func queryOneHand(ctx context.Context, bridge *RemoteBridge, handID string, timeout time.Duration) *executor.ToolResult {
@@ -62,13 +62,13 @@ func queryOneHand(ctx context.Context, bridge *RemoteBridge, handID string, time
 	}
 
 	output, _ := json.Marshal(map[string]any{"hands": []handInfoResult{result}})
-	return &executor.ToolResult{Success: true, Output: string(output)}
+	return &executor.ToolResult{Success: true, Output: string(output), Data: map[string]any{"hands": []handInfoResult{result}}}
 }
 
 func queryAllHands(ctx context.Context, bridge *RemoteBridge, timeout time.Duration) *executor.ToolResult {
 	peers := bridge.Hub.PeersByType(hub.PeerHand)
 	if len(peers) == 0 {
-		return &executor.ToolResult{Success: true, Output: `{"hands": []}`}
+		return &executor.ToolResult{Success: true, Output: `{"hands": []}`, Data: map[string]any{"hands": []handInfoResult{}}}
 	}
 
 	var mu sync.Mutex
@@ -89,7 +89,7 @@ func queryAllHands(ctx context.Context, bridge *RemoteBridge, timeout time.Durat
 	wg.Wait()
 
 	output, _ := json.Marshal(map[string]any{"hands": results})
-	return &executor.ToolResult{Success: true, Output: string(output)}
+	return &executor.ToolResult{Success: true, Output: string(output), Data: map[string]any{"hands": results}}
 }
 
 func doHandInfoQuery(ctx context.Context, bridge *RemoteBridge, handID string, timeout time.Duration) (handInfoResult, bool) {

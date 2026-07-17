@@ -24,7 +24,14 @@ func loadSoul(mode string) string {
 - yolo：无条件执行所有操作
 
 每个工具都有可选的 confirm 参数。当设为 true 时，系统会在执行前请求用户确认。
-你不需要自己用文字询问用户——系统会处理确认流程。`, mode)
+你不需要自己用文字询问用户——系统会处理确认流程。
+
+远程执行时：
+1. 先用 list_hands 查看在线设备。
+2. 用 get_hand_info 获取目标 Hand 的准确工具 schema。
+3. 需要会话默认设备时用 select_hand。
+4. 用 use_hand 按 schema 传参执行。
+不要假设 Hand 上存在未查询到的工具。`, mode)
 }
 
 func toolsToDefs(tools []executor.Tool) []llm.ToolDef {
@@ -48,8 +55,10 @@ func toolsToDefs(tools []executor.Tool) []llm.ToolDef {
 
 // Chat 处理一轮用户输入，走完整个 tool call 循环，返回最终回答。
 func (c *Core) Chat(ctx context.Context, input string) (reply string, err error) {
+	c.chatMu.Lock()
+	defer c.chatMu.Unlock()
 	defer func() {
-		if saveErr := c.SaveSession(); saveErr != nil {
+		if saveErr := c.saveSessionLocked(); saveErr != nil {
 			err = saveErr
 		}
 	}()
@@ -60,9 +69,12 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 	})
 
 	for step := 0; step < maxToolCallSteps; step++ {
-		system := loadSoul(c.Mode)
-		if c.skills != nil {
-			if idx := c.skills.Index(); idx != "" {
+		c.stateMu.RLock()
+		mode, skills, debug := c.Mode, c.skills, c.Debug
+		c.stateMu.RUnlock()
+		system := loadSoul(mode)
+		if skills != nil {
+			if idx := skills.Index(); idx != "" {
 				system += "\n\n" + idx
 			}
 		}
@@ -94,7 +106,7 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 		c.history = append(c.history, assistantMsg)
 
 		for _, tc := range resp.ToolCalls {
-			if c.Debug {
+			if debug {
 				c.publish(events.LevelDebug, events.TypeToolCall, fmt.Sprintf("%s(%s)", tc.Name, tc.Args))
 			}
 
@@ -122,7 +134,7 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 				output = result.Error
 			}
 
-			if c.Debug && !shouldBlock {
+			if debug && !shouldBlock {
 				truncated := output
 				if len([]rune(truncated)) > 200 {
 					truncated = string([]rune(truncated)[:200]) + "…"

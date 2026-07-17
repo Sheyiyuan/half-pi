@@ -29,8 +29,9 @@ func init() {
 			},
 			Required: []string{"command"},
 		},
-		Check:   cmdCheck,
-		Execute: executeWithShell("cmd", "/c"),
+		Check:       cmdCheck,
+		PolicyCheck: policyCheckCommand,
+		Execute:     executeWithShell("cmd", "/c"),
 	})
 
 	// PowerShell
@@ -44,9 +45,28 @@ func init() {
 			},
 			Required: []string{"command"},
 		},
-		Check:   cmdCheck,
-		Execute: executeWithShell("powershell", "-Command"),
+		Check:       cmdCheck,
+		PolicyCheck: policyCheckCommand,
+		Execute:     executeWithShell("powershell", "-Command"),
 	})
+}
+
+func policyCheckCommand(args json.RawMessage, policy *security.Policy) (executor.Decision, string) {
+	var p struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Command == "" {
+		return executor.DecisionDeny, "failed to parse args"
+	}
+	decision, reason := policy.Check(p.Command)
+	switch decision {
+	case security.Deny:
+		return executor.DecisionDeny, fmt.Sprintf("blocked by security policy: %s", reason)
+	case security.NeedApproval:
+		return executor.DecisionConfirm, fmt.Sprintf("requires approval: %s", reason)
+	default:
+		return executor.DecisionAllow, ""
+	}
 }
 
 func cmdCheck(args json.RawMessage) (executor.Decision, string) {

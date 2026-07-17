@@ -47,8 +47,27 @@ func init() {
 				return executor.DecisionAllow, ""
 			}
 		},
-		Execute: executeWithShell("sh", "-c"),
+		PolicyCheck: policyCheckCommand,
+		Execute:     executeWithShell("sh", "-c"),
 	})
+}
+
+func policyCheckCommand(args json.RawMessage, policy *security.Policy) (executor.Decision, string) {
+	var p struct {
+		Command string `json:"command"`
+	}
+	if err := json.Unmarshal(args, &p); err != nil || p.Command == "" {
+		return executor.DecisionDeny, "failed to parse args"
+	}
+	decision, reason := policy.Check(p.Command)
+	switch decision {
+	case security.Deny:
+		return executor.DecisionDeny, fmt.Sprintf("blocked by security policy: %s", reason)
+	case security.NeedApproval:
+		return executor.DecisionConfirm, fmt.Sprintf("requires approval: %s", reason)
+	default:
+		return executor.DecisionAllow, ""
+	}
 }
 
 func executeWithShell(shell string, shellArgs ...string) func(ctx context.Context, args json.RawMessage) *executor.ToolResult {

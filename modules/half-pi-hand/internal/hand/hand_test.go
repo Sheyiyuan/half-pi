@@ -515,6 +515,37 @@ func TestHandPrunesCompletedTasks(t *testing.T) {
 	}
 }
 
+func TestHandInfoIncludesToolSchemas(t *testing.T) {
+	infoCh := make(chan protocol.HandInfoResp, 1)
+	h := startTestHand(t, "schema-hand", nil, func(msg protocol.Envelope) {
+		if msg.Type == protocol.TypeHandInfoResp {
+			info, err := protocol.DecodePayload[protocol.HandInfoResp](&msg)
+			if err == nil {
+				infoCh <- info
+			}
+		}
+	})
+	req, _ := protocol.NewEnvelope("", protocol.TypeHandInfoReq, protocol.HandInfoReq{ID: "schema-request"})
+	if err := h.Send("schema-hand", *req); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case info := <-infoCh:
+		for _, tool := range info.Tools {
+			if tool.Name == "exec_command" {
+				properties, ok := tool.Parameters["properties"].(map[string]any)
+				if !ok || properties["command"] == nil {
+					t.Fatalf("exec_command schema missing command: %+v", tool.Parameters)
+				}
+				return
+			}
+		}
+		t.Fatal("exec_command schema not returned")
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for Hand info")
+	}
+}
+
 func TestHandServeStopsOnContextCancel(t *testing.T) {
 	h := hub.New()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

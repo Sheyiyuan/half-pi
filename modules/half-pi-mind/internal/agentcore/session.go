@@ -10,11 +10,20 @@ import (
 
 // SaveSession 将当前对话历史持久化到数据库。
 func (c *Core) SaveSession() error {
-	if c.store == nil || c.sessionID == "" {
+	c.chatMu.Lock()
+	defer c.chatMu.Unlock()
+	return c.saveSessionLocked()
+}
+
+func (c *Core) saveSessionLocked() error {
+	c.stateMu.RLock()
+	store, sessionID := c.store, c.sessionID
+	c.stateMu.RUnlock()
+	if store == nil || sessionID == "" {
 		return nil
 	}
 	// 自动命名：取第一条用户消息，截断到 60 字符
-	sess, err := c.store.GetSession(c.sessionID)
+	sess, err := store.GetSession(sessionID)
 	if err != nil {
 		return fmt.Errorf("save session: get session: %w", err)
 	}
@@ -25,14 +34,14 @@ func (c *Core) SaveSession() error {
 				if len(name) > 60 {
 					name = name[:60]
 				}
-				if err := c.store.UpdateSessionName(c.sessionID, string(name)); err != nil {
+				if err := store.UpdateSessionName(sessionID, string(name)); err != nil {
 					return fmt.Errorf("save session: auto-name: %w", err)
 				}
 				break
 			}
 		}
 	}
-	if err := c.store.ReplaceMessages(c.sessionID, llmMsgToStore(c.history)); err != nil {
+	if err := store.ReplaceMessages(sessionID, llmMsgToStore(c.history)); err != nil {
 		return fmt.Errorf("save session: replace messages: %w", err)
 	}
 	return nil

@@ -161,6 +161,14 @@ func TestSchemaParametersNoRequired(t *testing.T) {
 	}
 }
 
+func TestSchemaParametersNil(t *testing.T) {
+	tool := Tool{Name: "no_params"}
+	schema := tool.SchemaParameters()
+	if schema["type"] != "object" {
+		t.Fatalf("schema = %+v", schema)
+	}
+}
+
 func TestRunnerExecutesAllowedTool(t *testing.T) {
 	name := "runner_allowed"
 	Register(Tool{

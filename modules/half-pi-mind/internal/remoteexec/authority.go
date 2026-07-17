@@ -99,24 +99,36 @@ func (a *Authority) handleMessage(peer *hub.Peer, msg protocol.Envelope) {
 			err = a.Registry.ApplyAcceptedFrom(peer.ID, peer.SessionID(), accepted)
 		}
 		a.publishError(err)
+		if err == nil {
+			a.publishRun(accepted.RunID)
+		}
 	case protocol.TypeRPCRejected:
 		rejected, err := protocol.DecodePayload[protocol.RPCRejected](&msg)
 		if err == nil && protocol.ValidateRPCRejected(rejected) == nil {
 			err = a.Registry.ApplyRejectedFrom(peer.ID, peer.SessionID(), rejected)
 		}
 		a.publishError(err)
+		if err == nil {
+			a.publishRun(rejected.RunID)
+		}
 	case protocol.TypeRPCResult:
 		result, err := protocol.DecodePayload[protocol.RPCResult](&msg)
 		if err == nil && protocol.ValidateRPCResult(result) == nil {
 			err = a.Registry.ApplyResultFrom(peer.ID, peer.SessionID(), result)
 		}
 		a.publishError(err)
+		if err == nil {
+			a.publishRun(result.RunID)
+		}
 	case protocol.TypeRPCCancelResult:
 		result, err := protocol.DecodePayload[protocol.RPCCancelResult](&msg)
 		if err == nil && protocol.ValidateRPCCancelResult(result) == nil {
 			err = a.Registry.ApplyCancelResultFrom(peer.ID, peer.SessionID(), result)
 		}
 		a.publishError(err)
+		if err == nil {
+			a.publishRun(result.RunID)
+		}
 	case protocol.TypeHandInfoResp:
 		resp, err := protocol.DecodePayload[protocol.HandInfoResp](&msg)
 		if err == nil {
@@ -156,6 +168,15 @@ func (a *Authority) publishError(err error) {
 	if err != nil {
 		a.publish(events.LevelWarn, events.TypeSystem, err.Error())
 	}
+}
+
+func (a *Authority) publishRun(runID string) {
+	run, ok := a.Registry.Snapshot(runID)
+	if !ok || a.bus == nil {
+		return
+	}
+	a.bus.Publish(events.New(run.SessionID, "remoteexec", events.LevelInfo, events.TypeToolResult,
+		fmt.Sprintf("run=%s hand=%s tool=%s status=%s", run.ID, run.HandID, run.Tool, run.Status)))
 }
 
 func (a *Authority) publish(level, typ, message string) {

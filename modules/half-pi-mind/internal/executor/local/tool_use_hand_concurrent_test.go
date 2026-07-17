@@ -96,7 +96,8 @@ func TestUseHandConcurrentRunsDoNotCrossDeliver(t *testing.T) {
 				"tool": "parallel_tool", "args": map[string]any{"value": i}, "timeout_ms": 2000,
 			})
 			result := tool.Execute(WithRemoteBridge(context.Background(), bridge), args)
-			if !result.Success || !strings.Contains(result.Output, fmt.Sprintf("] %d", i)) {
+			view, ok := result.Data.(RemoteRunView)
+			if !result.Success || !ok || view.Output != fmt.Sprint(i) {
 				results <- fmt.Errorf("run %d received wrong result: %+v", i, result)
 				return
 			}

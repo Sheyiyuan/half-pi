@@ -68,13 +68,16 @@ func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 	}
 
 	resultCh := make(chan *executor.ToolResult, 1)
+	startedCh := make(chan string, 1)
 	go func() {
 		args, _ := json.Marshal(map[string]any{
 			"tool":       "remote_only_tool",
 			"args":       map[string]any{},
 			"timeout_ms": 1000,
 		})
-		resultCh <- tool.Execute(WithRemoteBridge(context.Background(), bridge), args)
+		ctx := WithRemoteBridge(context.Background(), bridge)
+		ctx = WithRunStarted(ctx, func(runID string) { startedCh <- runID })
+		resultCh <- tool.Execute(ctx, args)
 	}()
 
 	var env protocol.Envelope
@@ -101,6 +104,9 @@ func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 	}
 	if err := session.Send(*accepted); err != nil {
 		t.Fatalf("send accepted: %v", err)
+	}
+	if started := <-startedCh; started != rpc.RunID {
+		t.Fatalf("started run = %q, want %q", started, rpc.RunID)
 	}
 
 	reply, err := protocol.NewEnvelope("", protocol.TypeRPCResult, protocol.RPCResult{

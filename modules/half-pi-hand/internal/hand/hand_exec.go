@@ -144,10 +144,13 @@ func (h *Hand) handleHandInfoReq(env protocol.Envelope) {
 	}
 
 	allTools := executor.RegisteredTools()
-	tools := make([]string, 0, len(allTools))
+	tools := make([]protocol.ToolInfo, 0, len(allTools))
 	for _, t := range allTools {
 		if h.checkToolAllowed(t.Name) {
-			tools = append(tools, t.Name)
+			tool := t
+			tools = append(tools, protocol.ToolInfo{
+				Name: t.Name, Description: t.Description, Parameters: tool.SchemaParameters(),
+			})
 		}
 	}
 

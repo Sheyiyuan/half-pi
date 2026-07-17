@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"sync"
 
 	"github.com/google/uuid"
 
@@ -35,11 +36,6 @@ func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.Ev
 		fmt.Fprintf(os.Stderr, "adapter init failed: %v\n", err)
 		os.Exit(1)
 	}
-	bridge := &local.RemoteBridge{
-		Hub: authority.Hub, Runs: authority.Registry, PendingCall: authority.PendingCall,
-	}
-	exec := local.New(bridge)
-
 	skillStore, err := skill.LoadFromDir(env.SkillsDir)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "skill load failed: %v\n", err)
@@ -59,23 +55,54 @@ func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.Ev
 		os.Exit(1)
 	}
 
-	core, err := agentcore.New(provider, exec)
+	type actor struct {
+		core   *agentcore.Core
+		bridge *local.RemoteBridge
+	}
+	var actorsMu sync.Mutex
+	actors := make(map[string]actor)
+	actorOrder := make([]string, 0, 16)
+	getActor := func(id string) (*agentcore.Core, *local.RemoteBridge, error) {
+		actorsMu.Lock()
+		defer actorsMu.Unlock()
+		if existing, ok := actors[id]; ok {
+			for i, existingID := range actorOrder {
+				if existingID == id {
+					actorOrder = append(append(actorOrder[:i], actorOrder[i+1:]...), id)
+					break
+				}
+			}
+			return existing.core, existing.bridge, nil
+		}
+		bridge := &local.RemoteBridge{Hub: authority.Hub, Runs: authority.Registry, PendingCall: authority.PendingCall}
+		exec := local.New(bridge)
+		core, err := agentcore.New(provider, exec)
+		if err != nil {
+			return nil, nil, err
+		}
+		core.Bus = bus
+		core.SetSkills(skillStore)
+		if err := core.SetStore(db, id); err != nil {
+			return nil, nil, err
+		}
+		bridge.ActiveHand = core.ActiveHand
+		bridge.SessionID = core.SessionID
+		bridge.Mode = core.SecurityMode
+		bridge.SetActiveHand = core.SetActiveHand
+		bridge.CheckAndConfirm = core.CheckAndConfirm
+		if len(actorOrder) >= 16 {
+			delete(actors, actorOrder[0])
+			actorOrder = actorOrder[1:]
+		}
+		actors[id] = actor{core: core, bridge: bridge}
+		actorOrder = append(actorOrder, id)
+		return core, bridge, nil
+	}
+
+	core, bridge, err := getActor(sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "core init failed: %v\n", err)
 		os.Exit(1)
 	}
-	core.Bus = bus
-	core.SetSkills(skillStore)
-	if err := core.SetStore(db, sessionID); err != nil {
-		fmt.Fprintf(os.Stderr, "session load failed: %v\n", err)
-		os.Exit(1)
-	}
-
-	bridge.ActiveHand = core.ActiveHand
-	bridge.SessionID = core.SessionID
-	bridge.Mode = core.SecurityMode
-	bridge.SetActiveHand = core.SetActiveHand
-	bridge.CheckAndConfirm = core.CheckAndConfirm
-
-	repl.Run(core, bus, db, group.ID, cfg.Server.Enabled, authority.Hub)
+	repl.Run(core, bridge, getActor, bus, db, group.ID, cfg.Server.Enabled, authority.Hub)
 }

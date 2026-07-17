@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 )
 
 // ToolResult 是工具执行结果。Output 是 LLM 可读的文本，Data 是供 Face 渲染的结构化数据。
@@ -29,6 +31,9 @@ const (
 // 返回 Decision 和原因说明。DecisionAllow 时执行，否则拦截。
 type ToolCheck func(args json.RawMessage) (Decision, string)
 
+// ToolPolicyCheck 使用调用方提供的安全策略执行检查。
+type ToolPolicyCheck func(args json.RawMessage, policy *security.Policy) (Decision, string)
+
 // Tool 定义一个可被 LLM 调用的工具。
 type Tool struct {
 	Name           string
@@ -36,6 +41,7 @@ type Tool struct {
 	Parameters     *ObjectSchema
 	DefaultConfirm bool      // true 时每次调用都需用户确认
 	Check          ToolCheck // 执行前安全检查，nil 表示不检查
+	PolicyCheck    ToolPolicyCheck
 	Execute        func(ctx context.Context, args json.RawMessage) *ToolResult
 }
 
@@ -144,6 +150,23 @@ func CheckTool(name string, args json.RawMessage) (Tool, Decision, string, bool)
 	return tool, decision, reason, true
 }
 
+// CheckToolWithPolicy 使用显式策略检查工具，避免不同会话共享全局安全模式。
+func CheckToolWithPolicy(name string, args json.RawMessage, policy *security.Policy) (Tool, Decision, string, bool) {
+	tool, ok := FindTool(name)
+	if !ok {
+		return Tool{}, DecisionDeny, "unknown tool: " + name, false
+	}
+	if tool.PolicyCheck == nil {
+		decision, reason := toolDecision(tool, args)
+		return tool, decision, reason, true
+	}
+	decision, reason := tool.PolicyCheck(args, policy)
+	if decision == DecisionAllow && tool.DefaultConfirm {
+		return tool, DecisionConfirm, "该操作默认需用户确认", true
+	}
+	return tool, decision, reason, true
+}
+
 func toolDecision(tool Tool, args json.RawMessage) (Decision, string) {
 	if tool.Check != nil {
 		decision, reason := tool.Check(args)
@@ -203,6 +226,9 @@ func FindTool(name string) (Tool, bool) {
 // SchemaParameters 返回参数的 JSON Schema。
 func (t *Tool) SchemaParameters() map[string]any {
 	props := make(map[string]any)
+	if t.Parameters == nil {
+		return map[string]any{"type": "object", "properties": props}
+	}
 	for _, p := range t.Parameters.Properties {
 		props[p.Name] = map[string]any{
 			"type":        p.Type,

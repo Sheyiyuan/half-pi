@@ -98,12 +98,18 @@ type HandInfoReq struct {
 }
 
 // HandInfoResp Hand → Mind：返回 Hand 动态信息。
+type ToolInfo struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  map[string]any `json:"parameters"`
+}
+
 type HandInfoResp struct {
-	ID      string   `json:"id"`       // 匹配 HandInfoReq.ID
-	Tools   []string `json:"tools"`    // 可用工具名称列表
-	OS      string   `json:"os"`       // 操作系统
-	Host    string   `json:"host"`     // 主机名
-	WorkDir string   `json:"work_dir"` // 工作目录
+	ID      string     `json:"id"`       // 匹配 HandInfoReq.ID
+	Tools   []ToolInfo `json:"tools"`    // 可用工具及参数 schema
+	OS      string     `json:"os"`       // 操作系统
+	Host    string     `json:"host"`     // 主机名
+	WorkDir string     `json:"work_dir"` // 工作目录
 }
 
 // HandEvent Hand → Mind：主动监控事件上报。
