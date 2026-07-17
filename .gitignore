@@ -14,6 +14,22 @@
 *.swp
 *.swo
 
+# Local AI agent state
+.agents/
+.codex/
+.claude/
+.cursor/
+.continue/
+.gemini/
+.kiro/
+.opencode/
+.qwen/
+.roo/
+.windsurf/
+.aider*
+.claude.json
+.mcp.json
+
 # OS
 .DS_Store
 Thumbs.db
