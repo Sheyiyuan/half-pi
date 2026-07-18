@@ -13,7 +13,7 @@
   One Mind. Many Faces. Many Hands.
 </p>
 
-> **当前状态：Alpha 开发中。** Mind 与 Hand 的远程执行和持久化审计链路已经可用；跨设备 Face 与会话同步体验正在开发。
+> **当前状态：Alpha 开发中。** Mind 与 Hand 的远程执行、进度流、持久化后台任务和审计链路已经可用；跨设备 Face runtime 尚未实现。
 
 ---
 
@@ -113,9 +113,10 @@ modules/
 
 - 使用独立 token 向 Mind 注册，并上报操作系统、架构、主机名和工作目录。
 - 自动重连和指数退避。
-- 工具发现、远程 RPC 执行、deadline、显式取消和输出截断。
+- 工具发现、远程 RPC 执行、deadline、显式取消、有界进度流和输出截断。
 - 工具 allow/deny 策略，以及执行前的本地安全检查。
 - Unix 命令取消时终止整个进程组，避免遗留子进程。
+- 后台任务使用独立 SQLite 和受限日志文件，跨 WebSocket 重连继续运行；Hand 重启后未完成任务标记 lost，不自动重跑。
 
 ### Mind → Hand
 
@@ -123,6 +124,7 @@ modules/
 - `get_hand_info`：查询 Hand 的环境和可用工具。
 - `select_hand`：设置当前会话的默认 Hand。
 - `use_hand`：在指定 Hand 上执行工具。
+- `use_hand(background=true)`：启动持久化后台任务；`get_hand_task`、`read_hand_task_log`、`cancel_hand_task` 用于查询、读日志和取消。
 - 远程执行状态覆盖 accepted、running、succeeded、failed、rejected、cancelled、timed out 和 lost。
 - 一次性 Approval 摘要绑定 run、Hand、工具和参数，Hand 仍保留最终执行边界。
 
@@ -138,6 +140,7 @@ Half-Pi 会让 AI 接触真实设备，因此安全能力不是附属功能。
 - Mind 负责用户审批和全局策略，Hand 负责本机工具权限和最终安全检查。
 - Approval 摘要使用 SHA-256 绑定 `run_id`、`hand_id`、工具和参数，并带有效期。
 - 工具输出有大小上限，远程任务支持 deadline 和取消。
+- Hand token 绑定创建时的 Hand ID，不能冒用其他 Hand 身份；升级前创建的未绑定 token 需要重新生成。
 
 **尚未完成：**
 
@@ -199,6 +202,10 @@ REPL 提供不依赖 LLM 的 Hand 调试命令：
 /hand exec read_file {"path":"README.md"}
 /hand run <run_id>
 /hand cancel <run_id>
+/hand task start exec_command {"command":"make test"} --timeout-ms 3600000
+/hand task status <task_id>
+/hand task log <task_id> 0 4096
+/hand task cancel <task_id>
 ```
 
 Mind 也会向 LLM 暴露 `list_hands`、`get_hand_info`、`select_hand` 和 `use_hand`，让模型根据用户意图选择并调用设备。
@@ -225,6 +232,7 @@ REPL 命令：
 /hand info <id>         查询 Hand 能力
 /hand select <id>       选择默认 Hand
 /hand exec <tool> <json> 手动执行远程工具
+/hand task start|status|log|cancel 管理后台任务
 /peers                  查看所有在线节点
 ```
 

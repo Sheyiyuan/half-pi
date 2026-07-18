@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-实施中。Phase 0 至 Phase 4（T0-T9）已于 2026-07-17 完成并通过全仓 race 测试及总 review；Phase 5 为可选增强。T10 已使用 Windows Job Object 完成实现并通过 Windows 386/amd64/arm/arm64 交叉编译，仍需在原生 Windows 环境运行进程树取消测试后验收。
+已完成主体实施。Phase 0 至 Phase 4（T0-T9）、T11 有界进度流和持久化后台任务已完成并通过 race 测试及 review。T10 已使用 Windows Job Object 完成实现并通过 Windows 386/amd64/arm/arm64 交叉编译，仍需在原生 Windows 环境运行进程树取消测试后验收。
 
 Phase 4 review 已确认：每个已加载 session 保留独立 actor；远端专属或跨平台工具必须经 Mind 一次性确认，并继续由 Hand 执行本地最终守门；审计写入失败时 run 在内存中 fail-closed，取消请求仍会发往 Hand，避免无主执行。
 
@@ -714,20 +714,30 @@ Face 自身的正式协议、独立鉴权、快照恢复、有序事件投影和
 - 手动和 LLM 两种入口共用同一审批、registry 和审计链路。
 - 发布说明明确平台能力和未实现的增强项。
 
-Phase 5 的 Windows 完整取消是宣称“跨平台取消闭环”的前提；进度流不是 Stable 的必要条件。
+Phase 5 的 Windows 原生验收是宣称“跨平台取消闭环”的前提。进度流和持久化后台任务已经落地，但 Face runtime 仍是独立后续阶段。
 
-## 9. 实施纪律
+## 9. 持久化后台任务验收记录
+
+- `task_id == start_run_id`，start run 与 durable task 使用独立状态机。
+- Hand 使用 SQLite 保存任务元数据，使用权限受限的独立文件保存有界日志；原始参数不落盘。
+- durable task 跨 WebSocket 重连继续执行；Hand 重启后非终态任务标记 `lost`，不自动重跑。
+- Mind 使用 `remote_tasks` 保存会话归属和脱敏快照；启动时把非终态快照标记 stale，在线后通过 status 对账。
+- status/log/cancel 响应绑定精确 Hand 连接和请求 ID；同一 task 的状态操作串行，不同 task 可并发。
+- Hand compact tombstone 保证旧 task ID 不被再次执行；详情和日志按 retention 与数量配额清理。
+- LLM 工具和 REPL 命令复用同一 `TaskService`、Approval、Authority 和审计路径。
+
+## 10. 实施纪律
 
 - 每个子任务单独提交，commit 只解决一个验收目标。
 - 协议变更必须先合并测试，再修改 Mind 与 Hand 行为。
-- 不为尚未实现的重连恢复添加兼容分支。
+- 不自动重跑因 Hand 重启而标记 lost 的后台任务。
 - 不自动重试有副作用的远程工具。
 - 不以日志文本代替结构化状态和错误码。
 - 不通过扩大锁范围掩盖状态机缺陷；终态裁决必须集中实现。
 - 任何新增旁路入口都必须复用 Approval、registry 和审计链路。
 - 阶段验收失败时先修复当前阶段，不并行扩展 progress 或后台任务。
 
-## 10. 完成定义
+## 11. 完成定义
 
 远程执行闭环只有在以下条件全部满足时才视为完成：
 

@@ -2,7 +2,7 @@
 
 ## 状态
 
-部分落地。本文承接 [`archived/remote-execution.md`](archived/remote-execution.md) 的 MVP 设计。审批证明、accepted/rejected、显式取消、唯一终态、服务级 Authority、SQLite 审计、会话隔离和有界 `rpc_progress` 已经实现；后台任务生命周期仍未实现，Windows 进程树取消仍待原生环境验收。工程状态和后续安排分别以 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md) 和 [`next-development-plan.md`](next-development-plan.md) 为准。
+核心与增强能力已落地。本文承接 [`archived/remote-execution.md`](archived/remote-execution.md) 的 MVP 设计。审批证明、accepted/rejected、显式取消、唯一终态、服务级 Authority、SQLite 审计、会话隔离、有界 `rpc_progress` 和持久化后台任务已经实现；Windows 进程树取消仍待原生环境验收。工程状态和后续安排分别以 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md) 和 [`next-development-plan.md`](next-development-plan.md) 为准。
 
 ## 背景
 
@@ -12,7 +12,7 @@
 use_hand → Hub.Send(RPC) → Hand 执行 → RPCResult → use_hand 返回
 ```
 
-当时这个链路能跑通 demo，但还不是完整闭环。以下缺口除进度流和后台任务外现已落地：
+当时这个链路能跑通 demo，但还不是完整闭环。以下缺口现已落地：
 
 - Mind 只知道是否等到了最终结果，不知道 Hand 是否接收、何时开始、为何拒绝。
 - Mind 超时后没有显式取消协议，Hand 只能依赖 RPC 自带 timeout。
@@ -28,13 +28,12 @@ use_hand → Hub.Send(RPC) → Hand 执行 → RPCResult → use_hand 返回
 - Mind 能区分 `sent`、`accepted`、`running`、`succeeded`、`failed`、`rejected`、`cancelled`、`timed_out` 等状态。
 - Hand 永远保留最终执行守门权，不因 Mind 审批而绕过工具存在性、allow/deny、平台检查和输出上限。
 - Mind 主动取消后，Hand 能明确返回取消结果。
-- 协议能支持后续进度流、后台任务、Face 多端同步和审计持久化。
+- 协议支持进度流、后台任务、Face 多端同步和审计持久化。
 
 ## 非目标
 
 - 不在本阶段设计完整 OS 沙箱。
 - 不要求所有工具立即支持增量输出。
-- 首版不实现后台任务持久恢复，只保留状态机扩展空间。
 - 不改变 Mind 作为会话、审批、审计权威的定位。
 
 ## 核心模型：RemoteRun
@@ -186,7 +185,7 @@ type RPCRejected struct {
 
 ### Progress
 
-进度流是可选能力。当前支持 Unix `exec_command`，以及共享同一输出实现的 Windows `exec_cmd` / `exec_ps`；不包含后台任务。
+进度流是可选能力。当前支持前台与后台 Unix `exec_command`，以及共享同一输出实现的 Windows `exec_cmd` / `exec_ps`。
 
 ```go
 type RPCProgress struct {
@@ -198,6 +197,12 @@ type RPCProgress struct {
 ```
 
 `Seq` 独立于 Envelope 序号，由 Hand 仅对获准发送的块编号。协议统一限制 progress 单块 4 KiB、每 run 1 MiB 和 256 个事件；最终 result 仍只服从 Hand 配置的输出上限。队列满时允许丢弃，停止时不排空；已开始写入的 WebSocket 帧不可物理抢占，result 最多等待该帧至传输写超时。Mind 在 accepted/running 接收单调进度；已接受后进入 cancel_requested 时仍接收在途单调进度。接受前进度报错，重复、终态后和超限消息不会持久化或发布。
+
+### Background Task
+
+后台 RPC 在 `RPC.Background` 中携带 `task_id` 和 `max_runtime_ms`，且 `task_id == run_id`。Approval 摘要额外绑定 background 模式和最大运行时间。Hand 完成持久接纳后发送 start run 的 accepted/result；该 run 随即终止，后台 task 继续运行，两者是独立状态机。
+
+任务管理使用 `task_status_req/resp`、`task_log_req/resp` 和 `task_cancel/result`。Mind 只保存脱敏任务快照，Hand 使用独立 SQLite 和受限日志文件保存 durable task。任务跨 WebSocket 重连继续运行；Hand 重启把未完成任务标记 `lost` 且不重跑；Mind 重启把非终态快照标记 stale，待 Hand 在线后对账。Hand 永久保留 compact tombstone 防止旧 task ID 被再次执行，任务详情和日志可按 retention 清理。
 
 ### Result
 
@@ -318,6 +323,17 @@ handleCancel(runID)
 ```
 
 Unix `exec_command` 在 context 取消时终止进程组。Windows 实现使用 kill-on-close Job Object：命令先挂起启动，加入独立 job 后恢复，取消时终止 job 内完整进程树；正常完成时解除 kill-on-close，避免误杀有意启动的后台进程。该实现已通过多架构交叉编译，仍需原生 Windows 集成测试后才能宣称跨平台完整取消。
+
+## 后台任务生命周期
+
+```text
+Mind start run: created → approved → sent → accepted → succeeded/rejected/lost
+Hand durable task: pending → running → succeeded/failed/cancelled/timed_out/lost
+```
+
+Mind 在同一 SQLite transaction 中创建 run、created event 和 `remote_tasks` 快照。确定未发送或被 Hand 拒绝的启动收敛为本地 `lost`；发送结果不确定时保留 stale 快照。在线 status 对账会补齐 started/finished、日志大小、截断和任务错误。status/cancel 按 task ID 串行化，不同任务互不阻塞。
+
+用户和 LLM 入口复用同一 `TaskService`：`use_hand(background=true, task_timeout_ms=...)`、`get_hand_task`、`read_hand_task_log`、`cancel_hand_task`，以及 REPL `/hand task start|status|log|cancel`。
 
 ## 并发状态模型
 

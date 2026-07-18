@@ -12,6 +12,7 @@
 - 服务级 `remoteexec.Authority`、SQLite run 审计与启动恢复。
 - 每个已加载 conversation 独立 Core/RemoteBridge，手动入口与 LLM 入口复用同一执行链路。
 - Hand 工具 schema、allow/deny、本地最终检查、输出截断和 Unix 进程组取消。
+- R0 回归证据、R1 Windows 多架构交叉编译入口、R2 有界进度流和 R3 持久化后台任务闭环。
 
 历史 MVP 设计和设计债清单已归档到 `docs/archived/`。闭环设计与实施计划继续保留，因为仍有未完成或未验收能力。
 
@@ -23,7 +24,6 @@
 - Chat `request_id`、幂等、busy、取消和唯一终态响应。
 - 异步审批对象及 Face 审批审计。
 - Headless Agent Face、Scripted LLM 和真实进程级 E2E。
-- 后台任务生命周期和结果保留策略。
 - Windows Job Object 取消逻辑的原生 Windows 测试验收。
 
 ## 开发原则
@@ -33,7 +33,7 @@
 - Face Gateway 不直接发送 Hand RPC；run 查询和取消必须复用 `remoteexec.Authority`。
 - SQLite 和运行时 registry 是权威状态，EventBus 只用于观察，不从展示文本反推业务状态。
 - 每个阶段先冻结协议和验收测试，再接入下一层行为。
-- 不让进度流和后台任务阻塞首个 Face Alpha，但必须保留明确 backlog。
+- 已完成的进度流和后台任务不改变 Face runtime 延期边界。
 
 ## 已完成：Face Wire Protocol
 
@@ -159,7 +159,7 @@ P0 中 wire contract 已完成，其余 P0 以及 P1-P4 整体延期，不属于
 
 ## 当前主线：远程执行收尾
 
-本阶段完成 R0-R3。涉及 Face 事件投影的部分只保持协议兼容，不实现 Face Gateway。
+R0-R3 已完成。涉及 Face 事件投影的部分只保持协议兼容，不实现 Face Gateway。
 
 ### R0：补齐闭环回归证据
 
@@ -185,17 +185,18 @@ P0 中 wire contract 已完成，其余 P0 以及 P1-P4 整体延期，不属于
 
 ### R3：后台任务
 
-- 单独设计 start/status/log/cancel 生命周期和 task ID 与 run ID 的关系。
-- 任务元数据和终态写入 SQLite，受限增量日志写入独立日志文件；数据库记录日志路径、大小和截断状态。
-- 后台任务恢复、重连和资源配额不与 R2 隐式捆绑。
+- 已实现独立 start/status/log/cancel 生命周期，`task_id == start_run_id`。start run 在 Hand 持久接纳后终止，后台 task 继续按独立状态机运行。
+- Mind 的 `remote_tasks` 只保存会话归属、Hand、tool、参数摘要、状态、时间、日志字节数和截断信息；Hand 使用独立 SQLite 保存元数据，日志写入权限受限的独立文件，不持久化原始参数。
+- 后台 RPC 强制一次性 Approval，摘要额外绑定 background、task ID 和最大运行时间；Hand 继续执行 allow/deny 和本地 `Tool.Check`。
+- 任务跨 WebSocket 断线继续运行，重连后可 status/log/cancel；Hand 重启将未完成任务标记 `lost`，不会自动重跑。Mind 重启把非终态快照标记 stale，在线查询时对账。
+- Hand 保留 compact tombstone 防止旧 task ID 重放，详情和日志按 retention/配额清理。
+- Mind 提供 `get_hand_task`、`read_hand_task_log`、`cancel_hand_task`，REPL 提供 `/hand task start|status|log|cancel`。
 
 ## 推荐执行顺序
 
-1. R0：补齐闭环回归证据。
-2. R1：Windows 交叉编译和原生验收入口。
-3. R2：可选进度流（已完成）。
-4. R3：SQLite 元数据加受限日志文件的后台任务。
-5. 后续单独启动 Face Alpha Runtime P0-P4。
+1. 在原生 Windows 环境运行 `scripts/test-windows.ps1`，完成外部平台验收。
+2. 后续单独启动 Face Alpha Runtime P0-P4。
+3. `/compact` 和 Skill 工作区集成继续按独立主线推进。
 
 ## 完成判定
 

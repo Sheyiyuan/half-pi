@@ -132,7 +132,7 @@ make test         # 运行全部 4 个模块的测试
 
 #### ✅ 已完成
 
-##### 工具系统（13 个工具）
+##### 工具系统（16 个工具）
 | 工具 | 位置 | 功能 |
 |------|------|------|
 | `read_file` | half-pi-core/tools | 读取文件，支持行号/行范围/字符偏移/双上限 |
@@ -148,6 +148,9 @@ make test         # 运行全部 4 个模块的测试
 | `get_hand_info` | mind/internal/executor/local | 查询 Hand 动态信息与可用工具 |
 | `select_hand` | mind/internal/executor/local | 设置/查询当前会话默认 Hand |
 | `use_hand` | mind/internal/executor/local | 在指定 Hand 上远程执行工具 |
+| `get_hand_task` | mind/internal/executor/local | 查询或列出会话拥有的后台任务 |
+| `read_hand_task_log` | mind/internal/executor/local | 分页读取 Hand 后台任务日志 |
+| `cancel_hand_task` | mind/internal/executor/local | 取消 Hand 后台任务 |
 
 ##### 安全策略 (`half-pi-core/security/`)
 - 四模式：strict / normal / trust / yolo
@@ -239,11 +242,15 @@ make test         # 运行全部 4 个模块的测试
 - RPC 使用一次性 Approval 摘要绑定 run、Hand、工具和参数，Hand 始终保留本地最终守门
 - 服务级 `remoteexec.Authority` 统一路由 accepted/rejected/result/cancel，registry 校验 Hand 和连接来源
 - `remote_runs` / `remote_run_events` 持久化状态迁移，原始参数不进入审计表
+- `rpc_progress` 提供有界 stdout/stderr 增量事件，不改变 run 状态和终态裁决
+- `task_id == start_run_id`；start run 与 durable task 使用独立状态机
+- Mind `remote_tasks` 保存脱敏快照，Hand SQLite + 受限日志文件保存 durable task；断线继续、重启 lost、不自动重跑
+- LLM 工具与 `/hand task start|status|log|cancel` 复用同一 TaskService、审批、Authority 和审计路径
 
 ##### 设计文档
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
 - `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（运行时待实现）
-- `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（核心已落地，保留进度流和后台任务设计）
+- `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
 - `docs/remote-execution-implementation-plan.md` — 远程执行闭环实施与验收记录
 - `docs/next-development-plan.md` — 当前 Face Alpha 主线与远程执行收尾计划
 - `docs/archived/remote-execution.md` — 已归档的 Mind → Hand MVP 设计
@@ -258,7 +265,7 @@ make test         # 运行全部 4 个模块的测试
 - [ ] **Face** 远程交互终端（TUI / IM Bot）——占位 stub 已创建（`modules/half-pi-face/`，仅打印一行字），go.work 已注册，可编译
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
-- [ ] Mind → Hand 增强项 — Windows 原生验收、进度流和后台任务见 `docs/next-development-plan.md`
+- [ ] Mind → Hand 外部验收 — 原生 Windows 运行 `scripts/test-windows.ps1`
 
 ---
 
@@ -341,10 +348,17 @@ make test         # 运行全部 4 个模块的测试
 - Face token 与 Hand token 分离，审批能力通过显式 scope 授予
 - Headless Agent Face 使用 JSONL，支持其他 Agent 和进程级 E2E 测试
 
+### 2026-07-18：远程进度流与持久化后台任务
+- `rpc_progress` 使用独立 run seq，单块 4 KiB、每 run 1 MiB/256 事件，允许有界丢弃但不影响终态
+- `task_id == start_run_id`，start run 在 durable admission 后终止，后台 task 独立继续
+- Hand 使用 SQLite 元数据和受限日志文件，任务跨重连继续；Hand 重启标记 lost，绝不自动重跑
+- Mind 使用 `remote_tasks` 脱敏快照，重启标 stale，在线后 status 对账
+- Hand token 绑定 Hand ID；旧未绑定 token fail closed，需重新生成
+
 ---
 
 ## 下一步
 
-1. Mind → Hand 收尾 — 回归证据、Windows 交叉编译验收、进度流与后台任务
+1. 原生 Windows 运行取消验收脚本（外部环境）
 2. **Face Alpha Runtime（后续）** — 独立鉴权、Gateway、Conversation Actor、Chat/审批和客户端
-3. `/compact` 上下文压缩
+3. `/compact` 上下文压缩与 Skill 工作区集成
