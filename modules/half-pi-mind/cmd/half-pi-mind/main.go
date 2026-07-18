@@ -2,14 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
-	"net/http"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
-
-	"github.com/gorilla/websocket"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
@@ -23,60 +22,68 @@ import (
 )
 
 func main() {
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
+		fmt.Fprintf(os.Stderr, "Mind exited: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func run(args []string, output, logs io.Writer) (runErr error) {
 	var (
 		showVersion bool
 		replMode    bool
 	)
-	flag.BoolVar(&showVersion, "version", false, "打印版本号")
-	flag.BoolVar(&replMode, "repl", false, "交互式 REPL 模式")
-	flag.Parse()
+	flags := flag.NewFlagSet("half-pi-mind", flag.ContinueOnError)
+	flags.SetOutput(logs)
+	flags.BoolVar(&showVersion, "version", false, "打印版本号")
+	flags.BoolVar(&replMode, "repl", false, "交互式 REPL 模式")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
 
 	if showVersion {
-		fmt.Println("half-pi-mind version dev")
-		return
+		_, err := fmt.Fprintln(output, "half-pi-mind version dev")
+		return err
 	}
 
 	env, err := setup.Init()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "init failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("init: %w", err)
 	}
 
 	cfg, err := config.Load(env.Config)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "config load failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("load config: %w", err)
 	}
 
 	db, err := store.New(env.DBPath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "store init failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("initialize store: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("close store: %w", err))
+		}
+	}()
 	if count, err := db.LegacyHandTokenCount(); err != nil {
-		fmt.Fprintf(os.Stderr, "legacy Hand credential check failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("check legacy Hand credentials: %w", err)
 	} else if count > 0 {
-		fmt.Fprintf(os.Stderr, "warning: %d legacy Hand credentials are disabled; recreate them with /hand add\n", count)
+		fmt.Fprintf(logs, "warning: %d legacy Hand credentials are disabled; recreate them with /hand add\n", count)
 	}
 	if recovered, err := db.RecoverRemoteRuns(); err != nil {
-		fmt.Fprintf(os.Stderr, "remote run recovery failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("recover remote runs: %w", err)
 	} else if recovered > 0 {
-		fmt.Fprintf(os.Stderr, "recovered %d unfinished remote runs\n", recovered)
+		fmt.Fprintf(logs, "recovered %d unfinished remote runs\n", recovered)
 	}
 	if recovered, err := db.RecoverRemoteTasks(); err != nil {
-		fmt.Fprintf(os.Stderr, "remote task recovery failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("recover remote tasks: %w", err)
 	} else if recovered > 0 {
-		fmt.Fprintf(os.Stderr, "marked %d unfinished remote tasks stale\n", recovered)
+		fmt.Fprintf(logs, "marked %d unfinished remote tasks stale\n", recovered)
 	}
 	if recovered, err := db.RecoverApprovals(time.Now().UTC()); err != nil {
-		fmt.Fprintf(os.Stderr, "approval recovery failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("recover approvals: %w", err)
 	} else if recovered > 0 {
-		fmt.Fprintf(os.Stderr, "cancelled %d unfinished approvals\n", recovered)
+		fmt.Fprintf(logs, "cancelled %d unfinished approvals\n", recovered)
 	}
 
 	bus := events.NewEventBus()
@@ -88,7 +95,7 @@ func main() {
 		logPath := filepath.Join(env.LogDir, "mind.log")
 		fw, err := events.NewFileWriter(logPath)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "log file open failed: %v\n", err)
+			fmt.Fprintf(logs, "log file open failed: %v\n", err)
 			bus.Subscribe(events.NewConsoleWriter())
 		} else {
 			bus.Subscribe(fw)
@@ -97,62 +104,62 @@ func main() {
 
 	wsHub := hub.New()
 	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus)
+	defer func() {
+		if err := authority.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("close remote execution: %w", err))
+		}
+	}()
 	taskService := remoteexec.NewTaskService(authority, db)
 	approvalBroker, err := approval.New(approval.Config{Auditor: db})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "approval broker init failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("initialize approval broker: %w", err)
 	}
+	defer func() {
+		if err := approvalBroker.Close(); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("close approval broker: %w", err))
+		}
+	}()
 	conversations, err := newConversationManager(env, cfg, db, bus, approvalBroker, authority, taskService)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "conversation runtime init failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("initialize conversation runtime: %w", err)
 	}
 	faceGateway, err := facegateway.New(facegateway.Config{
 		Hub: wsHub, Store: db, Conversations: conversations, Approvals: approvalBroker,
 		Authority: authority, Tasks: taskService,
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Face Gateway init failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("initialize Face Gateway: %w", err)
 	}
 	dispatcher.Install(wsHub, db, authority, faceGateway)
 
-	var httpServer *http.Server
+	var hubServer *runningHubServer
 	if cfg.Server.Enabled {
-		addr := fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port)
-		mux := http.NewServeMux()
-		mux.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
-			upgrader := websocket.Upgrader{}
-			conn, err := upgrader.Upgrade(w, r, nil)
-			if err != nil {
-				return
-			}
-			wsHub.ServeWS(conn)
-		})
-		httpServer = &http.Server{Addr: addr, Handler: mux}
-		go func() {
-			fmt.Fprintf(os.Stderr, "WS Hub listening on %s/ws\n", addr)
-			if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				fmt.Fprintf(os.Stderr, "hub server: %v\n", err)
+		hubServer, err = startHubServer(cfg.Server, wsHub)
+		if err != nil {
+			return err
+		}
+		defer func() {
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := hubServer.shutdown(shutdownCtx); err != nil {
+				runErr = errors.Join(runErr, fmt.Errorf("shutdown Hub server: %w", err))
 			}
 		}()
+		fmt.Fprintf(logs, "WS Hub listening on %s\n", hubServer.wsURL)
+		if !replMode {
+			if err := writeMindReady(output, hubServer.ready(os.Getpid())); err != nil {
+				return err
+			}
+		}
 	}
 
 	if replMode {
-		runREPL(conversations, approvalBroker, bus, db, cfg.Server.Enabled, authority.Hub)
+		return runREPL(conversations, approvalBroker, bus, db, cfg.Server.Enabled, authority.Hub)
 	} else {
-		runService(env, bus)
-	}
-	if httpServer != nil {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		_ = httpServer.Shutdown(shutdownCtx)
-		cancel()
-	}
-	if err := approvalBroker.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "approval shutdown: %v\n", err)
-	}
-	if err := authority.Close(); err != nil {
-		fmt.Fprintf(os.Stderr, "remote execution shutdown: %v\n", err)
+		var serverErrors <-chan error
+		if hubServer != nil {
+			serverErrors = hubServer.errors
+		}
+		return runService(env, bus, serverErrors)
 	}
 }

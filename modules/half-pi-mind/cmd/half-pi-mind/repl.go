@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
@@ -13,14 +12,14 @@ import (
 )
 
 // runREPL 创建初始 conversation 并进入交互式 REPL。
-func runREPL(conversations *conversation.Manager, approvals *approval.Broker, bus *events.EventBus, db *store.Store, serverEnabled bool, wsHub *hub.Hub) {
+func runREPL(conversations *conversation.Manager, approvals *approval.Broker, bus *events.EventBus, db *store.Store, serverEnabled bool, wsHub *hub.Hub) error {
 	actor, err := conversations.Create("")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "core init failed: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("initialize REPL conversation: %w", err)
 	}
 	switchActor := func(id string) (*conversation.Actor, error) {
 		return conversations.Get(id)
 	}
 	repl.Run(actor, switchActor, approvals, bus, db, conversations.GroupID(), serverEnabled, wsHub)
+	return nil
 }

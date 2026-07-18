@@ -25,7 +25,12 @@ func newConversationManager(env *setup.Env, cfg *config.Config, db *store.Store,
 	if err != nil {
 		return nil, err
 	}
-	provider, err := llm.New(model.Adapter, model.Endpoint, model.APIKey, model.Name)
+	var provider llm.Provider
+	if model.Adapter == "scripted" {
+		provider, err = llm.NewScriptedProviderFromFile(model.ScriptPath)
+	} else {
+		provider, err = llm.New(model.Adapter, model.Endpoint, model.APIKey, model.Name)
+	}
 	if err != nil {
 		return nil, err
 	}

@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -45,6 +46,50 @@ func TestResolveProviderEmptyKey(t *testing.T) {
 	_, err := cfg.ResolveProvider("deepseek")
 	if err == nil {
 		t.Error("空 api_key 应报错")
+	}
+}
+
+func TestLoadResolvesScriptedProviderPath(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	config := `[llm]
+default_model = "fixture"
+
+[[llm.providers]]
+name = "fixture"
+adapter = "scripted"
+script_path = "fixtures/chat.json"
+
+[[llm.models]]
+id = "fixture"
+provider = "fixture"
+`
+	if err := os.WriteFile(path, []byte(config), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := cfg.ResolveModel("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(dir, "fixtures", "chat.json")
+	if model.Adapter != "scripted" || model.ScriptPath != want || model.APIKey != "" {
+		t.Fatalf("resolved model = %+v", model)
+	}
+}
+
+func TestResolveProviderDoesNotUseScriptPathToBypassCredentials(t *testing.T) {
+	for _, provider := range []ProviderCfg{
+		{Name: "scripted", Adapter: "scripted"},
+		{Name: "openai", Adapter: "openai", ScriptPath: "fixture.json"},
+	} {
+		cfg := &Config{LLM: LLMConfig{Providers: []ProviderCfg{provider}}}
+		if _, err := cfg.ResolveProvider(provider.Name); err == nil {
+			t.Fatalf("ResolveProvider(%+v) succeeded", provider)
+		}
 	}
 }
 

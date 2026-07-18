@@ -97,6 +97,12 @@ api_key = ""
 # base_url = "https://api.anthropic.com"
 # api_key = ""
 
+# 确定性 Scripted adapter 示例（script_path 相对本配置文件解析）：
+# [[llm.providers]]
+# name = "fixture"
+# adapter = "scripted"
+# script_path = "fixtures/chat.json"
+
   # ── Model 定义 ──
   # id       配置标识（路由时使用）
   # name     传给 API 的实际模型名，省略时等于 id

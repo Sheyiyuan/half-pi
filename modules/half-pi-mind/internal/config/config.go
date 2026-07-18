@@ -4,6 +4,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/BurntSushi/toml"
@@ -31,10 +32,11 @@ type LLMConfig struct {
 }
 
 type ProviderCfg struct {
-	Name    string `toml:"name"`
-	Adapter string `toml:"adapter"`
-	BaseURL string `toml:"base_url"`
-	APIKey  string `toml:"api_key"`
+	Name       string `toml:"name"`
+	Adapter    string `toml:"adapter"`
+	BaseURL    string `toml:"base_url"`
+	APIKey     string `toml:"api_key"`
+	ScriptPath string `toml:"script_path"`
 }
 
 type ModelCfg struct {
@@ -57,10 +59,11 @@ type StorageConfig struct {
 
 // ResolvedProvider 是解析完成的提供商信息，可直接用于初始化 LLM 适配器。
 type ResolvedProvider struct {
-	Name    string
-	Adapter string
-	BaseURL string
-	APIKey  string
+	Name       string
+	Adapter    string
+	BaseURL    string
+	APIKey     string
+	ScriptPath string
 }
 
 // ResolvedModel 是解析完成的模型信息。
@@ -76,6 +79,7 @@ type ResolvedModel struct {
 	OutputPrice  float64
 	Endpoint     string // 解析后的 API 端点
 	APIKey       string // 解析后的密钥
+	ScriptPath   string // Scripted adapter 的 fixture 路径
 }
 
 // ── 配置加载 ──
@@ -88,6 +92,9 @@ func Load(path string) (*Config, error) {
 
 	// 用环境变量覆盖 api_key：LLM_{NAME}_API_KEY
 	for i := range cfg.LLM.Providers {
+		if cfg.LLM.Providers[i].ScriptPath != "" && !filepath.IsAbs(cfg.LLM.Providers[i].ScriptPath) {
+			cfg.LLM.Providers[i].ScriptPath = filepath.Clean(filepath.Join(filepath.Dir(path), cfg.LLM.Providers[i].ScriptPath))
+		}
 		envKey := fmt.Sprintf("LLM_%s_API_KEY", strings.ToUpper(strings.ReplaceAll(cfg.LLM.Providers[i].Name, "-", "_")))
 		if v := os.Getenv(envKey); v != "" {
 			cfg.LLM.Providers[i].APIKey = v
@@ -103,14 +110,15 @@ func Load(path string) (*Config, error) {
 func (c *Config) ResolveProvider(name string) (*ResolvedProvider, error) {
 	for _, p := range c.LLM.Providers {
 		if p.Name == name {
-			if p.APIKey == "" {
+			if p.Adapter == "scripted" && p.ScriptPath == "" {
+				return nil, fmt.Errorf("provider %s has no script_path set", name)
+			}
+			if p.Adapter != "scripted" && p.APIKey == "" {
 				return nil, fmt.Errorf("provider %s has no api_key set", name)
 			}
 			return &ResolvedProvider{
-				Name:    p.Name,
-				Adapter: p.Adapter,
-				BaseURL: p.BaseURL,
-				APIKey:  p.APIKey,
+				Name: p.Name, Adapter: p.Adapter, BaseURL: p.BaseURL,
+				APIKey: p.APIKey, ScriptPath: p.ScriptPath,
 			}, nil
 		}
 	}
@@ -152,6 +160,7 @@ func (c *Config) ResolveModel(id string) (*ResolvedModel, error) {
 		OutputPrice:  model.OutputPrice,
 		Endpoint:     rp.BaseURL,
 		APIKey:       rp.APIKey,
+		ScriptPath:   rp.ScriptPath,
 	}, nil
 }
 
