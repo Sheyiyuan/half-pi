@@ -10,22 +10,29 @@ import (
 )
 
 func TestIsFaceMessageType(t *testing.T) {
-	types := []string{
+	commands := []string{
 		TypeFaceChat, TypeFaceChatCancel, TypeFaceConversationList,
 		TypeFaceConversationCreate, TypeFaceConversationSnapshot,
 		TypeFaceConversationRename, TypeFaceSubscribe, TypeFaceApprovalResolve,
 		TypeFaceRunGet, TypeFaceRunCancel, TypeFaceHandList, TypeFaceHandGet,
 		TypeFaceTaskList, TypeFaceTaskGet, TypeFaceTaskLog, TypeFaceTaskCancel,
+	}
+	serverMessages := []string{
 		TypeFaceAccepted, TypeFaceResult, TypeFaceError, TypeFaceSnapshot, TypeFaceEvent,
 	}
-	for _, typ := range types {
-		if !IsFaceMessageType(typ) {
-			t.Errorf("IsFaceMessageType(%q) = false", typ)
+	for _, typ := range commands {
+		if !IsFaceCommandType(typ) || IsFaceServerMessageType(typ) || !IsFaceMessageType(typ) {
+			t.Errorf("command classification for %q is invalid", typ)
+		}
+	}
+	for _, typ := range serverMessages {
+		if IsFaceCommandType(typ) || !IsFaceServerMessageType(typ) || !IsFaceMessageType(typ) {
+			t.Errorf("server message classification for %q is invalid", typ)
 		}
 	}
 	for _, typ := range []string{"", TypeRPC, "face.unknown", "chat.started"} {
-		if IsFaceMessageType(typ) {
-			t.Errorf("IsFaceMessageType(%q) = true", typ)
+		if IsFaceCommandType(typ) || IsFaceServerMessageType(typ) || IsFaceMessageType(typ) {
+			t.Errorf("unknown type %q was classified as Face protocol", typ)
 		}
 	}
 }

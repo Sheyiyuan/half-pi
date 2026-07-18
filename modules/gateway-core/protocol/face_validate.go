@@ -8,20 +8,34 @@ import (
 	"math"
 )
 
-// IsFaceMessageType 判断消息类型是否属于统一 Face 协议。
-func IsFaceMessageType(typ string) bool {
+// IsFaceCommandType 判断消息类型是否为 Face 发往 Mind 的 command。
+func IsFaceCommandType(typ string) bool {
 	switch typ {
 	case TypeFaceChat, TypeFaceChatCancel,
 		TypeFaceConversationList, TypeFaceConversationCreate,
 		TypeFaceConversationSnapshot, TypeFaceConversationRename,
 		TypeFaceSubscribe, TypeFaceApprovalResolve,
 		TypeFaceRunGet, TypeFaceRunCancel, TypeFaceHandList, TypeFaceHandGet,
-		TypeFaceTaskList, TypeFaceTaskGet, TypeFaceTaskLog, TypeFaceTaskCancel,
-		TypeFaceAccepted, TypeFaceResult, TypeFaceError, TypeFaceSnapshot, TypeFaceEvent:
+		TypeFaceTaskList, TypeFaceTaskGet, TypeFaceTaskLog, TypeFaceTaskCancel:
 		return true
 	default:
 		return false
 	}
+}
+
+// IsFaceServerMessageType 判断消息类型是否为 Mind 发往 Face 的正式消息。
+func IsFaceServerMessageType(typ string) bool {
+	switch typ {
+	case TypeFaceAccepted, TypeFaceResult, TypeFaceError, TypeFaceSnapshot, TypeFaceEvent:
+		return true
+	default:
+		return false
+	}
+}
+
+// IsFaceMessageType 判断消息类型是否属于统一 Face 协议。
+func IsFaceMessageType(typ string) bool {
+	return IsFaceCommandType(typ) || IsFaceServerMessageType(typ)
 }
 
 // ValidateFacePayload 严格解码并校验 Face payload 的结构，不执行权限或业务状态检查。

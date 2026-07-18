@@ -289,7 +289,7 @@ make test         # 运行全部 4 个模块的测试
 - `docs/archived/skill-session-memory-design.md` — 技能/会话/记忆组织设计
 
 #### ⏳ 待完成
-- [ ] **Face P4** Headless JSONL 客户端与真实进程级 E2E——`modules/half-pi-face/` 当前仍为占位 stub
+- [ ] **Face P4** JSONL Headless 客户端已实现；人类终端 Face 与真实 Mind/Hand/Face 进程级 E2E 待完成
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
 - [ ] Mind → Hand 外部验收 — 原生 Windows 运行 `scripts/test-windows.ps1`

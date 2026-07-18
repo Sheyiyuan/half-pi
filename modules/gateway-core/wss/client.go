@@ -56,11 +56,12 @@ func (c *Client) Connect() (*websocket.Conn, error) {
 
 // SessionConn 是完成注册后的加密客户端连接。
 type SessionConn struct {
-	Conn      *websocket.Conn
-	Session   *protocol.Session
-	inCipher  *AES128GCM
-	outCipher *AES128GCM
-	writeMu   sync.Mutex
+	Conn       *websocket.Conn
+	Session    *protocol.Session
+	inCipher   *AES128GCM
+	outCipher  *AES128GCM
+	registered protocol.Envelope
+	writeMu    sync.Mutex
 }
 
 // ConnectAndRegister 连接服务端并完成 version 1 四步挑战握手。
@@ -158,16 +159,29 @@ func (c *Client) ConnectAndRegister(credentials Credentials) (*SessionConn, erro
 	if err := session.Accept(registeredEnv); err != nil {
 		return fail(fmt.Errorf("accept registered: %w", err))
 	}
-	registered, err := DecryptEnvelopePayload[protocol.Registered](inCipher, &registeredEnv)
+	registeredPayload, err := DecryptEnvelopePayload[json.RawMessage](inCipher, &registeredEnv)
 	if err != nil {
 		return fail(fmt.Errorf("decrypt registered: %w", err))
+	}
+	registered, err := protocol.StrictDecode[protocol.Registered](registeredPayload)
+	if err != nil {
+		return fail(fmt.Errorf("decode registered: %w", err))
 	}
 	if registered.ProtocolVersion != protocol.ProtocolVersion || registered.ClientID != credentials.Label || registered.ServerID != challenge.ServerID || registered.SessionID != challenge.SessionID {
 		return fail(fmt.Errorf("registered payload mismatch"))
 	}
+	registeredEnv.Payload = registeredPayload
 	_ = conn.SetReadDeadline(time.Time{})
 	_ = conn.SetWriteDeadline(time.Time{})
-	return &SessionConn{Conn: conn, Session: session, inCipher: inCipher, outCipher: outCipher}, nil
+	return &SessionConn{
+		Conn: conn, Session: session, inCipher: inCipher, outCipher: outCipher,
+		registered: registeredEnv,
+	}, nil
+}
+
+// RegisteredEnvelope 返回完成握手时收到的已解密 registered 消息。
+func (c *SessionConn) RegisteredEnvelope() protocol.Envelope {
+	return c.registered
 }
 
 func validateCredentials(credentials Credentials) error {

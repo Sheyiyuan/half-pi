@@ -108,7 +108,7 @@ func (g *Gateway) HandleFaceMessage(peer *hub.Peer, env protocol.Envelope) {
 	}
 	state := g.connection(peer)
 	meta := decodeMeta(env.Payload)
-	if !isFaceCommand(env.Type) || protocol.ValidateFacePayload(env.Type, env.Payload) != nil {
+	if !protocol.IsFaceCommandType(env.Type) || protocol.ValidateFacePayload(env.Type, env.Payload) != nil {
 		g.sendError(state, meta, protocol.FaceErrorInvalidRequest, "invalid Face request", false)
 		return
 	}
@@ -262,22 +262,6 @@ func decodeMeta(payload json.RawMessage) protocol.FaceCommandMeta {
 	var meta protocol.FaceCommandMeta
 	_ = json.Unmarshal(payload, &meta)
 	return meta
-}
-
-func isFaceCommand(typ string) bool {
-	switch typ {
-	case protocol.TypeFaceChat, protocol.TypeFaceChatCancel,
-		protocol.TypeFaceConversationList, protocol.TypeFaceConversationCreate,
-		protocol.TypeFaceConversationSnapshot, protocol.TypeFaceConversationRename,
-		protocol.TypeFaceSubscribe, protocol.TypeFaceApprovalResolve,
-		protocol.TypeFaceRunGet, protocol.TypeFaceRunCancel,
-		protocol.TypeFaceHandList, protocol.TypeFaceHandGet,
-		protocol.TypeFaceTaskList, protocol.TypeFaceTaskGet,
-		protocol.TypeFaceTaskLog, protocol.TypeFaceTaskCancel:
-		return true
-	default:
-		return false
-	}
 }
 
 func hasScope(identity protocol.FaceIdentity, scope protocol.FaceScope) bool {

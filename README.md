@@ -4,7 +4,7 @@
 
 # Half Pi · 半派
 
-> **当前状态：Alpha 开发中。** Mind 与 Hand 的远程执行闭环及 Face 的加密 Gateway、Chat、异步审批和 run/task cancel runtime 已可用；首个 Face 客户端仍在实现。
+> **当前状态：Alpha 开发中。** Mind 与 Hand 的远程执行闭环及 Face 的加密 Gateway、Chat、异步审批和 run/task cancel runtime 已可用；JSONL Headless Face 已可连接，终端 Face 与真实进程 E2E 仍在实现。
 
 ---
 
@@ -84,7 +84,7 @@ flowchart LR
 | 角色 | 职责 | 当前状态 |
 | --- | --- | --- |
 | **Mind** | 常驻的智能与状态中心，负责会话、LLM 决策、技能、审批、设备调度和审计 | 服务模式和 REPL 可用 |
-| **Face** | 无状态交互入口，负责输入、展示、审批交互和事件投影；人类客户端与无头 Agent Face 共用统一协议 | Mind 侧 runtime 可用，客户端仍为占位程序 |
+| **Face** | 无状态交互入口，负责输入、展示、审批交互和事件投影；人类客户端与无头 Agent Face 共用统一协议 | Headless JSONL 客户端可用，终端客户端开发中 |
 | **Hand** | 部署在用户设备上的轻量执行节点，执行工具并实施本地安全策略 | 远程执行链路可用 |
 
 共享组件位于独立 Go 模块中：

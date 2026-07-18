@@ -57,6 +57,12 @@ func TestClientFourStepEncryptedSession(t *testing.T) {
 	if h.PeerByType(hub.PeerFace, "face-1") == nil {
 		t.Fatal("registered face is not routable")
 	}
+	ready := conn.RegisteredEnvelope()
+	registered, err := protocol.DecodePayload[protocol.Registered](&ready)
+	if err != nil || ready.Type != protocol.TypeRegistered || ready.Seq != 1 ||
+		registered.ClientID != "face-1" || registered.SessionID != ready.SessionID {
+		t.Fatalf("registered ready envelope = %+v, %+v, %v", ready, registered, err)
+	}
 	if err := conn.SendPayload("ping-1", protocol.TypePing, protocol.Ping{Timestamp: 42}); err != nil {
 		t.Fatalf("SendPayload: %v", err)
 	}

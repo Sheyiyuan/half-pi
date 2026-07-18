@@ -2,7 +2,7 @@
 
 ## 状态
 
-本文面向未来的 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密和 P1-P3 Mind runtime 已实现并通过 race 测试。当前可使用 conversation/Hand/run/task 查询、快照、订阅、Chat/cancel、异步审批和 run/task cancel；Headless 客户端与真实进程级 E2E 尚未实现。
+本文面向 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1-P3 Mind runtime 和 JSONL Headless 客户端已实现并通过 race 测试。当前可使用 conversation/Hand/run/task 查询、快照、订阅、Chat/cancel、异步审批和 run/task cancel；真实进程级 E2E 与人类终端 Face 尚未完成。
 
 架构和完整生命周期见 [`face-protocol.md`](face-protocol.md)。本文只说明客户端应依赖的正式协议契约。
 
@@ -174,14 +174,24 @@ conversation.changed
 
 ## JSONL 客户端约定
 
-未来 Headless Agent Face 应遵循：
+`half-pi-face --mode headless` 已实现以下约定：
 
 - stdin 每行一个 command JSON 对象。
 - stdout 每行一个正式协议消息，不能混入日志。
 - stderr 输出连接和诊断日志。
-- 完成注册后输出结构化 ready 状态。
+- 完成注册后首先输出已解密的正式 `registered` envelope，作为结构化 ready 状态。
 - 连接或协议失败使用非零进程退出码。
 - 任务失败通过 `face.result.status` 和稳定错误码表达，不因普通任务失败退出客户端进程。
+
+stdin command 使用尚未 stamp 的 `protocol.Envelope`；客户端负责生成缺省 `msg_id`，并填充、绑定和加密连接字段：
+
+```json
+{"type":"face.conversation.list","payload":{"request_id":"req-list-1"}}
+```
+
+调用方可以显式提供 `msg_id`，但不得提供 `session_id`、`from`、`to` 或 `seq`。客户端会在发送前调用正式 payload 验证器，并拒绝服务端消息类型、未知字段和超限输入。stdout 返回的 envelope 已解密但保留 Mind 签发的连接字段，可直接按 `type` 和 typed payload 解码。
+
+默认配置位于 `~/.half-pi/face/config.toml`，权限在 Unix 上收紧为目录 `0700`、文件 `0600`。凭据也可通过 `FACE_TOKEN`、`HALF_PI_FACE_APPLICATION_KEY`、`HALF_PI_FACE_ID` 和 `HALF_PI_FACE_SERVER` 注入；非 loopback 地址仍必须使用 `wss://`。
 
 ## 安全要求
 
@@ -195,7 +205,7 @@ conversation.changed
 
 异步审批 Broker、run/task cancel 和 Face identity 审计已作为 P3 runtime 基线完成。后续工作为：
 
-1. JSONL Headless Agent Face 与确定性进程级 E2E。
+1. 确定性真实进程级 E2E 与人类终端 Face。
 2. conversation 写命令等非 Chat command 的通用幂等 registry。
 
 以上运行时能力全部复用当前 wire protocol，不新增 AI 专用消息语义。
