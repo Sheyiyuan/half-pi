@@ -269,6 +269,24 @@ func TestCredentialNamespacesAllowSameLabel(t *testing.T) {
 	}
 }
 
+func TestCredentialNamespacesRejectCrossAuthentication(t *testing.T) {
+	s := newCredentialTestStore(t)
+	hand, err := s.AddHandCredential("shared-label")
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := s.AddFaceToken("shared-label", []protocol.FaceScope{protocol.FaceScopeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.AuthenticateFaceConnection(hand.Label, hand.Token); err == nil {
+		t.Fatal("Hand credential authenticated as Face")
+	}
+	if _, _, err := s.AuthenticateHandConnection(face.Label, face.Token); err == nil {
+		t.Fatal("Face credential authenticated as Hand")
+	}
+}
+
 func TestCredentialSecretUniqueness(t *testing.T) {
 	s := newCredentialTestStore(t)
 	hand, err := s.AddHandCredential("hand-one")
