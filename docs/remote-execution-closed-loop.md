@@ -2,7 +2,7 @@
 
 ## 状态
 
-部分落地。本文承接 [`archived/remote-execution.md`](archived/remote-execution.md) 的 MVP 设计。审批证明、accepted/rejected、显式取消、唯一终态、服务级 Authority、SQLite 审计和会话隔离已经实现；`rpc_progress` 与后台任务生命周期仍未实现，Windows 进程树取消仍待原生环境验收。工程状态和后续安排分别以 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md) 和 [`next-development-plan.md`](next-development-plan.md) 为准。
+部分落地。本文承接 [`archived/remote-execution.md`](archived/remote-execution.md) 的 MVP 设计。审批证明、accepted/rejected、显式取消、唯一终态、服务级 Authority、SQLite 审计、会话隔离和有界 `rpc_progress` 已经实现；后台任务生命周期仍未实现，Windows 进程树取消仍待原生环境验收。工程状态和后续安排分别以 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md) 和 [`next-development-plan.md`](next-development-plan.md) 为准。
 
 ## 背景
 
@@ -186,18 +186,18 @@ type RPCRejected struct {
 
 ### Progress
 
-进度流是可选能力。第一阶段可只对 `exec_command` 或未来后台任务启用。
+进度流是可选能力。当前支持 Unix `exec_command`，以及共享同一输出实现的 Windows `exec_cmd` / `exec_ps`；不包含后台任务。
 
 ```go
 type RPCProgress struct {
 	RunID string `json:"run_id"`
 	Seq   int64  `json:"seq"`
-	Kind  string `json:"kind"` // stdout, stderr, status
+	Kind  string `json:"kind"` // stdout, stderr
 	Data  string `json:"data"`
 }
 ```
 
-`Seq` 用于 Mind 去重和保持单个 run 内的顺序。
+`Seq` 独立于 Envelope 序号，由 Hand 仅对获准发送的块编号。协议统一限制 progress 单块 4 KiB、每 run 1 MiB 和 256 个事件；最终 result 仍只服从 Hand 配置的输出上限。队列满时允许丢弃，停止时不排空；已开始写入的 WebSocket 帧不可物理抢占，result 最多等待该帧至传输写超时。Mind 在 accepted/running 接收单调进度；已接受后进入 cancel_requested 时仍接收在途单调进度。接受前进度报错，重复、终态后和超限消息不会持久化或发布。
 
 ### Result
 

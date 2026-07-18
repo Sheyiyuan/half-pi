@@ -2,6 +2,7 @@ package store
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -150,5 +151,69 @@ func TestRemoteRunAuditStoresNoRawArgs(t *testing.T) {
 	}
 	if count != 0 {
 		t.Fatal("raw secret appeared in remote run audit")
+	}
+}
+
+func TestRemoteRunProgressAuditIsSeparateBoundedAndMigrationSafe(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "progress.db")
+	first, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := remoteexec.NewRegistry(first)
+	if err := registry.Create("progress-run", "session-1", "hand-1", "exec_command"); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Transition("progress-run", protocol.RunApproved); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.Transition("progress-run", protocol.RunSent); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.ApplyAccepted("hand-1", protocol.RPCAccepted{
+		RunID: "progress-run", StartedAt: time.Now().UnixMilli(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	admission, err := registry.ApplyProgressFrom("hand-1", "", protocol.RPCProgress{
+		RunID: "progress-run", Seq: 2, Kind: protocol.ProgressStderr, Data: "bounded",
+	})
+	if err != nil || !admission.Accepted || !admission.Gap {
+		t.Fatalf("admission = %+v, %v", admission, err)
+	}
+	run, err := first.GetRemoteRun("progress-run")
+	if err != nil || run.Status != protocol.RunRunning {
+		t.Fatalf("progress changed status: %+v, %v", run, err)
+	}
+	events, err := first.ListRemoteRunEvents("progress-run")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := events[len(events)-1]
+	if last.Type != "progress" || last.ProgressSeq != 2 || last.Kind != protocol.ProgressStderr || !last.Gap || last.Message != "bounded" {
+		t.Fatalf("progress event = %+v", last)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := New(path)
+	if err != nil {
+		t.Fatalf("reopen migrated store: %v", err)
+	}
+	defer second.Close()
+	if err := second.AppendRemoteRunProgress(remoteexec.AuditProgress{
+		RunID: "progress-run", Seq: 2, Kind: protocol.ProgressStderr, Data: "duplicate", At: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	events, _ = second.ListRemoteRunEvents("progress-run")
+	if events[len(events)-1].Message != "bounded" {
+		t.Fatalf("duplicate progress was persisted: %+v", events)
+	}
+	if err := second.AppendRemoteRunProgress(remoteexec.AuditProgress{
+		RunID: "progress-run", Seq: 3, Kind: protocol.ProgressStdout,
+		Data: strings.Repeat("x", protocol.MaxRPCProgressChunkBytes+1), At: time.Now(),
+	}); err == nil {
+		t.Fatal("oversized audit data accepted")
 	}
 }

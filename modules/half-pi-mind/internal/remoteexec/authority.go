@@ -26,6 +26,7 @@ type Authority struct {
 
 	pendingMu sync.Mutex
 	pending   map[string]*pendingCall
+	orderedMu sync.Mutex
 }
 
 // NewAuthority 创建 Authority 并安装唯一的 Hub 生命周期回调。
@@ -93,6 +94,12 @@ func (a *Authority) handleMessage(peer *hub.Peer, msg protocol.Envelope) {
 		return
 	}
 	switch msg.Type {
+	case protocol.TypeRPCAccepted, protocol.TypeRPCRejected, protocol.TypeRPCProgress,
+		protocol.TypeRPCResult, protocol.TypeRPCCancelResult:
+		a.orderedMu.Lock()
+		defer a.orderedMu.Unlock()
+	}
+	switch msg.Type {
 	case protocol.TypeRPCAccepted:
 		accepted, err := protocol.DecodePayload[protocol.RPCAccepted](&msg)
 		if err == nil && protocol.ValidateRPCAccepted(accepted) == nil {
@@ -113,6 +120,19 @@ func (a *Authority) handleMessage(peer *hub.Peer, msg protocol.Envelope) {
 		a.publishError(err)
 		if err == nil || IsAuditFailure(err) {
 			a.publishRun(rejected.RunID)
+		}
+	case protocol.TypeRPCProgress:
+		progress, err := protocol.DecodePayload[protocol.RPCProgress](&msg)
+		var admission ProgressAdmission
+		if err == nil {
+			err = protocol.ValidateRPCProgress(progress)
+		}
+		if err == nil {
+			admission, err = a.Registry.ApplyProgressFrom(peer.ID, peer.SessionID(), progress)
+		}
+		a.publishError(err)
+		if err == nil && admission.Accepted {
+			a.publishProgress(progress, admission.Gap)
 		}
 	case protocol.TypeRPCResult:
 		result, err := protocol.DecodePayload[protocol.RPCResult](&msg)
@@ -158,6 +178,25 @@ func (a *Authority) handleMessage(peer *hub.Peer, msg protocol.Envelope) {
 	}
 }
 
+// ToolProgressEventData 是 TypeToolProgress 的结构化数据。
+type ToolProgressEventData struct {
+	RunID string                `json:"run_id"`
+	Seq   int64                 `json:"seq"`
+	Kind  protocol.ProgressKind `json:"kind"`
+	Data  string                `json:"data"`
+	Gap   bool                  `json:"gap"`
+}
+
+func (a *Authority) publishProgress(progress protocol.RPCProgress, gap bool) {
+	run, ok := a.Registry.Snapshot(progress.RunID)
+	if !ok || a.bus == nil {
+		return
+	}
+	a.bus.PublishSync(events.New(run.SessionID, "remoteexec", events.LevelInfo, events.TypeToolProgress, progress.Data).WithData(
+		ToolProgressEventData{RunID: progress.RunID, Seq: progress.Seq, Kind: progress.Kind, Data: progress.Data, Gap: gap},
+	))
+}
+
 func (a *Authority) deliverPending(peerID, id string, msg protocol.Envelope) {
 	a.pendingMu.Lock()
 	pending, ok := a.pending[id]
@@ -184,7 +223,7 @@ func (a *Authority) publishRun(runID string) {
 	if !ok || a.bus == nil {
 		return
 	}
-	a.bus.Publish(events.New(run.SessionID, "remoteexec", events.LevelInfo, events.TypeToolResult,
+	a.bus.PublishSync(events.New(run.SessionID, "remoteexec", events.LevelInfo, events.TypeToolResult,
 		fmt.Sprintf("run=%s hand=%s tool=%s status=%s", run.ID, run.HandID, run.Tool, run.Status)))
 }
 

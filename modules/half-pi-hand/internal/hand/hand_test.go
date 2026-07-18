@@ -130,6 +130,105 @@ func TestHandRPCIntegration(t *testing.T) {
 	}
 }
 
+func TestHandGenericToolDoesNotReceiveProgress(t *testing.T) {
+	const toolName = "r2_generic_progress_tool"
+	var callbackPresent atomic.Bool
+	executor.Register(executor.Tool{
+		Name: toolName,
+		Execute: func(ctx context.Context, _ json.RawMessage) *executor.ToolResult {
+			executor.ReportProgress(ctx, executor.Progress{Kind: "stdout", Data: "unexpected"})
+			callbackPresent.Store(true)
+			return &executor.ToolResult{Success: true, Output: "final"}
+		},
+	})
+	resultCh := make(chan protocol.RPCResult, 1)
+	progressCh := make(chan protocol.RPCProgress, 1)
+	h := startTestHand(t, "generic-progress-hand", nil, func(msg protocol.Envelope) {
+		switch msg.Type {
+		case protocol.TypeRPCProgress:
+			progress, _ := protocol.DecodePayload[protocol.RPCProgress](&msg)
+			progressCh <- progress
+		case protocol.TypeRPCResult:
+			result, _ := protocol.DecodePayload[protocol.RPCResult](&msg)
+			resultCh <- result
+		}
+	})
+	env, _ := protocol.NewEnvelope("", protocol.TypeRPC, testRPC("generic-progress-run", toolName, map[string]any{}, time.Second))
+	if err := h.Send("generic-progress-hand", *env); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case result := <-resultCh:
+		if result.Output != "final" {
+			t.Fatalf("result = %+v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for result")
+	}
+	select {
+	case progress := <-progressCh:
+		t.Fatalf("generic tool emitted progress: %+v", progress)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if !callbackPresent.Load() {
+		t.Fatal("generic tool did not execute")
+	}
+}
+
+func TestProgressPumpIsBoundedAndStopsBeforeResult(t *testing.T) {
+	var progressBytes int
+	var progressEvents int
+	resultSeen := false
+	h := &Hand{}
+	h.send = func(typ string, payload any) error {
+		if resultSeen && typ == protocol.TypeRPCProgress {
+			t.Fatal("progress sent after result")
+		}
+		if typ == protocol.TypeRPCProgress {
+			progress := payload.(protocol.RPCProgress)
+			progressBytes += len(progress.Data)
+			progressEvents++
+		}
+		return nil
+	}
+	pump := newProgressPump(h, "progress-run", 10)
+	for range protocol.MaxRPCProgressEvents + progressQueueSize + 10 {
+		pump.report(executor.Progress{Kind: "stdout", Data: strings.Repeat("x", protocol.MaxRPCProgressChunkBytes)})
+	}
+	pump.close()
+	resultSeen = true
+	if progressBytes > 10 || progressEvents > protocol.MaxRPCProgressEvents {
+		t.Fatalf("progress exceeded caps: bytes=%d events=%d", progressBytes, progressEvents)
+	}
+}
+
+func TestProgressIsRestrictedToCommandTools(t *testing.T) {
+	for _, name := range []string{"exec_command", "exec_cmd", "exec_ps"} {
+		if !supportsProgress(name) {
+			t.Fatalf("%s does not support progress", name)
+		}
+	}
+	for _, name := range []string{"read_file", "write_file", "custom_tool"} {
+		if supportsProgress(name) {
+			t.Fatalf("generic tool %s supports progress", name)
+		}
+	}
+}
+
+func TestFinalOutputLimitIsIndependentOfProgressCap(t *testing.T) {
+	configured := int64(protocol.MaxRPCProgressBytes + 123)
+	h := &Hand{cfg: &config.Config{Hand: config.HandConfig{Limits: config.LimitsConfig{MaxOutputSize: configured}}}}
+	if got := h.maxOutputSize(); got != configured {
+		t.Fatalf("final output limit = %d, want %d", got, configured)
+	}
+	if got := h.maxProgressSize(); got != protocol.MaxRPCProgressBytes {
+		t.Fatalf("progress limit = %d, want %d", got, protocol.MaxRPCProgressBytes)
+	}
+	if got := (&Hand{}).maxOutputSize(); got != 1<<20 {
+		t.Fatalf("default final output limit = %d", got)
+	}
+}
+
 func TestHandAllowListMiss(t *testing.T) {
 	rejectedCh := make(chan protocol.RPCRejected, 1)
 	cfg := &config.Config{Hand: config.HandConfig{Permission: config.PermissionConfig{AllowTools: []string{"read_file"}}}}

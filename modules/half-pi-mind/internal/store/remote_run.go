@@ -22,9 +22,28 @@ type RemoteRunRecord struct {
 // RemoteRunEventRecord 是一次持久化状态迁移。
 type RemoteRunEventRecord struct {
 	Seq                  int
+	ProgressSeq          int64
 	RunID, Type, Message string
+	Kind                 protocol.ProgressKind
+	Gap                  bool
 	FromStatus, ToStatus protocol.RunStatus
 	CreatedAt            time.Time
+}
+
+// AppendRemoteRunProgress 追加独立进度审计，不更新 remote_runs 状态。
+func (s *Store) AppendRemoteRunProgress(progress remoteexec.AuditProgress) error {
+	if len(progress.Data) > protocol.MaxRPCProgressChunkBytes {
+		return fmt.Errorf("progress data exceeds %d bytes", protocol.MaxRPCProgressChunkBytes)
+	}
+	_, err := s.db.Exec(`INSERT OR IGNORE INTO remote_run_events
+		(run_id, seq, from_status, to_status, type, message, created_at, progress_seq, kind, gap)
+		SELECT ?, COALESCE(MAX(seq), 0) + 1, '', '', 'progress', ?, ?, ?, ?, ?
+		FROM remote_run_events WHERE run_id = ?`,
+		progress.RunID, progress.Data, progress.At.UnixMilli(), progress.Seq, progress.Kind, progress.Gap, progress.RunID)
+	if err != nil {
+		return fmt.Errorf("insert remote run progress: %w", err)
+	}
+	return nil
 }
 
 // CreateRemoteRun 创建 run 及其 created 事件。
@@ -120,7 +139,8 @@ func (s *Store) ListRemoteRunsByHand(handID string) ([]RemoteRunRecord, error) {
 
 // ListRemoteRunEvents 查询 run 的有序事件。
 func (s *Store) ListRemoteRunEvents(runID string) ([]RemoteRunEventRecord, error) {
-	rows, err := s.db.Query(`SELECT seq, run_id, from_status, to_status, type, message, created_at
+	rows, err := s.db.Query(`SELECT seq, run_id, from_status, to_status, type, message, created_at,
+		progress_seq, kind, gap
 		FROM remote_run_events WHERE run_id = ? ORDER BY seq`, runID)
 	if err != nil {
 		return nil, err
@@ -130,7 +150,8 @@ func (s *Store) ListRemoteRunEvents(runID string) ([]RemoteRunEventRecord, error
 	for rows.Next() {
 		var event RemoteRunEventRecord
 		var createdAt int64
-		if err := rows.Scan(&event.Seq, &event.RunID, &event.FromStatus, &event.ToStatus, &event.Type, &event.Message, &createdAt); err != nil {
+		if err := rows.Scan(&event.Seq, &event.RunID, &event.FromStatus, &event.ToStatus, &event.Type, &event.Message, &createdAt,
+			&event.ProgressSeq, &event.Kind, &event.Gap); err != nil {
 			return nil, err
 		}
 		event.CreatedAt = time.UnixMilli(createdAt)
@@ -237,3 +258,4 @@ func scanRemoteRun(row scanner) (RemoteRunRecord, error) {
 }
 
 var _ remoteexec.Auditor = (*Store)(nil)
+var _ remoteexec.ProgressAuditor = (*Store)(nil)

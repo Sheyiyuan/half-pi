@@ -18,6 +18,32 @@ type ToolResult struct {
 	Error   string
 }
 
+// Progress 是工具执行期间产生的可选增量信息。
+type Progress struct {
+	Kind string
+	Data string
+}
+
+// ProgressFunc 接收工具执行期间的增量信息。调用方应快速返回，并允许并发调用。
+type ProgressFunc func(Progress)
+
+type progressContextKey struct{}
+
+// WithProgress 返回携带可选进度回调的 context。
+func WithProgress(ctx context.Context, fn ProgressFunc) context.Context {
+	if fn == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, progressContextKey{}, fn)
+}
+
+// ReportProgress 向 context 中的回调报告进度；未配置回调时无操作。
+func ReportProgress(ctx context.Context, progress Progress) {
+	if fn, ok := ctx.Value(progressContextKey{}).(ProgressFunc); ok {
+		fn(progress)
+	}
+}
+
 // Decision 是安全检查的决策结果。
 type Decision int
 

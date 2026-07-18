@@ -17,6 +17,7 @@ const (
 	TypeRPC             = "rpc"
 	TypeRPCAccepted     = "rpc_accepted"
 	TypeRPCRejected     = "rpc_rejected"
+	TypeRPCProgress     = "rpc_progress"
 	TypeRPCResult       = "rpc_result"
 	TypeRPCCancel       = "rpc_cancel"
 	TypeRPCCancelResult = "rpc_cancel_result"

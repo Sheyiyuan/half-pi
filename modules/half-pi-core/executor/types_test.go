@@ -184,6 +184,16 @@ func TestRunnerExecutesAllowedTool(t *testing.T) {
 	}
 }
 
+func TestProgressContextIsOptional(t *testing.T) {
+	ReportProgress(context.Background(), Progress{Kind: "stdout", Data: "ignored"})
+	var got Progress
+	ctx := WithProgress(context.Background(), func(progress Progress) { got = progress })
+	ReportProgress(ctx, Progress{Kind: "stderr", Data: "message"})
+	if got.Kind != "stderr" || got.Data != "message" {
+		t.Fatalf("progress = %+v", got)
+	}
+}
+
 func TestRunnerRejectsDeniedTool(t *testing.T) {
 	name := "runner_denied"
 	Register(Tool{

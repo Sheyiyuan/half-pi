@@ -4,14 +4,19 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
+	"unicode/utf8"
+
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 )
 
 func TestRunCommandCancelsWindowsProcessTree(t *testing.T) {
@@ -72,6 +77,37 @@ func TestRunCommandCancelsWindowsProcessTree(t *testing.T) {
 	assertProcessMissing(t, childPID)
 	assertProcessMissing(t, grandchildPID)
 	assertProcessRunning(t, unrelated.Process.Pid)
+}
+
+func TestWindowsExecToolsProgressPreservesFinalOutput(t *testing.T) {
+	for _, name := range []string{"exec_cmd", "exec_ps"} {
+		t.Run(name, func(t *testing.T) {
+			tool, ok := executor.FindTool(name)
+			if !ok {
+				t.Fatalf("%s not registered", name)
+			}
+			var chunks []executor.Progress
+			var chunksMu sync.Mutex
+			ctx := executor.WithProgress(context.Background(), func(progress executor.Progress) {
+				chunksMu.Lock()
+				defer chunksMu.Unlock()
+				chunks = append(chunks, progress)
+			})
+			command := "echo hello"
+			result := tool.Execute(ctx, json.RawMessage(`{"command":"`+command+`"}`))
+			if !result.Success || !strings.Contains(result.Output, "hello") {
+				t.Fatalf("result = %+v", result)
+			}
+			if len(chunks) == 0 {
+				t.Fatal("missing progress")
+			}
+			for _, chunk := range chunks {
+				if len(chunk.Data) > commandProgressChunkBytes || !utf8.ValidString(chunk.Data) {
+					t.Fatalf("invalid chunk: %+v", chunk)
+				}
+			}
+		})
+	}
 }
 
 func writeScript(t *testing.T, path, content string) {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -49,6 +50,7 @@ func TestRPCMessagesRoundTrip(t *testing.T) {
 		{TypeRPC, RPC{RunID: "run-1", Tool: "write_file", Args: map[string]any{"path": "a", "content": "b"}, DeadlineAt: now.Add(time.Minute).UnixMilli(), Approval: &Approval{Approved: true, Source: "user", OneShot: true, ArgsDigest: digest, ApprovedAt: now.UnixMilli(), ExpiresAt: now.Add(time.Minute).UnixMilli()}}},
 		{TypeRPCAccepted, RPCAccepted{RunID: "run-1", StartedAt: now.UnixMilli()}},
 		{TypeRPCRejected, RPCRejected{RunID: "run-1", Code: RejectDenyTools, Reason: "denied"}},
+		{TypeRPCProgress, RPCProgress{RunID: "run-1", Seq: 1, Kind: ProgressStdout, Data: "working"}},
 		{TypeRPCResult, RPCResult{RunID: "run-1", Success: true, Output: "ok", Truncated: true}},
 		{TypeRPCCancel, RPCCancel{RunID: "run-1", Reason: "user"}},
 		{TypeRPCCancelResult, RPCCancelResult{RunID: "run-1", Status: CancelCancelled}},
@@ -67,6 +69,8 @@ func TestRPCMessagesRoundTrip(t *testing.T) {
 				got, err = DecodePayload[RPCAccepted](env)
 			case TypeRPCRejected:
 				got, err = DecodePayload[RPCRejected](env)
+			case TypeRPCProgress:
+				got, err = DecodePayload[RPCProgress](env)
 			case TypeRPCResult:
 				got, err = DecodePayload[RPCResult](env)
 			case TypeRPCCancel:
@@ -214,6 +218,26 @@ func TestMessageValidatorsRejectUnknownCodes(t *testing.T) {
 	}
 	if err := ValidateRPCCancelResult(RPCCancelResult{RunID: "run-1", Status: "other"}); err == nil {
 		t.Fatal("unknown cancel status must be rejected")
+	}
+}
+
+func TestValidateRPCProgress(t *testing.T) {
+	valid := RPCProgress{RunID: "run-1", Seq: 1, Kind: ProgressStdout, Data: "你好"}
+	if err := ValidateRPCProgress(valid); err != nil {
+		t.Fatalf("valid progress rejected: %v", err)
+	}
+	invalid := []RPCProgress{
+		{Seq: 1, Kind: ProgressStdout, Data: "x"},
+		{RunID: "run-1", Kind: ProgressStdout, Data: "x"},
+		{RunID: "run-1", Seq: 1, Kind: "status", Data: "x"},
+		{RunID: "run-1", Seq: 1, Kind: ProgressStdout},
+		{RunID: "run-1", Seq: 1, Kind: ProgressStdout, Data: string([]byte{0xff})},
+		{RunID: "run-1", Seq: 1, Kind: ProgressStdout, Data: strings.Repeat("x", MaxRPCProgressChunkBytes+1)},
+	}
+	for _, msg := range invalid {
+		if err := ValidateRPCProgress(msg); err == nil {
+			t.Fatalf("invalid progress accepted: %+v", msg)
+		}
 	}
 }
 

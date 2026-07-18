@@ -100,7 +100,15 @@ func (h *Hand) handleRPC(ctx context.Context, env protocol.Envelope) {
 		return
 	}
 
+	var pump *progressPump
+	if supportsProgress(rpc.Tool) {
+		pump = newProgressPump(h, rpc.RunID, h.maxProgressSize())
+		execCtx = executor.WithProgress(execCtx, pump.report)
+	}
 	result := tool.Execute(execCtx, args)
+	if pump != nil {
+		pump.close()
+	}
 	if result == nil {
 		result = &executor.ToolResult{Error: "tool returned nil result"}
 	}
@@ -123,6 +131,15 @@ func (h *Hand) handleRPC(ctx context.Context, env protocol.Envelope) {
 		fmt.Fprintf(os.Stderr, "send rpc result failed: %v\n", err)
 	}
 	h.finishTask(rpc.RunID, taskDone)
+}
+
+func supportsProgress(tool string) bool {
+	switch tool {
+	case "exec_command", "exec_cmd", "exec_ps":
+		return true
+	default:
+		return false
+	}
 }
 
 func (h *Hand) rejectRPC(runID string, code protocol.RejectCode, reason string) {

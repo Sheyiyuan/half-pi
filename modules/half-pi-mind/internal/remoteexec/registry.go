@@ -23,14 +23,63 @@ type Run struct {
 	AcceptedAt time.Time
 	FinishedAt time.Time
 
-	Result       *protocol.RPCResult
-	Rejection    *protocol.RPCRejected
-	Error        string
-	CancelReason string
-	Metadata     AuditMetadata
+	Result         *protocol.RPCResult
+	Rejection      *protocol.RPCRejected
+	Error          string
+	CancelReason   string
+	Metadata       AuditMetadata
+	ProgressSeq    int64
+	ProgressBytes  int64
+	ProgressEvents int
 
 	done    chan struct{}
 	waiters int
+}
+
+// ProgressAdmission 是 Registry 对一条进度消息的接收结果。
+type ProgressAdmission struct {
+	Accepted bool
+	Gap      bool
+}
+
+// ApplyProgressFrom 校验来源并单调接收一条有界进度消息。
+// accepted/running 状态允许进度；已被接受后进入 cancel_requested 的 run
+// 仍允许在途单调进度。终态、重复和超限消息静默丢弃，接受前进度返回错误。
+// 审计失败为 best effort。审计当前仍在全局锁内，以保持进度接纳与所有状态
+// 审计的顺序；移出该锁需要为全部审计操作引入统一序列。
+func (r *Registry) ApplyProgressFrom(handID, connectionID string, msg protocol.RPCProgress) (ProgressAdmission, error) {
+	if err := protocol.ValidateRPCProgress(msg); err != nil {
+		return ProgressAdmission{}, err
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run, err := r.runFromPeerLocked(msg.RunID, handID, connectionID)
+	if err != nil {
+		return ProgressAdmission{}, err
+	}
+	if protocol.IsTerminalRunStatus(run.Status) || msg.Seq <= run.ProgressSeq {
+		return ProgressAdmission{}, nil
+	}
+	allowed := run.Status == protocol.RunAccepted || run.Status == protocol.RunRunning
+	if run.Status == protocol.RunCancelRequested && !run.AcceptedAt.IsZero() {
+		allowed = true
+	}
+	if !allowed {
+		return ProgressAdmission{}, fmt.Errorf("run %q cannot accept progress in status %s", msg.RunID, run.Status)
+	}
+	if run.ProgressEvents >= protocol.MaxRPCProgressEvents || run.ProgressBytes+int64(len(msg.Data)) > protocol.MaxRPCProgressBytes {
+		return ProgressAdmission{}, nil
+	}
+	gap := msg.Seq != run.ProgressSeq+1
+	run.ProgressSeq = msg.Seq
+	run.ProgressBytes += int64(len(msg.Data))
+	run.ProgressEvents++
+	if auditor, ok := r.auditor.(ProgressAuditor); ok {
+		_ = auditor.AppendRemoteRunProgress(AuditProgress{
+			RunID: msg.RunID, Seq: msg.Seq, Kind: msg.Kind, Data: msg.Data, Gap: gap, At: time.Now(),
+		})
+	}
+	return ProgressAdmission{Accepted: true, Gap: gap}, nil
 }
 
 // Registry 按 run_id 原子管理远程执行状态。

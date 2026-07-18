@@ -23,7 +23,7 @@
 - Chat `request_id`、幂等、busy、取消和唯一终态响应。
 - 异步审批对象及 Face 审批审计。
 - Headless Agent Face、Scripted LLM 和真实进程级 E2E。
-- `rpc_progress`、后台任务生命周期和结果保留策略。
+- 后台任务生命周期和结果保留策略。
 - Windows Job Object 取消逻辑的原生 Windows 测试验收。
 
 ## 开发原则
@@ -178,9 +178,10 @@ P0 中 wire contract 已完成，其余 P0 以及 P1-P4 整体延期，不属于
 
 ### R2：可选进度流
 
-- 增加 `rpc_progress` 和单 run `seq`，首期只支持 `exec_command`。
-- Mind 去重、排序、限量持久/转发；慢消费者不得阻塞最终 result。
-- progress 不改变唯一终态，也不能绕过最终输出上限。
+- 已实现 `rpc_progress` 和独立的单 run `seq`，支持 Unix `exec_command` 以及共享同一输出实现的 Windows `exec_cmd` / `exec_ps`。
+- stdout/stderr 分流；协议统一限制 progress 单块 4 KiB、每 run 1 MiB/256 个事件。Hand 的 progress 总量另取配置输出上限与协议上限的较小值，最终输出仍只服从原配置。
+- Hand 使用有界非阻塞队列，队满可丢弃且 final result 前直接停止、不排空；已开始写入的 WebSocket 帧不可抢占，result 最多等待该帧至传输写超时。Mind 单调接收并去重，观察缺口但不等待补齐。
+- progress 独立限量审计和发布，不改变状态；重复、晚到、超限事件不发布，审计失败不 fail-closed。
 
 ### R3：后台任务
 
@@ -192,7 +193,7 @@ P0 中 wire contract 已完成，其余 P0 以及 P1-P4 整体延期，不属于
 
 1. R0：补齐闭环回归证据。
 2. R1：Windows 交叉编译和原生验收入口。
-3. R2：可选进度流。
+3. R2：可选进度流（已完成）。
 4. R3：SQLite 元数据加受限日志文件的后台任务。
 5. 后续单独启动 Face Alpha Runtime P0-P4。
 

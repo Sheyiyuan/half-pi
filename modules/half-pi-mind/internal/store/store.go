@@ -122,6 +122,19 @@ func (s *Store) migrate() error {
 	if err := s.addColumnIfNotExists("sessions", "active_hand", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate active_hand: %w", err)
 	}
+	if err := s.addColumnIfNotExists("remote_run_events", "progress_seq", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate remote progress seq: %w", err)
+	}
+	if err := s.addColumnIfNotExists("remote_run_events", "kind", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate remote progress kind: %w", err)
+	}
+	if err := s.addColumnIfNotExists("remote_run_events", "gap", "INTEGER NOT NULL DEFAULT 0"); err != nil {
+		return fmt.Errorf("migrate remote progress gap: %w", err)
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_run_progress_unique
+		ON remote_run_events(run_id, progress_seq) WHERE progress_seq > 0`); err != nil {
+		return fmt.Errorf("migrate remote progress uniqueness: %w", err)
+	}
 
 	return nil
 }

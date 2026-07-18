@@ -39,10 +39,25 @@ type AuditTransition struct {
 	At         time.Time
 }
 
+// AuditProgress 是独立于状态迁移的远程输出审计记录。
+type AuditProgress struct {
+	RunID string
+	Seq   int64
+	Kind  protocol.ProgressKind
+	Data  string
+	Gap   bool
+	At    time.Time
+}
+
 // Auditor 持久化 run 创建和状态迁移。
 type Auditor interface {
 	CreateRemoteRun(AuditRun) error
 	TransitionRemoteRun(AuditTransition) error
+}
+
+// ProgressAuditor 可选地持久化进度；失败不得阻断 run 状态机。
+type ProgressAuditor interface {
+	AppendRemoteRunProgress(AuditProgress) error
 }
 
 type auditFailure struct {

@@ -20,6 +20,7 @@ import (
 type Hand struct {
 	conn *wss.SessionConn
 	cfg  *config.Config
+	send func(string, any) error
 
 	tasksMu sync.Mutex
 	tasks   map[string]*task
@@ -93,6 +94,10 @@ func (h *Hand) maxOutputSize() int64 {
 	return size
 }
 
+func (h *Hand) maxProgressSize() int64 {
+	return min(h.maxOutputSize(), int64(protocol.MaxRPCProgressBytes))
+}
+
 func (h *Hand) sendRPCReply(runID string, success bool, output, errMsg string, truncated bool) error {
 	reply := protocol.RPCResult{
 		RunID:     runID,
@@ -105,6 +110,9 @@ func (h *Hand) sendRPCReply(runID string, success bool, output, errMsg string, t
 }
 
 func (h *Hand) sendRPCMessage(typ string, payload any) error {
+	if h.send != nil {
+		return h.send(typ, payload)
+	}
 	env, err := protocol.NewEnvelope("", typ, payload)
 	if err != nil {
 		return fmt.Errorf("create %s: %w", typ, err)

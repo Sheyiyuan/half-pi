@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"time"
+	"unicode/utf8"
 )
 
 // RejectCode 是 Hand 在执行前拒绝 RPC 的结构化原因。
@@ -69,6 +70,32 @@ type RPCRejected struct {
 	RunID  string     `json:"run_id"`
 	Code   RejectCode `json:"code"`
 	Reason string     `json:"reason,omitempty"`
+}
+
+// ProgressKind 是远程命令输出流的类型。
+type ProgressKind string
+
+const (
+	// ProgressStdout 表示标准输出。
+	ProgressStdout ProgressKind = "stdout"
+	// ProgressStderr 表示标准错误输出。
+	ProgressStderr ProgressKind = "stderr"
+
+	// MaxRPCProgressChunkBytes 限制单条进度消息的数据字节数。
+	MaxRPCProgressChunkBytes = 4 << 10
+	// MaxRPCProgressBytes 限制单次 run 可接收和转发的进度总字节数。
+	MaxRPCProgressBytes = 1 << 20
+	// MaxRPCProgressEvents 限制单次 run 可接收和转发的进度事件数。
+	MaxRPCProgressEvents = 256
+)
+
+// RPCProgress 是 Hand 执行工具时发送的有界增量输出。
+// Seq 独立于 Envelope.Seq，并在单个 run 内单调递增。
+type RPCProgress struct {
+	RunID string       `json:"run_id"`
+	Seq   int64        `json:"seq"`
+	Kind  ProgressKind `json:"kind"`
+	Data  string       `json:"data"`
 }
 
 // RPCResult 是 Hand 执行工具后的最终返回。
@@ -173,6 +200,29 @@ func ValidateRPCRejected(msg RPCRejected) error {
 	}
 	if !validRejectCode(msg.Code) {
 		return fmt.Errorf("unknown rejection code %q", msg.Code)
+	}
+	return nil
+}
+
+// ValidateRPCProgress 校验增量输出消息及单条消息上限。
+func ValidateRPCProgress(msg RPCProgress) error {
+	if msg.RunID == "" {
+		return fmt.Errorf("run_id is required")
+	}
+	if msg.Seq <= 0 {
+		return fmt.Errorf("seq must be positive")
+	}
+	if msg.Kind != ProgressStdout && msg.Kind != ProgressStderr {
+		return fmt.Errorf("unknown progress kind %q", msg.Kind)
+	}
+	if msg.Data == "" {
+		return fmt.Errorf("data is required")
+	}
+	if !utf8.ValidString(msg.Data) {
+		return fmt.Errorf("data must be valid UTF-8")
+	}
+	if len(msg.Data) > MaxRPCProgressChunkBytes {
+		return fmt.Errorf("progress data exceeds %d bytes", MaxRPCProgressChunkBytes)
 	}
 	return nil
 }

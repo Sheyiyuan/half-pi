@@ -463,6 +463,8 @@ T4。
 
 ### T11：可选进度流
 
+> 状态：已完成。Unix 工具名为 `exec_command`；Windows 工具名为 `exec_cmd` 和 `exec_ps`，三者共享同一有界 UTF-8 输出写入行为。
+
 **目标**
 
 在闭环稳定后为长任务提供有序、可去重的增量反馈。
@@ -470,8 +472,8 @@ T4。
 **范围**
 
 - 增加 `rpc_progress` 和单 run `seq`。
-- 首期仅支持 `exec_command`。
-- Mind 去重、排序并转发进度事件。
+- 支持 Unix `exec_command` 和 Windows `exec_cmd` / `exec_ps`。
+- Mind 单调接收、去重并转发进度事件；缺口可观测但不等待补齐。
 - 定义累计输出上限和慢消费者策略。
 - 进度事件不改变终态裁决。
 
@@ -640,7 +642,7 @@ make test
 **阶段验收**
 
 - Windows 父子进程树可被指定 run 的 cancel 终止。
-- progress 有序、可去重、有限流，不阻塞 result。
+- progress 有序、可去重、有限流；队列不会阻塞工具，单个已在途 WebSocket 帧仍可能在传输超时内延迟 result。
 - progress 不改变唯一终态规则。
 - 对应平台和全仓测试通过。
 

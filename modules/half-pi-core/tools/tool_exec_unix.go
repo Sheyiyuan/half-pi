@@ -6,7 +6,6 @@
 package tools
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -92,11 +91,15 @@ func executeWithShell(shell string, shellArgs ...string) func(ctx context.Contex
 
 		cmd := exec.CommandContext(cmdCtx, shell, append(shellArgs, p.Command)...)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-		var stdout, stderr bytes.Buffer
+		stdout := commandOutput{ctx: ctx, kind: "stdout"}
+		stderr := commandOutput{ctx: ctx, kind: "stderr"}
 		cmd.Stdout = &stdout
 		cmd.Stderr = &stderr
 
-		if err := runCommand(cmdCtx, cmd); err != nil {
+		err := runCommand(cmdCtx, cmd)
+		stdout.Flush()
+		stderr.Flush()
+		if err != nil {
 			msg := fmt.Sprintf("执行失败: %v", err)
 			if stderr.Len() > 0 {
 				msg += "\n" + strings.TrimSpace(stderr.String())
