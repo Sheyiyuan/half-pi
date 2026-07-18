@@ -242,6 +242,50 @@ func TestToolsToDefsInjectConfirmOnlyOnce(t *testing.T) {
 	}
 }
 
+func TestToolOwnedConfirmIsPreservedForExecution(t *testing.T) {
+	const toolName = "phase4_owned_confirm_tool"
+	executor.Register(executor.Tool{
+		Name:        toolName,
+		OwnsConfirm: true,
+		Parameters: &executor.ObjectSchema{Properties: []executor.PropertySchema{{
+			Name: "confirm", Type: "boolean", Description: "tool-owned confirmation",
+		}}},
+	})
+
+	args, llmConfirm := prepareToolArgs(toolName, `{"value":"kept","confirm":true}`)
+	if llmConfirm {
+		t.Fatal("tool-owned confirmation was consumed by Agent Core")
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(args, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded["confirm"] != true || decoded["value"] != "kept" {
+		t.Fatalf("prepared args = %s", args)
+	}
+
+	defs := toolsToDefs([]executor.Tool{{
+		Name: toolName, OwnsConfirm: true,
+		Parameters: &executor.ObjectSchema{Properties: []executor.PropertySchema{{
+			Name: "confirm", Type: "boolean", Description: "tool-owned confirmation",
+		}}},
+	}})
+	properties := defs[0].Parameters.(map[string]any)["properties"].(map[string]any)
+	confirm := properties["confirm"].(map[string]any)
+	if confirm["description"] != "tool-owned confirmation" {
+		t.Fatalf("owned confirm schema = %+v", confirm)
+	}
+}
+
+func TestGenericConfirmIsConsumedByAgentCore(t *testing.T) {
+	const toolName = "phase4_generic_confirm_tool"
+	executor.Register(executor.Tool{Name: toolName})
+	args, llmConfirm := prepareToolArgs(toolName, `{"value":"kept","confirm":true}`)
+	if !llmConfirm || strings.Contains(string(args), "confirm") {
+		t.Fatalf("generic confirmation was not consumed: confirm=%t args=%s", llmConfirm, args)
+	}
+}
+
 func TestToolsToDefsEmpty(t *testing.T) {
 	defs := toolsToDefs(nil)
 	if len(defs) != 0 {

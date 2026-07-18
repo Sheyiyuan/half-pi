@@ -19,6 +19,7 @@ func init() {
 	executor.Register(executor.Tool{
 		Name:        "use_hand",
 		Description: "在指定 Hand 上执行工具。若不指定 hand_id，使用 select_hand 设置的默认 Hand。",
+		OwnsConfirm: true,
 		Parameters: &executor.ObjectSchema{
 			Properties: []executor.PropertySchema{
 				{Name: "tool", Type: "string", Description: "要执行的工具名称"},

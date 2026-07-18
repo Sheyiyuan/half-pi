@@ -81,6 +81,7 @@ type Tool struct {
 	Description    string
 	Parameters     *ObjectSchema
 	DefaultConfirm bool      // true 时每次调用都需用户确认
+	OwnsConfirm    bool      // true 时 confirm 是工具参数，由工具自行完成审批
 	Check          ToolCheck // 执行前安全检查，nil 表示不检查
 	PolicyCheck    ToolPolicyCheck
 	Execute        func(ctx context.Context, args json.RawMessage) *ToolResult

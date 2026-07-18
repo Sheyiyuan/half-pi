@@ -39,7 +39,7 @@ func toolsToDefs(tools []executor.Tool) []llm.ToolDef {
 	var defs []llm.ToolDef
 	for _, t := range tools {
 		schema := t.SchemaParameters()
-		if props, ok := schema["properties"].(map[string]any); ok {
+		if props, ok := schema["properties"].(map[string]any); ok && !t.OwnsConfirm {
 			props["confirm"] = map[string]any{
 				"type":        "boolean",
 				"description": "设为 true 会在执行前请求用户确认，用于有风险的操作",
@@ -112,11 +112,7 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 				c.publish(events.LevelDebug, events.TypeToolCall, fmt.Sprintf("%s(%s)", tc.Name, tc.Args))
 			}
 
-			var rawArgs map[string]any
-			_ = json.Unmarshal([]byte(tc.Args), &rawArgs)
-			llmConfirm, _ := rawArgs["confirm"].(bool)
-			delete(rawArgs, "confirm")
-			cleanArgs, _ := json.Marshal(rawArgs)
+			cleanArgs, llmConfirm := prepareToolArgs(tc.Name, tc.Args)
 			if hooks.ToolCalled != nil {
 				hooks.ToolCalled(ChatToolCall{Tool: tc.Name, ArgsDigest: toolArgsDigest(cleanArgs)})
 			}
@@ -159,4 +155,17 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 	}
 
 	return "", fmt.Errorf("tool call loop exceeded max steps")
+}
+
+func prepareToolArgs(toolName, encoded string) (json.RawMessage, bool) {
+	var rawArgs map[string]any
+	_ = json.Unmarshal([]byte(encoded), &rawArgs)
+	llmConfirm, _ := rawArgs["confirm"].(bool)
+	if tool, ok := executor.FindTool(toolName); !ok || !tool.OwnsConfirm {
+		delete(rawArgs, "confirm")
+	} else {
+		llmConfirm = false
+	}
+	cleanArgs, _ := json.Marshal(rawArgs)
+	return cleanArgs, llmConfirm
 }
