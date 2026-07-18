@@ -2,7 +2,7 @@
 
 ## 状态
 
-本文面向 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1-P3 Mind runtime 和 JSONL Headless 客户端已实现并通过 race 测试。当前可使用 conversation/Hand/run/task 查询、快照、订阅、Chat/cancel、异步审批和 run/task cancel；真实进程级 E2E 与人类终端 Face 尚未完成。
+本文面向 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1-P3 Mind runtime、JSONL Headless 客户端和共用协议的人类终端 Face 已实现并通过 race 测试。当前可使用 conversation/Hand/run/task 查询、快照、订阅、Chat/cancel、异步审批和 run/task cancel；真实进程级 E2E 尚未完成。
 
 架构和完整生命周期见 [`face-protocol.md`](face-protocol.md)。本文只说明客户端应依赖的正式协议契约。
 
@@ -205,7 +205,7 @@ stdin command 使用尚未 stamp 的 `protocol.Envelope`；客户端负责生成
 
 异步审批 Broker、run/task cancel 和 Face identity 审计已作为 P3 runtime 基线完成。后续工作为：
 
-1. 确定性真实进程级 E2E 与人类终端 Face。
+1. 确定性真实 Mind/Hand/Face 进程级 E2E。
 2. conversation 写命令等非 Chat command 的通用幂等 registry。
 
 以上运行时能力全部复用当前 wire protocol，不新增 AI 专用消息语义。

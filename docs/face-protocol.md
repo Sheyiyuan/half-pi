@@ -4,7 +4,7 @@
 
 ## 状态
 
-核心协议与 P1-P3 runtime 已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、有序队列、Chat/cancel、异步审批、run/task cancel 以及结构化事件。Headless Agent Face 和真实进程级 E2E 仍待 P4 实现。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。本文不包含具体 UI 设计。
+核心协议与 P1-P3 runtime 已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、有序队列、Chat/cancel、异步审批、run/task cancel 以及结构化事件。P4 的 Headless JSONL 和人类终端 Face 已实现，真实 Mind/Hand/Face 进程级 E2E 仍待完成。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。
 
 当前正式 command runtime 支持 Chat/cancel、conversation list/create/rename/snapshot、subscribe、approval resolve、Hand list/get、run get/cancel 和 task list/get/log/cancel。
 

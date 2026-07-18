@@ -274,9 +274,15 @@ make test         # 运行全部 4 个模块的测试
 - Registry 每次 run 状态迁移投影 `remote_run.changed`；result/cancel 竞争保持唯一终态
 - 加密集成测试覆盖 Face 审批 → `use_hand`、Approval actor/digest、参数篡改拒绝及 run/task cancel 落库
 
+##### Face P4 客户端
+- `half-pi-face` 默认提供人类终端模式，也可切换为 stdout 仅正式协议消息的 Headless JSONL 模式
+- 两种客户端共用加密 `client.Connection`，不新增测试旁路或 wire 消息
+- 终端 Face 支持 conversation、Chat/cancel、审批、Hand、run 和 task 操作，snapshot 后自动订阅当前 conversation
+- 所有 Mind payload 在渲染前严格验证，嵌套 result 按 pending operation 校验，终端文本转义 C0/C1 控制字符
+
 ##### 设计文档
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
-- `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（P3 Mind runtime 可用，客户端待实现）
+- `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（客户端与 P3 Mind runtime 可用）
 - `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
 - `docs/remote-execution-implementation-plan.md` — 远程执行闭环实施与验收记录
 - `docs/next-development-plan.md` — 当前 Face Alpha 主线与远程执行收尾计划
@@ -289,7 +295,7 @@ make test         # 运行全部 4 个模块的测试
 - `docs/archived/skill-session-memory-design.md` — 技能/会话/记忆组织设计
 
 #### ⏳ 待完成
-- [ ] **Face P4** JSONL Headless 客户端已实现；人类终端 Face 与真实 Mind/Hand/Face 进程级 E2E 待完成
+- [ ] **Face P4** JSONL Headless 与人类终端 Face 已实现；真实 Mind/Hand/Face 进程级 E2E 待完成
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
 - [ ] Mind → Hand 外部验收 — 原生 Windows 运行 `scripts/test-windows.ps1`

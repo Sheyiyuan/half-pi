@@ -12,6 +12,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-face/internal/client"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-face/internal/config"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-face/internal/headless"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-face/internal/tui"
 )
 
 func main() {
@@ -74,5 +75,12 @@ func run(ctx context.Context, args []string, input io.Reader, output, logs io.Wr
 	if err != nil {
 		return err
 	}
-	return headless.Run(ctx, conn, input, output)
+	switch cfg.Face.Mode {
+	case config.ModeHeadless:
+		return headless.Run(ctx, conn, input, output)
+	case config.ModeTUI:
+		return tui.Run(ctx, conn, input, output)
+	default:
+		return fmt.Errorf("unsupported Face mode %q", cfg.Face.Mode)
+	}
 }

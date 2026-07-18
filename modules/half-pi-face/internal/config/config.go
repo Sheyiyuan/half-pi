@@ -19,6 +19,8 @@ const (
 	DefaultServerURL = "ws://127.0.0.1:15707/ws"
 	// ModeHeadless 是机器可消费的 JSONL 客户端模式。
 	ModeHeadless = "headless"
+	// ModeTUI 是面向人类的终端客户端模式。
+	ModeTUI = "tui"
 )
 
 var faceLabelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
@@ -72,11 +74,14 @@ func Load(path string) (*Config, error) {
 	if value := os.Getenv("HALF_PI_FACE_ID"); value != "" {
 		cfg.Face.ID = value
 	}
+	if value := os.Getenv("HALF_PI_FACE_MODE"); value != "" {
+		cfg.Face.Mode = value
+	}
 	if cfg.Server.URL == "" {
 		cfg.Server.URL = DefaultServerURL
 	}
 	if cfg.Face.Mode == "" {
-		cfg.Face.Mode = ModeHeadless
+		cfg.Face.Mode = ModeTUI
 	}
 	return &cfg, nil
 }
@@ -99,8 +104,8 @@ func (c *Config) Validate() error {
 	if !faceLabelPattern.MatchString(c.Face.ID) {
 		return fmt.Errorf("face.id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 	}
-	if c.Face.Mode != ModeHeadless {
-		return fmt.Errorf("face.mode must be %q", ModeHeadless)
+	if c.Face.Mode != ModeHeadless && c.Face.Mode != ModeTUI {
+		return fmt.Errorf("face.mode must be %q or %q", ModeTUI, ModeHeadless)
 	}
 	for name, value := range map[string]string{
 		"server.token":           c.Server.Token,
@@ -142,7 +147,7 @@ application_key = ""
 
 [face]
 id = ""
-mode = "headless"
+mode = "tui"
 `
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {

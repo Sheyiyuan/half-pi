@@ -19,7 +19,7 @@ run-mind:
 	go run ./modules/half-pi-mind/cmd/half-pi-mind/ --repl
 
 run-face:
-	go run ./modules/half-pi-face/cmd/half-pi-face/
+	go run ./modules/half-pi-face/cmd/half-pi-face/ $(ARGS)
 
 run-hand:
 	go run ./modules/half-pi-hand/cmd/half-pi-hand/ $(ARGS)

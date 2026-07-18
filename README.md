@@ -4,7 +4,7 @@
 
 # Half Pi · 半派
 
-> **当前状态：Alpha 开发中。** Mind 与 Hand 的远程执行闭环及 Face 的加密 Gateway、Chat、异步审批和 run/task cancel runtime 已可用；JSONL Headless Face 已可连接，终端 Face 与真实进程 E2E 仍在实现。
+> **当前状态：Alpha 开发中。** Mind 与 Hand 的远程执行闭环及 Face 的加密 Gateway、Chat、异步审批和 run/task cancel runtime 已可用；JSONL Headless Face 和人类终端 Face 已可连接，真实进程 E2E 仍在实现。
 
 ---
 
@@ -46,7 +46,7 @@ Half Pi 不是远程桌面，也不是远程控制台加一个聊天框。远程
 - 通过审批摘要、双层安全检查和令牌绑定控制远程执行边界。
 - 启动可持久化的远程后台任务，跨 WebSocket 重连继续运行。
 - 查询任务状态、读取有界日志、取消远程任务，并保留状态迁移审计。
-- 通过加密 Face 协议恢复 conversation、发起 Chat、异步审批敏感操作并订阅 run/task 状态；当前需自行实现协议客户端。
+- 通过加密 Face 协议和内置终端客户端恢复 conversation、发起 Chat、异步审批敏感操作并订阅 run/task 状态。
 
 ## 使用场景
 
@@ -84,7 +84,7 @@ flowchart LR
 | 角色 | 职责 | 当前状态 |
 | --- | --- | --- |
 | **Mind** | 常驻的智能与状态中心，负责会话、LLM 决策、技能、审批、设备调度和审计 | 服务模式和 REPL 可用 |
-| **Face** | 无状态交互入口，负责输入、展示、审批交互和事件投影；人类客户端与无头 Agent Face 共用统一协议 | Headless JSONL 客户端可用，终端客户端开发中 |
+| **Face** | 无状态交互入口，负责输入、展示、审批交互和事件投影；人类客户端与无头 Agent Face 共用统一协议 | Headless JSONL 与终端客户端可用 |
 | **Hand** | 部署在用户设备上的轻量执行节点，执行工具并实施本地安全策略 | 远程执行链路可用 |
 
 共享组件位于独立 Go 模块中：
@@ -94,7 +94,7 @@ modules/
 ├── gateway-core/   # WebSocket 协议、会话、Hub 和加密原语
 ├── half-pi-core/   # 工具、执行器、安全策略和事件系统
 ├── half-pi-mind/   # LLM、会话、技能、存储和设备调度
-├── half-pi-face/   # 跨设备交互入口（开发中）
+├── half-pi-face/   # Headless JSONL 与终端交互入口
 └── half-pi-hand/   # 远程执行节点
 ```
 
@@ -182,7 +182,21 @@ make run-hand ARGS="--server ws://127.0.0.1:15707/ws --token <token> --applicati
 
 连接远程设备时，把 `--server` 改为该设备可访问的 Mind 地址。当前默认链路未启用 TLS，请参阅下面的安全边界。
 
-### 4. 验证远程执行
+### 4. 启动终端 Face
+
+在 Mind REPL 中创建具备所需 scope 的独立 Face 凭据。token 和 application key 同样只显示一次：
+
+```text
+/face add terminal --scopes face:chat,face:sessions:read,face:sessions:write,face:runs:read,face:runs:cancel,face:approve,face:hands:read,face:tasks:read,face:tasks:cancel
+```
+
+启动默认的终端模式；自动化客户端可将 `--mode` 改为 `headless`，通过 stdin/stdout 使用 JSONL 正式协议：
+
+```bash
+make run-face ARGS="--server ws://127.0.0.1:15707/ws --token <token> --application-key <key> --id terminal --mode tui"
+```
+
+### 5. 验证远程执行
 
 REPL 提供不依赖 LLM 的 Hand 调试命令：
 
@@ -207,7 +221,7 @@ Mind 也会向 LLM 暴露 `list_hands`、`get_hand_info`、`select_hand` 和 `us
 make build       # 构建 Mind、Face 和 Hand 到 bin/
 make run-mind    # 启动 Mind REPL 和 WebSocket Hub
 make run-hand    # 启动 Hand，可通过 ARGS 传入参数
-make run-face    # 启动 Face 占位程序
+make run-face    # 启动 Face，可通过 ARGS 选择 tui/headless 并传入凭据
 make test        # 对所有 Go 模块运行带 race detector 的测试
 make lint        # 运行 golangci-lint
 ```
@@ -263,7 +277,7 @@ Half Pi 会让 AI 接触真实设备，因此安全能力不是附属功能。
 - [x] 持久化远程执行、审批元数据和状态迁移审计记录。
 - [x] 完成统一 Face 协议、无头 Agent Face 和跨设备同步的 Alpha 设计。
 - [x] 实现 Mind 侧 Face Gateway、Chat、异步审批、run/task cancel 和多 Face 状态投影。
-- [ ] 实现首个可用 Face，支持从其他设备连接 Mind。
+- [x] 实现 Headless JSONL 与人类终端 Face，共用同一正式协议连接 Mind。
 - [ ] 用 Headless Face 真实进程 E2E 验证跨 Face 恢复、同步和审批闭环。
 - [ ] 默认启用安全传输，并完成密钥管理方案。
 - [ ] 实现工作区级长期记忆和可控的跨组访问。

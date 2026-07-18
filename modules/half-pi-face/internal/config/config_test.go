@@ -37,7 +37,7 @@ id = "bad"
 		t.Fatal(err)
 	}
 	if cfg.Server.URL != "ws://127.0.0.1:27017/ws" || cfg.Server.Token != testToken ||
-		cfg.Server.ApplicationKey != testKey || cfg.Face.ID != "agent-face" || cfg.Face.Mode != ModeHeadless {
+		cfg.Server.ApplicationKey != testKey || cfg.Face.ID != "agent-face" || cfg.Face.Mode != ModeTUI {
 		t.Fatalf("loaded config = %+v", cfg)
 	}
 	if err := cfg.Validate(); err != nil {
@@ -70,6 +70,29 @@ func TestValidateRejectsInvalidCredentialsAndMode(t *testing.T) {
 				t.Fatalf("Validate error = %v", err)
 			}
 		})
+	}
+}
+
+func TestLoadAppliesModeEnvironmentOverride(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "face.toml")
+	content := `[server]
+token = "` + testToken + `"
+application_key = "` + testKey + `"
+
+[face]
+id = "face-1"
+mode = "tui"
+`
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HALF_PI_FACE_MODE", ModeHeadless)
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Face.Mode != ModeHeadless {
+		t.Fatalf("face.mode = %q", cfg.Face.Mode)
 	}
 }
 
