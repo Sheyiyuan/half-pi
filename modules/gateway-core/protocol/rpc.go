@@ -66,7 +66,8 @@ type RPC struct {
 	Background *RPCBackgroundOptions `json:"background,omitempty"`
 }
 
-// RPCAccepted 表示 Hand 已完成本地守门并开始执行。
+// RPCAccepted 表示 Hand 已完成本地守门。后台 RPC 的 StartedAt 是持久化排队时间，
+// 表示任务已获得可跨重连恢复的 durable queued admission，不表示工具已开始执行。
 type RPCAccepted struct {
 	RunID     string `json:"run_id"`
 	StartedAt int64  `json:"started_at"` // Unix 毫秒

@@ -28,6 +28,7 @@ type Progress struct {
 type ProgressFunc func(Progress)
 
 type progressContextKey struct{}
+type finalOutputLimitContextKey struct{}
 
 // WithProgress 返回携带可选进度回调的 context。
 func WithProgress(ctx context.Context, fn ProgressFunc) context.Context {
@@ -42,6 +43,20 @@ func ReportProgress(ctx context.Context, progress Progress) {
 	if fn, ok := ctx.Value(progressContextKey{}).(ProgressFunc); ok {
 		fn(progress)
 	}
+}
+
+// WithFinalOutputLimit 限制工具为最终结果保留的输出字节数；流式进度不受影响。
+func WithFinalOutputLimit(ctx context.Context, limit int64) context.Context {
+	if limit <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, finalOutputLimitContextKey{}, limit)
+}
+
+// FinalOutputLimit 返回最终结果输出的可选保留上限。
+func FinalOutputLimit(ctx context.Context) int64 {
+	limit, _ := ctx.Value(finalOutputLimitContextKey{}).(int64)
+	return limit
 }
 
 // Decision 是安全检查的决策结果。

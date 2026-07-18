@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/BurntSushi/toml"
 )
@@ -39,6 +40,29 @@ type HandConfig struct {
 	Limits     LimitsConfig     `toml:"limits"`
 	Monitors   []MonitorConfig  `toml:"monitors"`
 	Retry      RetryConfig      `toml:"retry"`
+	Tasks      TasksConfig      `toml:"tasks"`
+}
+
+// TasksConfig 后台任务持久化和配额配置。
+type TasksConfig struct {
+	Dir         string `toml:"dir"`
+	MaxRunning  int    `toml:"max_running"`
+	MaxRuntime  string `toml:"max_runtime"`
+	MaxLogBytes int64  `toml:"max_log_bytes"`
+	Retention   string `toml:"retention"`
+	MaxRetained int    `toml:"max_retained"`
+}
+
+// MaxRuntimeDuration 返回后台任务最长运行时间。
+func (c TasksConfig) MaxRuntimeDuration() time.Duration {
+	d, _ := time.ParseDuration(c.MaxRuntime)
+	return d
+}
+
+// RetentionDuration 返回后台任务保留时间。
+func (c TasksConfig) RetentionDuration() time.Duration {
+	d, _ := time.ParseDuration(c.Retention)
+	return d
 }
 
 // PermissionConfig 工具权限白名单/黑名单。
@@ -91,6 +115,32 @@ func Load(path string) (*Config, error) {
 	if cfg.Hand.Retry.MaxBackoff <= 0 {
 		cfg.Hand.Retry.MaxBackoff = 60
 	}
+	if cfg.Hand.Tasks.Dir == "" {
+		cfg.Hand.Tasks.Dir = filepath.Join(filepath.Dir(path), "tasks")
+	}
+	if cfg.Hand.Tasks.MaxRunning <= 0 {
+		cfg.Hand.Tasks.MaxRunning = 4
+	}
+	if cfg.Hand.Tasks.MaxRuntime == "" {
+		cfg.Hand.Tasks.MaxRuntime = "24h"
+	}
+	maxRuntime, err := time.ParseDuration(cfg.Hand.Tasks.MaxRuntime)
+	if err != nil || maxRuntime <= 0 || maxRuntime > 24*time.Hour {
+		return nil, fmt.Errorf("hand.tasks.max_runtime must be between 1ns and 24h")
+	}
+	if cfg.Hand.Tasks.MaxLogBytes <= 0 {
+		cfg.Hand.Tasks.MaxLogBytes = 1 << 20
+	}
+	if cfg.Hand.Tasks.Retention == "" {
+		cfg.Hand.Tasks.Retention = "168h"
+	}
+	retention, err := time.ParseDuration(cfg.Hand.Tasks.Retention)
+	if err != nil || retention <= 0 {
+		return nil, fmt.Errorf("hand.tasks.retention must be positive")
+	}
+	if cfg.Hand.Tasks.MaxRetained <= 0 {
+		cfg.Hand.Tasks.MaxRetained = 1000
+	}
 
 	return &cfg, nil
 }
@@ -126,6 +176,14 @@ max_output_size = 1048576
 
 [hand.retry]
 max_backoff = 60
+
+[hand.tasks]
+dir = ""
+max_running = 4
+max_runtime = "24h"
+max_log_bytes = 1048576
+retention = "168h"
+max_retained = 1000
 
 # [[hand.monitors]]
 # name = "disk_high"

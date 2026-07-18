@@ -102,6 +102,25 @@ func TestExecCommandProgressPreservesFinalOutput(t *testing.T) {
 	}
 }
 
+func TestExecCommandFinalOutputLimitStillStreamsAllOutput(t *testing.T) {
+	tool, ok := executor.FindTool("exec_command")
+	if !ok {
+		t.Fatal("exec_command not registered")
+	}
+	var streamed strings.Builder
+	ctx := executor.WithProgress(context.Background(), func(progress executor.Progress) {
+		streamed.WriteString(progress.Data)
+	})
+	ctx = executor.WithFinalOutputLimit(ctx, 8)
+	result := tool.Execute(ctx, json.RawMessage(`{"command":"printf 12345678901234567890"}`))
+	if !result.Success || result.Output != "12345678" {
+		t.Fatalf("bounded result = %+v", result)
+	}
+	if streamed.String() != "12345678901234567890" {
+		t.Fatalf("streamed output = %q", streamed.String())
+	}
+}
+
 func TestCommandOutputKeepsSplitUTF8Rune(t *testing.T) {
 	var chunks []executor.Progress
 	ctx := executor.WithProgress(context.Background(), func(progress executor.Progress) {

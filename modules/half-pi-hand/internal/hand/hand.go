@@ -14,13 +14,15 @@ import (
 	// 注册通用工具
 	_ "github.com/Sheyiyuan/half-pi/modules/half-pi-core/tools"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-hand/internal/config"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-hand/internal/taskmanager"
 )
 
 // Hand 远程执行节点，通过 WebSocket 接收 Mind 的 RPC 请求。
 type Hand struct {
-	conn *wss.SessionConn
-	cfg  *config.Config
-	send func(string, any) error
+	conn        *wss.SessionConn
+	cfg         *config.Config
+	send        func(string, any) error
+	taskManager *taskmanager.Manager
 
 	tasksMu sync.Mutex
 	tasks   map[string]*task
@@ -28,10 +30,13 @@ type Hand struct {
 
 // New 创建 Hand 实例。
 func New(conn *wss.SessionConn, cfg *config.Config) *Hand {
+	return NewWithTaskManager(conn, cfg, nil)
+}
+
+// NewWithTaskManager 创建共享进程级后台任务管理器的 Hand 实例。
+func NewWithTaskManager(conn *wss.SessionConn, cfg *config.Config, manager *taskmanager.Manager) *Hand {
 	return &Hand{
-		conn:  conn,
-		cfg:   cfg,
-		tasks: make(map[string]*task),
+		conn: conn, cfg: cfg, taskManager: manager, tasks: make(map[string]*task),
 	}
 }
 
@@ -71,6 +76,12 @@ func (h *Hand) Serve(ctx context.Context) error {
 			go h.handleRPC(runCtx, env)
 		case protocol.TypeRPCCancel:
 			go h.handleRPCCancel(env)
+		case protocol.TypeTaskStatusReq:
+			go h.handleTaskStatus(env)
+		case protocol.TypeTaskLogReq:
+			go h.handleTaskLog(env)
+		case protocol.TypeTaskCancel:
+			go h.handleTaskCancel(env)
 		case protocol.TypeHandInfoReq:
 			go h.handleHandInfoReq(env)
 		case protocol.TypeError:

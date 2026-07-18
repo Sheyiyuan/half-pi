@@ -16,13 +16,23 @@ type commandOutput struct {
 	kind    string
 	all     bytes.Buffer
 	pending []byte
+	limit   int64
 }
 
 func (w *commandOutput) Write(data []byte) (int, error) {
-	n, err := w.all.Write(data)
+	if w.limit == 0 {
+		w.limit = executor.FinalOutputLimit(w.ctx)
+	}
+	if w.limit <= 0 || int64(w.all.Len()) < w.limit {
+		retained := data
+		if w.limit > 0 && int64(len(retained)) > w.limit-int64(w.all.Len()) {
+			retained = retained[:w.limit-int64(w.all.Len())]
+		}
+		_, _ = w.all.Write(retained)
+	}
 	w.pending = append(w.pending, data...)
 	w.emit(false)
-	return n, err
+	return len(data), nil
 }
 
 func (w *commandOutput) Flush() {

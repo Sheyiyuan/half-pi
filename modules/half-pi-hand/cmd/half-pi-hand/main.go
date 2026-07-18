@@ -16,6 +16,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-hand/internal/config"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-hand/internal/hand"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-hand/internal/taskmanager"
 )
 
 func main() {
@@ -71,6 +72,16 @@ func main() {
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
+	manager, err := taskmanager.New(taskmanager.Config{
+		Dir: cfg.Hand.Tasks.Dir, MaxRunning: cfg.Hand.Tasks.MaxRunning,
+		MaxRuntime: cfg.Hand.Tasks.MaxRuntimeDuration(), MaxLogBytes: cfg.Hand.Tasks.MaxLogBytes,
+		Retention: cfg.Hand.Tasks.RetentionDuration(), MaxRetained: cfg.Hand.Tasks.MaxRetained,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "后台任务管理器启动失败: %v\n", err)
+		os.Exit(1)
+	}
+	defer manager.Close()
 
 	backoff := 1 * time.Second
 	maxBackoff := time.Duration(cfg.Hand.Retry.MaxBackoff) * time.Second
@@ -93,7 +104,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "Hand %s 已连接到 %s\n", cfg.Hand.ID, cfg.Server.URL)
 		backoff = 1 * time.Second
 
-		h := hand.New(conn, cfg)
+		h := hand.NewWithTaskManager(conn, cfg, manager)
 		err = h.Serve(ctx)
 		conn.Conn.Close()
 		if errors.Is(err, context.Canceled) || ctx.Err() != nil {
