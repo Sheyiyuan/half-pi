@@ -4,7 +4,7 @@
 
 ## 状态
 
-核心协议与 P1-P3 runtime 已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、有序队列、Chat/cancel、异步审批、run/task cancel 以及结构化事件。P4 的 Headless JSONL 和人类终端 Face 已实现，真实 Mind/Hand/Face 进程级 E2E 仍待完成。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。
+Face Alpha P0-P4 runtime 已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、有序队列、Chat/cancel、异步审批、run/task cancel 以及结构化事件；Headless JSONL 与人类终端 Face 已通过真实 Mind/Hand/Face 进程级 E2E。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。
 
 当前正式 command runtime 支持 Chat/cancel、conversation list/create/rename/snapshot、subscribe、approval resolve、Hand list/get、run get/cancel 和 task list/get/log/cancel。
 
@@ -665,7 +665,9 @@ Face 重复发送相同 request_id 和 payload
 
 ### 进程级端到端测试
 
-- 使用临时目录和端口启动真实 Mind、Hand 和 Headless Face。
+2026-07-19 已落地于 `modules/half-pi-mind/e2e/`，并纳入 Mind race 测试与全仓 `make test`。
+
+- 使用临时目录和端口启动真实 Mind、Hand、Headless Face 和 TUI Face。
 - 使用 Scripted LLM，不调用真实模型。
 - 等待结构化 registered/ready 消息，不使用固定 sleep。
 - 验证 SQLite、最终响应和远程进程退出。
@@ -709,6 +711,8 @@ Face 重复发送相同 request_id 和 payload
 
 ### F3：审批与 run 同步
 
+2026-07-19 已完成。
+
 - 将阻塞式 Approver 升级为 conversation 级审批对象。
 - 实现 approval requested/resolve。
 - 完成 run cancel、审批关联和更完整的 run 同步；run get 与结构化 run 事件已在 F1 落地。
@@ -717,6 +721,8 @@ Face 重复发送相同 request_id 和 payload
 验收：Face 可完成敏感远程执行审批，越权、过期和重复裁决均被拒绝。
 
 ### F4：进程级 E2E 与首个 UI
+
+2026-07-19 已完成。
 
 - 实现 Headless Agent Face JSONL 客户端。
 - 增加真实二进制进程级测试。

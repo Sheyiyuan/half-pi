@@ -93,6 +93,7 @@ make test
 cd modules/half-pi-core && go test -race -count=1 ./...
 cd modules/gateway-core && go test -race -count=1 ./...
 cd modules/half-pi-mind && go test -race -count=1 ./...
+cd modules/half-pi-face && go test -race -count=1 ./...
 cd modules/half-pi-hand && go test -race -count=1 ./...
 ```
 - 测试必须带 `-race`
@@ -103,7 +104,7 @@ make build        # 编译 mind/face/hand 到 bin/
 make run-mind     # 启动 Mind REPL（WS Hub 在 127.0.0.1:15707/ws）
 make run-hand     # 启动 Hand（默认用 ~/.half-pi/hand/config.toml）
 make run-hand ARGS="--token <token> --application-key <key> --id <name>"  # Hand CLI 覆盖
-make test         # 运行全部 4 个模块的测试
+make test         # 运行全部 5 个模块的测试
 ```
 
 ### 首次运行约定
@@ -274,18 +275,20 @@ make test         # 运行全部 4 个模块的测试
 - Registry 每次 run 状态迁移投影 `remote_run.changed`；result/cancel 竞争保持唯一终态
 - 加密集成测试覆盖 Face 审批 → `use_hand`、Approval actor/digest、参数篡改拒绝及 run/task cancel 落库
 
-##### Face P4 客户端
+##### Face P4 客户端与进程验收
 - `half-pi-face` 默认提供人类终端模式，也可切换为 stdout 仅正式协议消息的 Headless JSONL 模式
 - 两种客户端共用加密 `client.Connection`，不新增测试旁路或 wire 消息
 - 终端 Face 支持 conversation、Chat/cancel、审批、Hand、run 和 task 操作，snapshot 后自动订阅当前 conversation
 - 所有 Mind payload 在渲染前严格验证，嵌套 result 按 pending operation 校验，终端文本转义 C0/C1 控制字符
+- 真实进程 E2E 使用动态端口、临时 HOME/SQLite/工作目录和 Scripted LLM，构建并运行 `-race` Mind/Hand/Face 二进制
+- E2E 覆盖多 Face 持久化恢复、request replay/conflict、run-bound 审批、远程取消、后台 task 对账、TUI 一致性与脱敏审计
 
 ##### 设计文档
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
-- `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（客户端与 P3 Mind runtime 可用）
+- `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（客户端、Mind runtime 与进程 E2E 可用）
 - `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
 - `docs/remote-execution-implementation-plan.md` — 远程执行闭环实施与验收记录
-- `docs/next-development-plan.md` — 当前 Face Alpha 主线与远程执行收尾计划
+- `docs/next-development-plan.md` — Face Alpha 验收记录与远程执行收尾计划
 - `docs/archived/remote-execution.md` — 已归档的 Mind → Hand MVP 设计
 - `docs/archived/mind-hand-mvp-followups.md` — 已归档的 MVP 设计债清单
 - `docs/archived/architecture.md` — 完整系统架构设计（三层模型、术语定义、通信协议、安全审计）
@@ -295,7 +298,6 @@ make test         # 运行全部 4 个模块的测试
 - `docs/archived/skill-session-memory-design.md` — 技能/会话/记忆组织设计
 
 #### ⏳ 待完成
-- [ ] **Face P4** JSONL Headless 与人类终端 Face 已实现；真实 Mind/Hand/Face 进程级 E2E 待完成
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
 - [ ] Mind → Hand 外部验收 — 原生 Windows 运行 `scripts/test-windows.ps1`
@@ -410,10 +412,15 @@ make test         # 运行全部 4 个模块的测试
 - 所有 `rpc_cancel` 只由 `remoteexec.Authority.CancelRun` 发送；Face/REPL/Chat 取消复用同一路径
 - `face.task.cancel` 复用 TaskService，并在 Hand 确认后查询状态再投影结构化终态
 
+### 2026-07-19：Face P4 客户端与真实进程 E2E
+- Headless JSONL 与人类终端 Face 共用正式加密连接和 `face.*` 协议，不建立测试旁路
+- Mind 与 Hand 启动后分别输出结构化 `mind.ready` / `hand.ready`；进程错误与 race detector 失败使用非零退出码
+- E2E 构建真实 `-race` 二进制，以动态端口和 Scripted LLM 验证跨 Face 恢复、审批、取消、后台任务与 SQLite 一致性
+- `use_hand` 自行消费 `confirm`，确保远程审批绑定已生成的 run ID 和 RPC 参数摘要
+
 ---
 
 ## 下一步
 
 1. 原生 Windows 运行取消验收脚本（外部环境）
-2. **Face Alpha Runtime P4** — Headless Face 与进程级 E2E
-3. `/compact` 上下文压缩与 Skill 工作区集成
+2. `/compact` 上下文压缩与 Skill 工作区集成

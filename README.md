@@ -4,7 +4,7 @@
 
 # Half Pi · 半派
 
-> **当前状态：Alpha 开发中。** Mind 与 Hand 的远程执行闭环及 Face 的加密 Gateway、Chat、异步审批和 run/task cancel runtime 已可用；JSONL Headless Face 和人类终端 Face 已可连接，真实进程 E2E 仍在实现。
+> **当前状态：Alpha 开发中。** Mind、Hand 与 Face 的首个跨设备闭环已完成：加密 Gateway、Chat、异步审批、run/task cancel、Headless JSONL 和人类终端 Face 均可用，并已通过真实进程 E2E；生产传输与密钥管理仍待完善。
 
 ---
 
@@ -112,6 +112,7 @@ modules/
 | 后台任务 | Hand 本地 SQLite 与受限日志文件，Mind 保存脱敏快照 |
 | Face runtime | conversation/Hand/run/task 查询、Chat/cancel、异步审批、run/task cancel、快照与订阅 |
 | 审计 | 远程执行状态迁移、Face/REPL 审批 identity 与脱敏摘要、结果来源校验 |
+| 系统验收 | Scripted LLM 驱动真实 Mind/Hand/Headless/TUI 进程，覆盖恢复、幂等、审批、取消和后台任务 |
 
 ### Mind
 
@@ -278,7 +279,7 @@ Half Pi 会让 AI 接触真实设备，因此安全能力不是附属功能。
 - [x] 完成统一 Face 协议、无头 Agent Face 和跨设备同步的 Alpha 设计。
 - [x] 实现 Mind 侧 Face Gateway、Chat、异步审批、run/task cancel 和多 Face 状态投影。
 - [x] 实现 Headless JSONL 与人类终端 Face，共用同一正式协议连接 Mind。
-- [ ] 用 Headless Face 真实进程 E2E 验证跨 Face 恢复、同步和审批闭环。
+- [x] 用 Headless Face 真实进程 E2E 验证跨 Face 恢复、同步、审批、取消和后台任务闭环。
 - [ ] 默认启用安全传输，并完成密钥管理方案。
 - [ ] 实现工作区级长期记忆和可控的跨组访问。
 
