@@ -318,10 +318,62 @@ func validateFaceResult(v FaceResult) error {
 	return nil
 }
 
-// ValidateFaceResultData 严格解码并校验 task 操作的 result data。
+// ValidateFaceResultData 严格解码并校验支持结构化结果的操作数据。
 func ValidateFaceResultData(operation FaceOperation, data json.RawMessage) error {
 	var err error
 	switch operation {
+	case FaceOperationConversationList:
+		var v ConversationListResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			if v.Conversations == nil {
+				err = fmt.Errorf("conversations is required")
+			} else {
+				for _, conversation := range v.Conversations {
+					if err = validateConversationSummary(conversation); err != nil {
+						break
+					}
+				}
+			}
+		}
+	case FaceOperationConversationCreate:
+		var v ConversationCreateResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			err = validateConversationSummary(v.Conversation)
+		}
+	case FaceOperationConversationRename:
+		var v ConversationRenameResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			err = validateConversationSummary(v.Conversation)
+		}
+	case FaceOperationHandList:
+		var v HandListResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			if v.Hands == nil {
+				err = fmt.Errorf("hands is required")
+			} else {
+				for _, hand := range v.Hands {
+					if err = validateHandSummary(hand); err != nil {
+						break
+					}
+				}
+			}
+		}
+	case FaceOperationHandGet:
+		var v HandGetResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			err = validateHandSummary(v.Hand)
+		}
+	case FaceOperationRunGet:
+		var v RunGetResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			err = validateRemoteRunSummary(v.Run, false)
+		}
 	case FaceOperationTaskList:
 		var v TaskListResult
 		err = decodeFacePayload(data, &v)
@@ -366,10 +418,52 @@ func ValidateFaceResultData(operation FaceOperation, data json.RawMessage) error
 			}
 		}
 	default:
-		return fmt.Errorf("operation %q has no task result data", operation)
+		return fmt.Errorf("operation %q has no structured result data", operation)
 	}
 	if err != nil {
 		return fmt.Errorf("validate %s result data: %w", operation, err)
+	}
+	return nil
+}
+
+func validateConversationSummary(v ConversationSummary) error {
+	if err := requireFields(v.ConversationID, "conversation_id", v.Name, "name", v.Mode, "mode"); err != nil {
+		return err
+	}
+	if v.MessageCount < 0 || v.UpdatedAt.IsZero() {
+		return fmt.Errorf("message_count and updated_at are invalid")
+	}
+	return nil
+}
+
+func validateHandSummary(v HandSummary) error {
+	if err := requireFields(v.HandID, "hand_id", v.Hostname, "hostname", v.OS, "os", v.Arch, "arch"); err != nil {
+		return err
+	}
+	if !v.Connected {
+		return fmt.Errorf("hand must be connected")
+	}
+	return nil
+}
+
+func validateRemoteRunSummary(v RemoteRunSummary, activeOnly bool) error {
+	if err := requireFields(v.RunID, "run_id", v.RequestID, "request_id", v.HandID, "hand_id", v.Tool, "tool"); err != nil {
+		return err
+	}
+	if !validRunStatus(v.Status) {
+		return fmt.Errorf("unknown run status %q", v.Status)
+	}
+	if activeOnly && IsTerminalRunStatus(v.Status) {
+		return fmt.Errorf("active run must have a non-terminal status")
+	}
+	if IsTerminalRunStatus(v.Status) != (v.FinishedAt != nil) {
+		return fmt.Errorf("finished_at must be set exactly for terminal status")
+	}
+	if v.DurationMs < 0 || v.CreatedAt.IsZero() {
+		return fmt.Errorf("duration and created_at are invalid")
+	}
+	if v.FinishedAt != nil && v.FinishedAt.Before(v.CreatedAt) {
+		return fmt.Errorf("finished_at must not precede created_at")
 	}
 	return nil
 }
@@ -401,17 +495,8 @@ func validateConversationSnapshot(v ConversationSnapshot) error {
 		}
 	}
 	for _, run := range v.ActiveRuns {
-		if err := requireFields(run.RunID, "active_runs.run_id", run.RequestID, "active_runs.request_id", run.HandID, "active_runs.hand_id", run.Tool, "active_runs.tool"); err != nil {
-			return err
-		}
-		if !validRunStatus(run.Status) {
-			return fmt.Errorf("unknown run status %q", run.Status)
-		}
-		if IsTerminalRunStatus(run.Status) {
-			return fmt.Errorf("active_runs must contain only non-terminal statuses")
-		}
-		if run.DurationMs < 0 || run.CreatedAt.IsZero() {
-			return fmt.Errorf("active run duration and created_at are invalid")
+		if err := validateRemoteRunSummary(run, true); err != nil {
+			return fmt.Errorf("active_runs: %w", err)
 		}
 	}
 	terminalTasks := 0

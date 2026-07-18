@@ -4,9 +4,9 @@
 
 ## 状态
 
-核心协议已收口，业务运行时正在实现。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立 Face/Hand 凭据、四步挑战握手、注册后强制加密、复合 peer identity 和严格结构验证；Mind 服务模式与 REPL 已共用 Conversation Manager 并恢复持久化运行时状态，Face Gateway、Chat/审批运行时和客户端仍待实现。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。本文不包含具体 UI 设计。
+核心协议与 P1 只读运行时已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、有序队列及 conversation/Hand/run/task 事件。Chat、异步审批和客户端仍待实现。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。本文不包含具体 UI 设计。
 
-当前仓库已有 WebSocket Hub、`Envelope`、连接级防重放与强制加密、Face wire protocol、独立鉴权入口、会话持久化、远程执行状态机和 EventBus，但尚未实现正式 Face command runtime。
+当前正式 command runtime 支持 conversation list/create/rename/snapshot、subscribe、Hand list/get、run get 和 task list/get/log；Chat、run/task cancel 与 approval resolve 会在后续阶段实现。
 
 ## 目标
 
@@ -220,6 +220,10 @@ face.run.get
 face.run.cancel
 face.hand.list
 face.hand.get
+face.task.list
+face.task.get
+face.task.log
+face.task.cancel
 ```
 
 ### Mind 到 Face
@@ -247,6 +251,7 @@ remote_run.changed
 hand.connected
 hand.disconnected
 conversation.changed
+task.changed
 ```
 
 ## 通用格式
@@ -679,6 +684,8 @@ Face 重复发送相同 request_id 和 payload
 
 ### F1：Face Gateway 与快照
 
+2026-07-18 已完成。
+
 - 服务模式初始化 Session Actor/Core 工厂。
 - 实现 conversation list/create/snapshot。
 - 实现订阅和每连接有序队列。
@@ -699,7 +706,7 @@ Face 重复发送相同 request_id 和 payload
 
 - 将阻塞式 Approver 升级为 conversation 级审批对象。
 - 实现 approval requested/resolve。
-- 实现 run get/cancel 和结构化 run 事件。
+- 完成 run cancel、审批关联和更完整的 run 同步；run get 与结构化 run 事件已在 F1 落地。
 - 审计 Face identity。
 
 验收：Face 可完成敏感远程执行审批，越权、过期和重复裁决均被拒绝。

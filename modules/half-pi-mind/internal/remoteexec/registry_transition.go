@@ -103,6 +103,7 @@ func (r *Registry) FailClosed(id, reason string) {
 	run.Error = reason
 	run.Rejection = &protocol.RPCRejected{RunID: id, Code: protocol.RejectInvalidRequest, Reason: reason}
 	close(run.done)
+	r.notifyLocked(run)
 }
 
 // ApplyResult 应用最终执行结果。
@@ -177,6 +178,7 @@ func (r *Registry) transitionLocked(run *Run, to protocol.RunStatus, now time.Ti
 		run.FinishedAt = now
 		close(run.done)
 	}
+	r.notifyLocked(run)
 	return nil
 }
 

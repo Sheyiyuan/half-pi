@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/hex"
+	"fmt"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -213,6 +214,17 @@ func TestFaceTokenCRUDCanonicalScopesAndAuthentication(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, face) {
 		t.Fatalf("authenticated Face token = %+v, want %+v", got, face)
+	}
+	identity, err := s.FaceIdentityByLabel(face.Label)
+	if err != nil {
+		t.Fatalf("FaceIdentityByLabel: %v", err)
+	}
+	if identity == nil || identity.ID != fmt.Sprint(face.ID) || identity.Label != face.Label || !reflect.DeepEqual(identity.Scopes, wantScopes) {
+		t.Fatalf("FaceIdentityByLabel = %+v", identity)
+	}
+	missing, err := s.FaceIdentityByLabel("missing")
+	if err != nil || missing != nil {
+		t.Fatalf("missing FaceIdentityByLabel = %+v, %v", missing, err)
 	}
 	if _, err := s.AddFaceToken("operator", wantScopes); err == nil {
 		t.Fatal("duplicate Face label accepted")

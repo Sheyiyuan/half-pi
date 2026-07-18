@@ -46,11 +46,20 @@ var (
 
 // TaskService 是进程级后台任务服务。
 type TaskService struct {
-	hub     *hub.Hub
-	pending func(string, time.Duration, *hub.Peer) (<-chan protocol.Envelope, func())
-	store   TaskStore
-	locksMu sync.Mutex
-	locks   map[string]*taskLock
+	hub        *hub.Hub
+	pending    func(string, time.Duration, *hub.Peer) (<-chan protocol.Envelope, func())
+	store      TaskStore
+	locksMu    sync.Mutex
+	locks      map[string]*taskLock
+	observerMu sync.RWMutex
+	observer   func(Task)
+}
+
+// OnChange 设置后台任务快照变化观察者。
+func (s *TaskService) OnChange(observer func(Task)) {
+	s.observerMu.Lock()
+	s.observer = observer
+	s.observerMu.Unlock()
 }
 
 type taskLock struct {
@@ -77,7 +86,11 @@ func (s *TaskService) CreateStartSnapshot(task Task) error {
 	now := time.Now()
 	task.Status = protocol.TaskPending
 	task.CreatedAt, task.UpdatedAt, task.Stale = now, now, true
-	return s.store.CreateRemoteTask(task)
+	if err := s.store.CreateRemoteTask(task); err != nil {
+		return err
+	}
+	s.notify(task)
+	return nil
 }
 
 // ApplyStartResult 保存 durable start run 返回的任务字段。
@@ -101,6 +114,7 @@ func (s *TaskService) ApplyStartResult(taskID, sessionID string, result protocol
 	if err := s.store.UpdateRemoteTask(task); err != nil {
 		return Task{}, err
 	}
+	s.notify(task)
 	return task, nil
 }
 
@@ -118,6 +132,7 @@ func (s *TaskService) MarkStartStale(taskID, sessionID, message string) (Task, e
 	if err := s.store.UpdateRemoteTask(task); err != nil {
 		return Task{}, err
 	}
+	s.notify(task)
 	return task, nil
 }
 
@@ -134,6 +149,7 @@ func (s *TaskService) FailStart(taskID, sessionID, message string) (Task, error)
 	if err := s.store.UpdateRemoteTask(task); err != nil {
 		return Task{}, err
 	}
+	s.notify(task)
 	return task, nil
 }
 
@@ -180,6 +196,7 @@ func (s *TaskService) refresh(ctx context.Context, peer *hub.Peer, task Task) (T
 	if err := s.store.UpdateRemoteTask(task); err != nil {
 		return Task{}, err
 	}
+	s.notify(task)
 	return task, nil
 }
 
@@ -188,7 +205,17 @@ func (s *TaskService) markStale(task Task, message string) (Task, error) {
 	if err := s.store.UpdateRemoteTask(task); err != nil {
 		return Task{}, err
 	}
+	s.notify(task)
 	return task, nil
+}
+
+func (s *TaskService) notify(task Task) {
+	s.observerMu.RLock()
+	observer := s.observer
+	s.observerMu.RUnlock()
+	if observer != nil {
+		observer(task)
+	}
 }
 
 // List 返回当前会话拥有的任务。

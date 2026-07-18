@@ -41,7 +41,9 @@ func faceCredentials(label string) wss.Credentials {
 
 func TestClientFourStepEncryptedSession(t *testing.T) {
 	h := hub.New()
-	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (string, error) { return testKey, nil })
+	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
+		return hub.Authentication{ApplicationKey: testKey, PrincipalID: key.Label}, nil
+	})
 	received := make(chan protocol.Envelope, 1)
 	h.OnMessage(func(peer *hub.Peer, env protocol.Envelope) { received <- env })
 	url, closeServer := startHub(t, h)
@@ -79,7 +81,9 @@ func TestClientFourStepEncryptedSession(t *testing.T) {
 
 func TestClientRejectsWrongApplicationKey(t *testing.T) {
 	h := hub.New()
-	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (string, error) { return testKey, nil })
+	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
+		return hub.Authentication{ApplicationKey: testKey, PrincipalID: key.Label}, nil
+	})
 	url, closeServer := startHub(t, h)
 	defer closeServer()
 	credentials := faceCredentials("wrong-key")
@@ -104,7 +108,9 @@ func TestClientRejectsInvalidLocalCredentialsBeforeDial(t *testing.T) {
 
 func TestClientInvalidEncryptedTrafficClosesConnection(t *testing.T) {
 	h := hub.New()
-	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (string, error) { return testKey, nil })
+	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
+		return hub.Authentication{ApplicationKey: testKey, PrincipalID: key.Label}, nil
+	})
 	url, closeServer := startHub(t, h)
 	defer closeServer()
 
@@ -126,7 +132,9 @@ func TestClientInvalidEncryptedTrafficClosesConnection(t *testing.T) {
 
 func TestClientSendFailureAfterStampClosesConnection(t *testing.T) {
 	h := hub.New()
-	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (string, error) { return testKey, nil })
+	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
+		return hub.Authentication{ApplicationKey: testKey, PrincipalID: key.Label}, nil
+	})
 	url, closeServer := startHub(t, h)
 	defer closeServer()
 

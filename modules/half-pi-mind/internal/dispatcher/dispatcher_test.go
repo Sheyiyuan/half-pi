@@ -1,6 +1,8 @@
 package dispatcher
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -24,18 +26,18 @@ const (
 
 type testCredentials struct{}
 
-func (testCredentials) AuthenticateHandCredentialKey(label, token string) (string, error) {
+func (testCredentials) AuthenticateHandConnection(label, token string) (string, string, error) {
 	if label != "same-label" || token != testToken {
-		return "", fmt.Errorf("authentication failed")
+		return "", "", fmt.Errorf("authentication failed")
 	}
-	return testHandKey, nil
+	return testHandKey, "hand-principal", nil
 }
 
-func (testCredentials) AuthenticateFaceCredentialKey(label, token string) (string, error) {
+func (testCredentials) AuthenticateFaceConnection(label, token string) (string, string, error) {
 	if label != "same-label" || token != testToken {
-		return "", fmt.Errorf("authentication failed")
+		return "", "", fmt.Errorf("authentication failed")
 	}
-	return testFaceKey, nil
+	return testFaceKey, "face-principal", nil
 }
 
 type recordingHandHandler struct {
@@ -43,6 +45,8 @@ type recordingHandHandler struct {
 	messages    int
 	disconnects int
 }
+
+func (h *recordingHandHandler) HandleHandConnect(*hub.Peer) {}
 
 func (h *recordingHandHandler) HandleHandMessage(*hub.Peer, protocol.Envelope) {
 	h.mu.Lock()
@@ -56,10 +60,34 @@ func (h *recordingHandHandler) HandleHandDisconnect(*hub.Peer) {
 	h.mu.Unlock()
 }
 
+type recordingFaceHandler struct {
+	hub *hub.Hub
+}
+
+func (h recordingFaceHandler) HandleFaceMessage(peer *hub.Peer, env protocol.Envelope) {
+	var meta protocol.FaceCommandMeta
+	_ = json.Unmarshal(env.Payload, &meta)
+	code := protocol.FaceErrorInternal
+	message := "test Face handler"
+	if protocol.ValidateFacePayload(env.Type, env.Payload) != nil {
+		code = protocol.FaceErrorInvalidRequest
+		message = "invalid Face request"
+	}
+	response, _ := protocol.NewEnvelope("", protocol.TypeFaceError, protocol.FaceError{
+		RequestID: meta.RequestID, ConversationID: meta.ConversationID,
+		Code: code, Message: message, Retryable: false,
+	})
+	_ = h.hub.SendPeerContext(context.Background(), peer, *response)
+}
+
+func (recordingFaceHandler) HandleFaceDisconnect(*hub.Peer) {}
+func (recordingFaceHandler) HandleHandConnect(*hub.Peer)    {}
+func (recordingFaceHandler) HandleHandDisconnect(*hub.Peer) {}
+
 func TestDispatcherSeparatesHandAndFaceWithSameLabel(t *testing.T) {
 	h := hub.New()
 	hands := &recordingHandHandler{}
-	Install(h, testCredentials{}, hands)
+	Install(h, testCredentials{}, hands, recordingFaceHandler{hub: h})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 		if err == nil {
@@ -134,7 +162,7 @@ func TestDispatcherSeparatesHandAndFaceWithSameLabel(t *testing.T) {
 
 func TestDispatcherRejectsInvalidFacePayloadWithoutAccepted(t *testing.T) {
 	h := hub.New()
-	Install(h, testCredentials{}, &recordingHandHandler{})
+	Install(h, testCredentials{}, &recordingHandHandler{}, recordingFaceHandler{hub: h})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 		if err == nil {

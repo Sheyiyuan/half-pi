@@ -15,6 +15,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/dispatcher"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/facegateway"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/setup"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
@@ -89,13 +90,20 @@ func main() {
 
 	wsHub := hub.New()
 	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus)
-	dispatcher.Install(wsHub, db, authority)
 	taskService := remoteexec.NewTaskService(authority, db)
 	conversations, err := newConversationManager(env, cfg, db, bus, authority, taskService)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "conversation runtime init failed: %v\n", err)
 		os.Exit(1)
 	}
+	faceGateway, err := facegateway.New(facegateway.Config{
+		Hub: wsHub, Store: db, Conversations: conversations, Authority: authority, Tasks: taskService,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Face Gateway init failed: %v\n", err)
+		os.Exit(1)
+	}
+	dispatcher.Install(wsHub, db, authority, faceGateway)
 
 	var httpServer *http.Server
 	if cfg.Server.Enabled {

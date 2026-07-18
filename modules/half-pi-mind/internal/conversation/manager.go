@@ -47,8 +47,17 @@ func (a *Actor) Bridge() *local.RemoteBridge { return a.bridge }
 type Manager struct {
 	config Config
 
-	mu     sync.Mutex
-	actors map[string]*Actor
+	mu         sync.Mutex
+	actors     map[string]*Actor
+	observerMu sync.RWMutex
+	observer   func(string)
+}
+
+// OnChange 设置 conversation 持久化状态变化观察者。
+func (m *Manager) OnChange(observer func(string)) {
+	m.observerMu.Lock()
+	m.observer = observer
+	m.observerMu.Unlock()
 }
 
 // NewManager 创建可由服务模式和 REPL 共用的 Conversation Manager。
@@ -81,7 +90,28 @@ func (m *Manager) Create(name string) (*Actor, error) {
 	if err := m.config.Store.CreateSessionNamed(m.config.GroupID, id, name); err != nil {
 		return nil, err
 	}
-	return m.Get(id)
+	actor, err := m.Get(id)
+	if err != nil {
+		return nil, err
+	}
+	m.notify(id)
+	return actor, nil
+}
+
+// Rename 重命名当前工作区内的 conversation。
+func (m *Manager) Rename(id, name string) error {
+	session, err := m.config.Store.GetSession(id)
+	if err != nil {
+		return fmt.Errorf("load conversation metadata: %w", err)
+	}
+	if session == nil || session.GroupID != m.config.GroupID {
+		return ErrNotFound
+	}
+	if err := m.config.Store.UpdateSessionName(id, name); err != nil {
+		return err
+	}
+	m.notify(id)
+	return nil
 }
 
 // Get 返回指定 conversation 的唯一 Actor，并在首次访问时恢复持久化状态。
@@ -98,7 +128,7 @@ func (m *Manager) Get(id string) (*Actor, error) {
 	if err != nil {
 		return nil, fmt.Errorf("load conversation metadata: %w", err)
 	}
-	if session == nil {
+	if session == nil || session.GroupID != m.config.GroupID {
 		return nil, ErrNotFound
 	}
 	actor, err := m.newActor(id)
@@ -122,6 +152,7 @@ func (m *Manager) newActor(id string) (*Actor, error) {
 	}
 	core.Bus = m.config.Bus
 	core.SetSkills(m.config.Skills)
+	core.SetSessionChangeObserver(func() { m.notify(id) })
 	if err := core.SetStore(m.config.Store, id); err != nil {
 		return nil, err
 	}
@@ -131,4 +162,13 @@ func (m *Manager) newActor(id string) (*Actor, error) {
 	bridge.SetActiveHand = core.SetActiveHand
 	bridge.CheckAndConfirm = core.CheckAndConfirm
 	return &Actor{core: core, bridge: bridge}, nil
+}
+
+func (m *Manager) notify(id string) {
+	m.observerMu.RLock()
+	observer := m.observer
+	m.observerMu.RUnlock()
+	if observer != nil {
+		observer(id)
+	}
 }

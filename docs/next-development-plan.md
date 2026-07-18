@@ -12,6 +12,8 @@
 - 服务级 `remoteexec.Authority`、SQLite run 审计与启动恢复。
 - 每个已加载 conversation 独立 Core/RemoteBridge，手动入口与 LLM 入口复用同一执行链路。
 - 服务模式与 REPL 共用 Conversation Manager，并恢复持久化 mode、active Hand 和 history。
+- Face Gateway 已执行 identity/scope 授权，并提供 conversation、Hand、run、task 查询、快照、订阅和结构化事件。
+- 每个 Face 连接拥有独立有界出站队列、单发送循环、单调 `event_seq` 和慢连接隔离。
 - Hand 工具 schema、allow/deny、本地最终检查、输出截断和 Unix 进程组取消。
 - R0 回归证据、R1 Windows 多架构交叉编译入口、R2 有界进度流和 R3 持久化后台任务闭环。
 
@@ -19,9 +21,6 @@
 
 ### 尚未落地
 
-- Face scope 和 conversation 的业务授权执行（凭据、identity 和 scope 存储已落地）。
-- Face Gateway 及其 conversation scope 授权入口。
-- Face 快照、订阅、有序出站队列、背压和结构化事件投影。
 - Chat `request_id`、幂等、busy、取消和唯一终态响应。
 - 异步审批对象及 Face 审批审计。
 - Headless Agent Face、Scripted LLM 和真实进程级 E2E。
@@ -34,13 +33,13 @@
 - Face Gateway 不直接发送 Hand RPC；run 查询和取消必须复用 `remoteexec.Authority`。
 - SQLite 和运行时 registry 是权威状态，EventBus 只用于观察，不从展示文本反推业务状态。
 - 每个阶段先冻结协议和验收测试，再接入下一层行为。
-- 已完成的进度流和后台任务不改变 Face runtime 延期边界。
+- 后台任务查询只暴露脱敏 best-known 快照；启动和取消继续复用 Chat/Approval/Authority 链路。
 
 ## 已完成：Face Wire Protocol
 
 2026-07-17 已完成 `gateway-core/protocol` 下的 `face.*` typed payload、scope、错误码、结果/审批/事件枚举、快照 DTO、结构化事件 DTO 和严格结构验证，并通过 gateway-core race 测试。未来单用户 Alpha 采用“有效 Face identity 可访问全部 conversation，写操作由 scope 控制”的访问模型。
 
-Face Gateway、Conversation Actor、Chat runtime、异步审批、Headless/TUI/Web 客户端和进程级 E2E 均推迟到后续阶段。独立 Face token/application key 和 Mind peer dispatcher 已随核心收口落地。
+Face Gateway 与 Conversation Actor 已在 P1 落地；Chat runtime、异步审批、Headless/TUI/Web 客户端和进程级 E2E 继续按 P2-P4 实施。独立 Face token/application key 和 Mind peer dispatcher 已随核心收口落地。
 
 ## 已完成：Face 核心收口
 
@@ -72,7 +71,7 @@ Face Gateway、Conversation Actor、Chat runtime、异步审批、Headless/TUI/W
 
 ### P1：Conversation Actor 与只读 Gateway
 
-2026-07-18 已完成 Conversation Manager、服务模式/REPL 共用工厂，以及 mode、active Hand、history、updated_at 的持久化和旧库迁移。只读 Gateway、快照、订阅、结构化事件和出站背压仍待完成。
+2026-07-18 已完成 Conversation Manager、服务模式/REPL 共用工厂、持久化恢复，以及只读 Gateway、快照、订阅、结构化事件和出站背压。P1 已完成，下一阶段进入 P2 Chat 生命周期。
 
 **目标**
 
@@ -162,11 +161,11 @@ Face Gateway、Conversation Actor、Chat runtime、异步审批、Headless/TUI/W
 - Headless Face 与首个人类 Face 对同一 conversation 观察一致。
 - 全仓 `make test` 在 race 模式下通过。
 
-P0 中 wire contract、凭据、加密会话和类型分流已完成；scope 的业务授权随 Gateway 在 P1 落地。P1-P4 整体延期，不属于当前实施范围。
+P0-P1 已完成：wire contract、凭据、加密会话、类型分流、Conversation Actor 和只读 Gateway 均已落地。P2-P4 继续作为当前 Face Alpha 主线。
 
 ## 当前主线：远程执行收尾
 
-R0-R3 已完成。涉及 Face 事件投影的部分只保持协议兼容，不实现 Face Gateway。
+R0-R3 已完成；其 run、task 和 Hand 状态现在通过 P1 Face Gateway 投影为正式结构化事件。
 
 ### R0：补齐闭环回归证据
 

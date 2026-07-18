@@ -264,6 +264,47 @@ func TestFaceValidationIsStructuralOnly(t *testing.T) {
 	}
 }
 
+func TestValidateFaceResultDataForGatewayQueries(t *testing.T) {
+	now := time.Date(2026, 7, 18, 12, 0, 0, 0, time.UTC)
+	conversation := ConversationSummary{
+		ConversationID: "conv-1", Name: "Work", Mode: "normal", MessageCount: 2, UpdatedAt: now,
+	}
+	hand := HandSummary{
+		HandID: "hand-1", Hostname: "dev", OS: "linux", Arch: "amd64", Connected: true,
+		Tools: []ToolInfo{},
+	}
+	run := RemoteRunSummary{
+		RunID: "run-1", RequestID: "run-1", HandID: "hand-1", Tool: "read_file",
+		Status: RunRunning, CreatedAt: now,
+	}
+	tests := []struct {
+		operation FaceOperation
+		data      any
+	}{
+		{FaceOperationConversationList, ConversationListResult{Conversations: []ConversationSummary{conversation}}},
+		{FaceOperationConversationCreate, ConversationCreateResult{Conversation: conversation}},
+		{FaceOperationConversationRename, ConversationRenameResult{Conversation: conversation}},
+		{FaceOperationHandList, HandListResult{Hands: []HandSummary{hand}}},
+		{FaceOperationHandGet, HandGetResult{Hand: hand}},
+		{FaceOperationRunGet, RunGetResult{Run: run}},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.operation), func(t *testing.T) {
+			raw, err := json.Marshal(tt.data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := ValidateFaceResultData(tt.operation, raw); err != nil {
+				t.Fatalf("valid result rejected: %v", err)
+			}
+		})
+	}
+
+	if err := ValidateFaceResultData(FaceOperationConversationList, json.RawMessage(`{"conversations":null}`)); err == nil {
+		t.Fatal("nil conversation collection accepted")
+	}
+}
+
 func TestFaceDTOsDoNotDeclareSessionID(t *testing.T) {
 	types := []reflect.Type{
 		reflect.TypeOf(FaceIdentity{}), reflect.TypeOf(FaceCommandMeta{}), reflect.TypeOf(FaceChat{}), reflect.TypeOf(FaceChatCancel{}),
@@ -278,7 +319,9 @@ func TestFaceDTOsDoNotDeclareSessionID(t *testing.T) {
 		reflect.TypeOf(ChatSummary{}), reflect.TypeOf(ApprovalRequest{}),
 		reflect.TypeOf(RemoteRunSummary{}), reflect.TypeOf(HandSummary{}),
 		reflect.TypeOf(ConversationSnapshot{}), reflect.TypeOf(ConversationListResult{}),
-		reflect.TypeOf(HandListResult{}), reflect.TypeOf(ChatStartedEventData{}),
+		reflect.TypeOf(ConversationCreateResult{}), reflect.TypeOf(ConversationRenameResult{}),
+		reflect.TypeOf(HandListResult{}), reflect.TypeOf(HandGetResult{}), reflect.TypeOf(RunGetResult{}),
+		reflect.TypeOf(ChatStartedEventData{}),
 		reflect.TypeOf(ChatToolCalledEventData{}), reflect.TypeOf(ChatToolCompletedEventData{}),
 		reflect.TypeOf(ChatCompletedEventData{}), reflect.TypeOf(ChatFailedEventData{}),
 		reflect.TypeOf(ChatCancelledEventData{}), reflect.TypeOf(ApprovalResolvedEventData{}),

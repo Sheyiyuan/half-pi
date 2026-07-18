@@ -247,9 +247,17 @@ make test         # 运行全部 4 个模块的测试
 - Mind `remote_tasks` 保存脱敏快照，Hand SQLite + 受限日志文件保存 durable task；断线继续、重启 lost、不自动重跑
 - LLM 工具与 `/hand task start|status|log|cancel` 复用同一 TaskService、审批、Authority 和审计路径
 
+##### Face P1 只读 Gateway
+- Conversation Manager 为每个 conversation 恢复独立 Core/RemoteBridge、mode、active Hand 和 history
+- Face Gateway 按凭据 label 解析无秘密 identity，并要求其稳定 ID 匹配握手时绑定的 principal；每个 command 都重新执行 scope 和资源归属校验
+- 支持 conversation list/create/rename/snapshot、subscribe、Hand list/get、run get、task list/get/log
+- 快照合并 SQLite 历史、Registry 活跃 run 和 Mind task best-known 状态；历史 run 查询有 Store fallback
+- 每个 Face 连接独立有界队列、单发送循环和单调 `event_seq`；队列满只断开慢 Face
+- conversation、Hand、run、task 变化通过显式 domain hook 投影，不解析 EventBus 展示文本
+
 ##### 设计文档
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
-- `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（运行时待实现）
+- `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（P1 查询可用，Chat/客户端待实现）
 - `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
 - `docs/remote-execution-implementation-plan.md` — 远程执行闭环实施与验收记录
 - `docs/next-development-plan.md` — 当前 Face Alpha 主线与远程执行收尾计划
@@ -355,10 +363,18 @@ make test         # 运行全部 4 个模块的测试
 - Mind 使用 `remote_tasks` 脱敏快照，重启标 stale，在线后 status 对账
 - Hand token 绑定 Hand ID；旧未绑定 token fail closed，需重新生成
 
+### 2026-07-18：Face P1 只读 Gateway
+- 默认服务模式初始化 Conversation Manager 和 Face Gateway，REPL 与远程 Face 共用同一 Actor 工厂
+- 所有已验证的同步查询遵循 accepted → result；snapshot 使用 accepted → snapshot；subscribe 安装过滤器后 accepted
+- snapshot version 进程内单调；每连接事件序号和出站线序在同一锁内分配
+- task cursor 使用随机进程密钥 HMAC 绑定 conversation、filter 和排序锚点，重启后旧 cursor fail closed
+- Face 投影不包含 token、application key、原始工具参数、Hand 工作路径或原始内部错误
+- Face 凭据删除后即使复用同一 label 创建新凭据，旧连接也不能继承新 principal 的 scopes
+
 ---
 
 ## 下一步
 
 1. 原生 Windows 运行取消验收脚本（外部环境）
-2. **Face Alpha Runtime（后续）** — 独立鉴权、Gateway、Conversation Actor、Chat/审批和客户端
+2. **Face Alpha Runtime** — P2 Chat 生命周期、P3 异步审批/取消、P4 Headless Face 与进程级 E2E
 3. `/compact` 上下文压缩与 Skill 工作区集成

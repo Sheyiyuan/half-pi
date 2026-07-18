@@ -44,6 +44,7 @@ func (c *Core) saveSessionLocked() error {
 	if err := store.ReplaceMessages(sessionID, llmMsgToStore(c.history)); err != nil {
 		return fmt.Errorf("save session: replace messages: %w", err)
 	}
+	c.notifySessionChanged()
 	return nil
 }
 

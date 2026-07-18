@@ -43,11 +43,11 @@ func credentials(label string, peerType protocol.PeerType) wss.Credentials {
 
 func authenticatedHub() *hub.Hub {
 	h := hub.New()
-	h.OnHandshake(func(peerKey hub.PeerKey, register protocol.Register) (string, error) {
+	h.OnHandshake(func(peerKey hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
 		if register.Token != token {
-			return "", fmt.Errorf("bad token")
+			return hub.Authentication{}, fmt.Errorf("bad token")
 		}
-		return key, nil
+		return hub.Authentication{ApplicationKey: key, PrincipalID: peerKey.Label}, nil
 	})
 	return h
 }
@@ -72,6 +72,32 @@ func TestCompoundPeerKeyAllowsSameLabelAcrossTypes(t *testing.T) {
 	h.RemoveByType(hub.PeerFace, "shared")
 	if h.PeerByType(hub.PeerFace, "shared") != nil || h.PeerByType(hub.PeerHand, "shared") == nil {
 		t.Fatal("typed removal affected wrong peer")
+	}
+}
+
+func TestConnectCallbackRunsAfterPeerPromotion(t *testing.T) {
+	h := authenticatedHub()
+	connected := make(chan *hub.Peer, 1)
+	h.OnConnect(func(peer *hub.Peer) {
+		if h.PeerByType(peer.Type, peer.ID) != peer {
+			t.Errorf("connect callback ran before peer promotion")
+		}
+		connected <- peer
+	})
+	url, closeServer := server(t, h)
+	defer closeServer()
+	client, err := wss.NewClient(url).ConnectAndRegister(credentials("connected", protocol.PeerFace))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Conn.Close()
+	select {
+	case peer := <-connected:
+		if peer.ID != "connected" || peer.Type != hub.PeerFace || peer.PrincipalID != "connected" {
+			t.Fatalf("connected peer = %+v", peer.Key())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("connect callback was not called")
 	}
 }
 
@@ -153,10 +179,10 @@ func TestRemoveByTypeRevokesAuthenticatedHandshake(t *testing.T) {
 	authenticated := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	h.OnHandshake(func(hub.PeerKey, protocol.Register) (string, error) {
+	h.OnHandshake(func(peerKey hub.PeerKey, _ protocol.Register) (hub.Authentication, error) {
 		once.Do(func() { close(authenticated) })
 		<-release
-		return key, nil
+		return hub.Authentication{ApplicationKey: key, PrincipalID: peerKey.Label}, nil
 	})
 	url, closeServer := server(t, h)
 	defer closeServer()

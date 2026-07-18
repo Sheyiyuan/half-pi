@@ -2,7 +2,7 @@
 
 ## 状态
 
-本文面向未来的 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立 Face 凭据、四步挑战握手和注册后强制加密已经实现并通过 race 测试；Face Gateway、Chat runtime、审批 broker 和客户端尚未实现，当前连接只会收到加密的“运行时未实现”错误，本文不声明业务可用。
+本文面向未来的 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密和 P1 Face Gateway 已实现并通过 race 测试。当前可使用 conversation/Hand/run/task 查询、快照和订阅；Chat runtime、审批 broker、取消命令和客户端尚未实现。
 
 架构和完整生命周期见 [`face-protocol.md`](face-protocol.md)。本文只说明客户端应依赖的正式协议契约。
 
@@ -17,9 +17,9 @@
 
 ## 鉴权假设
 
-Face 注册使用 version 1 WebSocket 四步挑战握手，必须同时使用与 Hand 分离的 Face token 和 application key。服务端按 Face 凭据表认证，注册成功后业务 payload 全部强制加密；Face scope 已随凭据规范存储，后续 Gateway 将其解析为授权主体。
+Face 注册使用 version 1 WebSocket 四步挑战握手，必须同时使用与 Hand 分离的 Face token 和 application key。服务端按 Face 凭据表认证，注册成功后业务 payload 全部强制加密；连接同时绑定认证时的稳定 principal ID。Gateway 按连接 label 解析不含秘密的 Face identity，并在每个 command 上重新校验 principal ID 与 scope，因此删除后同名重建凭据不会让旧连接继承新权限。
 
-当前阶段已实现注册和安全分流，但尚未实现 scope 驱动的 command routing。未来单用户 Alpha 采用以下访问模型：
+当前单用户 Alpha 采用以下访问模型：
 
 - 有效 Face identity 默认可访问该 Mind 中全部 conversation。
 - 写操作仍由 scope 控制。
@@ -83,6 +83,8 @@ face.event
 - 相同 ID 和不同 payload 返回 `request_conflict`。
 - 已接受的异步操作先返回 `face.accepted`，完成后恰好返回一个 `face.result`。
 - 鉴权、scope 或结构检查未通过时返回 `face.error`，不得先返回 accepted。
+
+当前同步查询也先返回 `face.accepted`，随后返回一个 `face.result`；snapshot 返回 accepted 后跟一个 `face.snapshot`；subscribe 在安装过滤器后以 accepted 完成。
 
 Chat 示例 payload：
 
@@ -189,9 +191,8 @@ conversation.changed
 
 ## 未来实现清单
 
-1. Face Gateway 的 scope 校验、幂等 registry、有界出站队列和慢连接策略。
-2. 快照聚合和结构化事件投影。
-3. Chat accepted/result/cancel 和异步审批 broker。
-4. JSONL Headless Agent Face 与确定性 Scripted LLM E2E。
+1. Chat accepted/result/cancel、幂等 registry 和 Scripted LLM。
+2. 异步审批 broker、run/task cancel 和 Face identity 审计。
+3. JSONL Headless Agent Face 与确定性进程级 E2E。
 
 以上运行时能力全部复用当前 wire protocol，不新增 AI 专用消息语义。

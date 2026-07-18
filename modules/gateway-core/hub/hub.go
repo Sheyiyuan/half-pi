@@ -43,8 +43,14 @@ type PeerKey struct {
 	Label string
 }
 
-// Authenticator 验证 label/token，并返回该身份的 32 字符小写 hex application key。
-type Authenticator func(key PeerKey, register protocol.Register) (string, error)
+// Authentication 是握手认证结果；application key 仅用于派生会话密钥。
+type Authentication struct {
+	ApplicationKey string
+	PrincipalID    string
+}
+
+// Authenticator 验证 label/token，并返回 application key 与稳定主体 ID。
+type Authenticator func(key PeerKey, register protocol.Register) (Authentication, error)
 
 // HandshakeError 是客户端可据此决定是否重试的握手错误。
 type HandshakeError struct {
@@ -62,6 +68,7 @@ type Hub struct {
 	pendingConns map[*websocket.Conn]PeerKey
 	closed       bool
 	authenticate Authenticator
+	connectFn    func(peer *Peer)
 	onMessage    func(peer *Peer, env protocol.Envelope)
 	disconnectFn func(peer *Peer)
 }
@@ -81,6 +88,9 @@ func (h *Hub) OnHandshake(fn Authenticator) { h.authenticate = fn }
 
 // OnMessage 设置接收已解密业务消息的回调。
 func (h *Hub) OnMessage(fn func(peer *Peer, env protocol.Envelope)) { h.onMessage = fn }
+
+// OnConnect 设置节点完成注册后的回调。
+func (h *Hub) OnConnect(fn func(peer *Peer)) { h.connectFn = fn }
 
 // OnDisconnect 设置节点断开回调。
 func (h *Hub) OnDisconnect(fn func(peer *Peer)) { h.disconnectFn = fn }
@@ -104,7 +114,7 @@ func (h *Hub) ServeWS(conn *websocket.Conn) error {
 		_ = conn.Close()
 		return err
 	}
-	applicationKey, err := h.authenticateRegister(key, reg)
+	authentication, err := h.authenticateRegister(key, reg)
 	if err != nil {
 		return h.failHandshake(conn, "authentication_failed", err)
 	}
@@ -129,12 +139,12 @@ func (h *Hub) ServeWS(conn *websocket.Conn) error {
 	if err != nil {
 		return h.failHandshake(conn, handshakeCode(err), err)
 	}
-	keys, err := wss.DeriveSessionKeys(applicationKey, transcript)
+	keys, err := wss.DeriveSessionKeys(authentication.ApplicationKey, transcript)
 	if err != nil || time.Now().After(deadline) || wss.VerifyRegisterProof(keys, transcript, proof) != nil {
 		return h.failHandshake(conn, "authentication_failed", fmt.Errorf("invalid register proof"))
 	}
 
-	peer, err := h.reservePeer(key, reg, conn, transcript.SessionID, keys)
+	peer, err := h.reservePeer(key, reg, conn, transcript.SessionID, keys, authentication.PrincipalID)
 	if err != nil {
 		return h.failHandshake(conn, "duplicate_peer", err)
 	}
@@ -159,6 +169,9 @@ func (h *Hub) ServeWS(conn *websocket.Conn) error {
 		h.releaseReservation(peer)
 		peer.Close()
 		return err
+	}
+	if h.connectFn != nil {
+		h.connectFn(peer)
 	}
 
 	_ = conn.SetReadDeadline(time.Time{})
@@ -248,19 +261,22 @@ func validateRegister(reg protocol.Register, payload json.RawMessage) error {
 	return nil
 }
 
-func (h *Hub) authenticateRegister(key PeerKey, reg protocol.Register) (string, error) {
+func (h *Hub) authenticateRegister(key PeerKey, reg protocol.Register) (Authentication, error) {
 	if h.authenticate == nil {
-		return "", fmt.Errorf("authenticator is not configured")
+		return Authentication{}, fmt.Errorf("authenticator is not configured")
 	}
-	applicationKey, err := h.authenticate(key, reg)
+	authentication, err := h.authenticate(key, reg)
 	if err != nil {
-		return "", err
+		return Authentication{}, err
 	}
-	decoded, err := hex.DecodeString(applicationKey)
-	if err != nil || len(decoded) != 16 || hex.EncodeToString(decoded) != applicationKey {
-		return "", fmt.Errorf("invalid application key")
+	decoded, err := hex.DecodeString(authentication.ApplicationKey)
+	if err != nil || len(decoded) != 16 || hex.EncodeToString(decoded) != authentication.ApplicationKey {
+		return Authentication{}, fmt.Errorf("invalid application key")
 	}
-	return applicationKey, nil
+	if authentication.PrincipalID == "" {
+		return Authentication{}, fmt.Errorf("invalid principal ID")
+	}
+	return authentication, nil
 }
 
 func (h *Hub) newChallenge(key PeerKey, deadline time.Time) (protocol.HandshakeTranscript, protocol.RegisterChallenge, error) {
@@ -334,7 +350,7 @@ func (h *Hub) failHandshake(conn *websocket.Conn, code string, cause error) erro
 	return &HandshakeError{Code: code}
 }
 
-func (h *Hub) reservePeer(key PeerKey, reg protocol.Register, conn *websocket.Conn, sessionID string, keys wss.SessionKeys) (*Peer, error) {
+func (h *Hub) reservePeer(key PeerKey, reg protocol.Register, conn *websocket.Conn, sessionID string, keys wss.SessionKeys, principalID string) (*Peer, error) {
 	session, err := protocol.NewSession(h.ID, key.Label, sessionID)
 	if err != nil {
 		return nil, err
@@ -347,7 +363,11 @@ func (h *Hub) reservePeer(key PeerKey, reg protocol.Register, conn *websocket.Co
 	if err != nil {
 		return nil, err
 	}
-	peer := &Peer{ID: key.Label, Type: key.Type, Conn: conn, JoinedAt: time.Now(), hub: h, session: session, inCipher: inCipher, outCipher: outCipher, Info: reg.Info}
+	peer := &Peer{
+		ID: key.Label, Type: key.Type, PrincipalID: principalID,
+		Conn: conn, JoinedAt: time.Now(), hub: h, session: session,
+		inCipher: inCipher, outCipher: outCipher, Info: reg.Info,
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if h.closed {

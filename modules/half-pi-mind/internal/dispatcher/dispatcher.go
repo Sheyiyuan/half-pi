@@ -2,8 +2,6 @@
 package dispatcher
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
@@ -12,26 +10,44 @@ import (
 
 // CredentialStore 提供 Hand 和 Face 分离的认证入口。
 type CredentialStore interface {
-	AuthenticateHandCredentialKey(label, token string) (applicationKey string, err error)
-	AuthenticateFaceCredentialKey(label, token string) (applicationKey string, err error)
+	AuthenticateHandConnection(label, token string) (applicationKey, principalID string, err error)
+	AuthenticateFaceConnection(label, token string) (applicationKey, principalID string, err error)
 }
 
 // HandHandler 接收已认证 Hand 的业务消息和断连事件。
 type HandHandler interface {
+	HandleHandConnect(peer *hub.Peer)
 	HandleHandMessage(peer *hub.Peer, env protocol.Envelope)
 	HandleHandDisconnect(peer *hub.Peer)
 }
 
+// FaceHandler 接收 Face command、连接清理和 Hand 生命周期投影。
+type FaceHandler interface {
+	HandleFaceMessage(peer *hub.Peer, env protocol.Envelope)
+	HandleFaceDisconnect(peer *hub.Peer)
+	HandleHandConnect(peer *hub.Peer)
+	HandleHandDisconnect(peer *hub.Peer)
+}
+
 // Install 将 dispatcher 安装为 Hub 回调的唯一所有者。
-func Install(h *hub.Hub, credentials CredentialStore, hands HandHandler) {
-	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (string, error) {
+func Install(h *hub.Hub, credentials CredentialStore, hands HandHandler, faces FaceHandler) {
+	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
+		var applicationKey, principalID string
+		var err error
 		switch key.Type {
 		case hub.PeerHand:
-			return credentials.AuthenticateHandCredentialKey(key.Label, register.Token)
+			applicationKey, principalID, err = credentials.AuthenticateHandConnection(key.Label, register.Token)
 		case hub.PeerFace:
-			return credentials.AuthenticateFaceCredentialKey(key.Label, register.Token)
+			applicationKey, principalID, err = credentials.AuthenticateFaceConnection(key.Label, register.Token)
 		default:
-			return "", fmt.Errorf("unsupported peer type")
+			err = fmt.Errorf("unsupported peer type")
+		}
+		return hub.Authentication{ApplicationKey: applicationKey, PrincipalID: principalID}, err
+	})
+	h.OnConnect(func(peer *hub.Peer) {
+		if peer.Type == hub.PeerHand {
+			hands.HandleHandConnect(peer)
+			faces.HandleHandConnect(peer)
 		}
 	})
 	h.OnMessage(func(peer *hub.Peer, env protocol.Envelope) {
@@ -39,53 +55,16 @@ func Install(h *hub.Hub, credentials CredentialStore, hands HandHandler) {
 		case hub.PeerHand:
 			hands.HandleHandMessage(peer, env)
 		case hub.PeerFace:
-			handleFace(h, peer, env)
+			faces.HandleFaceMessage(peer, env)
 		}
 	})
 	h.OnDisconnect(func(peer *hub.Peer) {
-		if peer.Type == hub.PeerHand {
+		switch peer.Type {
+		case hub.PeerHand:
 			hands.HandleHandDisconnect(peer)
+			faces.HandleHandDisconnect(peer)
+		case hub.PeerFace:
+			faces.HandleFaceDisconnect(peer)
 		}
 	})
-}
-
-func handleFace(h *hub.Hub, peer *hub.Peer, env protocol.Envelope) {
-	response := protocol.FaceError{
-		Code:      protocol.FaceErrorInternal,
-		Message:   "Face runtime is not implemented",
-		Retryable: false,
-	}
-	if !isFaceCommand(env.Type) || protocol.ValidateFacePayload(env.Type, env.Payload) != nil {
-		response.Code = protocol.FaceErrorInvalidRequest
-		response.Message = "invalid Face request"
-	} else {
-		var meta protocol.FaceCommandMeta
-		if err := json.Unmarshal(env.Payload, &meta); err == nil {
-			response.RequestID = meta.RequestID
-			response.ConversationID = meta.ConversationID
-		}
-	}
-	reply, err := protocol.NewEnvelope(env.MsgID, protocol.TypeFaceError, response)
-	if err != nil {
-		return
-	}
-	if err := h.SendPeerContext(context.Background(), peer, *reply); err != nil {
-		h.RemovePeer(peer)
-	}
-}
-
-func isFaceCommand(typ string) bool {
-	switch typ {
-	case protocol.TypeFaceChat, protocol.TypeFaceChatCancel,
-		protocol.TypeFaceConversationList, protocol.TypeFaceConversationCreate,
-		protocol.TypeFaceConversationSnapshot, protocol.TypeFaceConversationRename,
-		protocol.TypeFaceSubscribe, protocol.TypeFaceApprovalResolve,
-		protocol.TypeFaceRunGet, protocol.TypeFaceRunCancel,
-		protocol.TypeFaceHandList, protocol.TypeFaceHandGet,
-		protocol.TypeFaceTaskList, protocol.TypeFaceTaskGet,
-		protocol.TypeFaceTaskLog, protocol.TypeFaceTaskCancel:
-		return true
-	default:
-		return false
-	}
 }

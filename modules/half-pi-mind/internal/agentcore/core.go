@@ -17,22 +17,30 @@ import (
 
 // Core 是 agent core 的主体。
 type Core struct {
-	llm        llm.Provider
-	exec       executor.ToolExecutor
-	history    []llm.Message
-	Bus        *events.EventBus // Mind 的事件总线，nil 时不发事件
-	skills     *skill.Store
-	store      *store.Store
-	sessionID  string
-	Debug      bool
-	Mode       string // "normal" | "trust" | "yolo"
-	approver   Approver
-	autoAllow  map[string]bool // 本会话自动放行的工具
-	autoDeny   map[string]bool // 本会话自动拒绝的工具
-	activeHand string          // 当前会话的默认 Hand ID
-	chatMu     sync.Mutex
-	stateMu    sync.RWMutex
-	policy     *security.Policy
+	llm            llm.Provider
+	exec           executor.ToolExecutor
+	history        []llm.Message
+	Bus            *events.EventBus // Mind 的事件总线，nil 时不发事件
+	skills         *skill.Store
+	store          *store.Store
+	sessionID      string
+	Debug          bool
+	Mode           string // "normal" | "trust" | "yolo"
+	approver       Approver
+	autoAllow      map[string]bool // 本会话自动放行的工具
+	autoDeny       map[string]bool // 本会话自动拒绝的工具
+	activeHand     string          // 当前会话的默认 Hand ID
+	chatMu         sync.Mutex
+	stateMu        sync.RWMutex
+	policy         *security.Policy
+	sessionChanged func()
+}
+
+// SetSessionChangeObserver 设置持久化 conversation 状态变化回调。
+func (c *Core) SetSessionChangeObserver(observer func()) {
+	c.stateMu.Lock()
+	c.sessionChanged = observer
+	c.stateMu.Unlock()
 }
 
 // Approver 由 REPL 实现，处理用户确认交互。
@@ -85,7 +93,17 @@ func (c *Core) SetMode(mode string) error {
 		Role:    llm.RoleSystem,
 		Content: fmt.Sprintf("安全模式已切换为: %s", mode),
 	})
+	c.notifySessionChanged()
 	return nil
+}
+
+func (c *Core) notifySessionChanged() {
+	c.stateMu.RLock()
+	observer := c.sessionChanged
+	c.stateMu.RUnlock()
+	if observer != nil {
+		observer()
+	}
 }
 
 func modeToSecurityMode(mode string) security.Mode {

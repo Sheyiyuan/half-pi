@@ -433,9 +433,29 @@ type ConversationListResult struct {
 	Conversations []ConversationSummary `json:"conversations"`
 }
 
+// ConversationCreateResult 是 conversation.create 的结构化结果。
+type ConversationCreateResult struct {
+	Conversation ConversationSummary `json:"conversation"`
+}
+
+// ConversationRenameResult 是 conversation.rename 的结构化结果。
+type ConversationRenameResult struct {
+	Conversation ConversationSummary `json:"conversation"`
+}
+
 // HandListResult 是 hand.list 的结构化结果。
 type HandListResult struct {
 	Hands []HandSummary `json:"hands"`
+}
+
+// HandGetResult 是 hand.get 的结构化结果。
+type HandGetResult struct {
+	Hand HandSummary `json:"hand"`
+}
+
+// RunGetResult 是 run.get 的结构化结果。
+type RunGetResult struct {
+	Run RemoteRunSummary `json:"run"`
 }
 
 // TaskListResult 是 task.list 的分页结果。

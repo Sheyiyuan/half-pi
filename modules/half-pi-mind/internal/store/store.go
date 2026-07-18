@@ -4,6 +4,7 @@ package store
 import (
 	"database/sql"
 	"fmt"
+	"strconv"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -51,6 +52,15 @@ func (s *Store) AuthenticateHandCredentialKey(label, token string) (string, erro
 	return credential.ApplicationKey, nil
 }
 
+// AuthenticateHandConnection 验证 Hand 凭据并返回连接绑定信息。
+func (s *Store) AuthenticateHandConnection(label, token string) (string, string, error) {
+	credential, err := s.AuthenticateHandCredential(label, token)
+	if err != nil {
+		return "", "", err
+	}
+	return credential.ApplicationKey, strconv.FormatInt(credential.ID, 10), nil
+}
+
 // AuthenticateFaceCredentialKey 验证 Face 凭据并返回 application key。
 func (s *Store) AuthenticateFaceCredentialKey(label, token string) (string, error) {
 	credential, err := s.AuthenticateFaceToken(label, token)
@@ -58,6 +68,15 @@ func (s *Store) AuthenticateFaceCredentialKey(label, token string) (string, erro
 		return "", err
 	}
 	return credential.ApplicationKey, nil
+}
+
+// AuthenticateFaceConnection 验证 Face 凭据并返回连接绑定信息。
+func (s *Store) AuthenticateFaceConnection(label, token string) (string, string, error) {
+	credential, err := s.AuthenticateFaceToken(label, token)
+	if err != nil {
+		return "", "", err
+	}
+	return credential.ApplicationKey, strconv.FormatInt(credential.ID, 10), nil
 }
 
 func (s *Store) migrate() error {

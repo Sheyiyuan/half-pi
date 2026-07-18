@@ -1,6 +1,7 @@
 package remoteexec
 
 import (
+	"context"
 	"fmt"
 	"sync"
 	"time"
@@ -32,6 +33,14 @@ func NewAuthority(h *hub.Hub, registry *Registry, bus *events.EventBus) *Authori
 	return &Authority{Hub: h, Registry: registry, bus: bus, pending: make(map[string]*pendingCall)}
 }
 
+// HandleHandConnect 处理已认证 Hand 上线。
+func (a *Authority) HandleHandConnect(peer *hub.Peer) {
+	if peer == nil || peer.Type != hub.PeerHand {
+		return
+	}
+	a.publish(events.LevelInfo, events.TypeSystem, fmt.Sprintf("[HUB] %s 已连接", peer.ID))
+}
+
 // HandleHandDisconnect 处理已认证 Hand 断连。
 func (a *Authority) HandleHandDisconnect(peer *hub.Peer) {
 	if peer == nil || peer.Type != hub.PeerHand {
@@ -51,6 +60,37 @@ func (a *Authority) PendingCall(id string, timeout time.Duration, expectedPeer s
 // PendingPeerCall 注册绑定具体 Hand 连接的响应等待器。
 func (a *Authority) PendingPeerCall(id string, timeout time.Duration, peer *hub.Peer) (<-chan protocol.Envelope, func()) {
 	return a.pendingCall(id, timeout, peer.ID, peer)
+}
+
+// GetHandInfo 通过 Authority 的绑定等待器查询在线 Hand 动态信息。
+func (a *Authority) GetHandInfo(ctx context.Context, handID string) (protocol.HandInfoResp, error) {
+	peer := a.Hub.PeerByType(hub.PeerHand, handID)
+	if peer == nil || peer.Type != hub.PeerHand {
+		return protocol.HandInfoResp{}, fmt.Errorf("Hand %q is offline", handID)
+	}
+	requestID := protocol.MustNewMsgID()
+	responses, cancel := a.PendingPeerCall(requestID, 0, peer)
+	defer cancel()
+	env, err := protocol.NewEnvelope("", protocol.TypeHandInfoReq, protocol.HandInfoReq{ID: requestID})
+	if err != nil {
+		return protocol.HandInfoResp{}, fmt.Errorf("create Hand info request: %w", err)
+	}
+	if err := a.Hub.SendPeerContext(ctx, peer, *env); err != nil {
+		return protocol.HandInfoResp{}, fmt.Errorf("send Hand info request: %w", err)
+	}
+	select {
+	case response := <-responses:
+		info, err := protocol.DecodePayload[protocol.HandInfoResp](&response)
+		if err != nil {
+			return protocol.HandInfoResp{}, fmt.Errorf("decode Hand info response: %w", err)
+		}
+		if info.ID != requestID {
+			return protocol.HandInfoResp{}, fmt.Errorf("invalid Hand info response")
+		}
+		return info, nil
+	case <-ctx.Done():
+		return protocol.HandInfoResp{}, ctx.Err()
+	}
 }
 
 func (a *Authority) pendingCall(id string, timeout time.Duration, expectedPeer string, expectedConn *hub.Peer) (<-chan protocol.Envelope, func()) {

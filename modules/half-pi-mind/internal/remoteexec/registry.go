@@ -84,9 +84,10 @@ func (r *Registry) ApplyProgressFrom(handID, connectionID string, msg protocol.R
 
 // Registry 按 run_id 原子管理远程执行状态。
 type Registry struct {
-	mu      sync.Mutex
-	runs    map[string]*Run
-	auditor Auditor
+	mu       sync.Mutex
+	runs     map[string]*Run
+	auditor  Auditor
+	observer func(Run)
 }
 
 const (
@@ -101,6 +102,13 @@ func NewRegistry(auditor ...Auditor) *Registry {
 		registry.auditor = auditor[0]
 	}
 	return registry
+}
+
+// OnChange 设置 run 状态变化观察者。观察者必须快速返回且不得回调 Registry。
+func (r *Registry) OnChange(observer func(Run)) {
+	r.mu.Lock()
+	r.observer = observer
+	r.mu.Unlock()
 }
 
 // Create 创建 run，初始状态为 created。
@@ -160,6 +168,7 @@ func (r *Registry) createForPeer(id, sessionID, handID, connectionID, tool strin
 		}
 	}
 	r.runs[id] = run
+	r.notifyLocked(run)
 	return nil
 }
 
@@ -217,6 +226,24 @@ func (r *Registry) Snapshot(id string) (Run, bool) {
 	if !ok {
 		return Run{}, false
 	}
+	copy := copyRun(run)
+	return copy, true
+}
+
+// SnapshotsBySession 返回指定 conversation 当前仍保留的 run 快照。
+func (r *Registry) SnapshotsBySession(sessionID string) []Run {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	result := make([]Run, 0)
+	for _, run := range r.runs {
+		if run.SessionID == sessionID {
+			result = append(result, copyRun(run))
+		}
+	}
+	return result
+}
+
+func copyRun(run *Run) Run {
 	copy := *run
 	if run.Result != nil {
 		result := *run.Result
@@ -227,5 +254,11 @@ func (r *Registry) Snapshot(id string) (Run, bool) {
 		copy.Rejection = &rejection
 	}
 	copy.done = nil
-	return copy, true
+	return copy
+}
+
+func (r *Registry) notifyLocked(run *Run) {
+	if r.observer != nil {
+		r.observer(copyRun(run))
+	}
 }

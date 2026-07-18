@@ -16,13 +16,18 @@ func (c *Core) ActiveHand() string {
 // SetActiveHand 设置当前会话默认 Hand，同时持久化到 DB。
 func (c *Core) SetActiveHand(handID string) error {
 	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
 	if c.store != nil && c.sessionID != "" {
 		if err := c.store.SetActiveHand(c.sessionID, handID); err != nil {
+			c.stateMu.Unlock()
 			return err
 		}
 	}
 	c.activeHand = handID
+	observer := c.sessionChanged
+	c.stateMu.Unlock()
+	if observer != nil {
+		observer()
+	}
 	return nil
 }
 

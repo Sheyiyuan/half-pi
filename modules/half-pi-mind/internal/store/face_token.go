@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 )
@@ -25,6 +26,34 @@ var validFaceScopes = map[protocol.FaceScope]struct{}{
 type FaceCredential struct {
 	Credential
 	Scopes []protocol.FaceScope
+}
+
+// FaceIdentityByLabel 返回不含凭据秘密的 Face 身份；不存在时返回 nil。
+func (s *Store) FaceIdentityByLabel(label string) (*protocol.FaceIdentity, error) {
+	if err := validateCredentialLabel(label); err != nil {
+		return nil, nil
+	}
+	var id int64
+	var storedLabel, scopesJSON string
+	err := s.db.QueryRow(`SELECT id, label, scopes FROM face_tokens WHERE label = ?`, label).Scan(&id, &storedLabel, &scopesJSON)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get Face identity: %w", err)
+	}
+	var scopes []protocol.FaceScope
+	if err := json.Unmarshal([]byte(scopesJSON), &scopes); err != nil {
+		return nil, fmt.Errorf("decode Face identity scopes: %w", err)
+	}
+	canonical, encoded, err := encodeFaceScopes(scopes)
+	if err != nil {
+		return nil, fmt.Errorf("validate Face identity scopes: %w", err)
+	}
+	if encoded != scopesJSON {
+		return nil, fmt.Errorf("Face identity scopes are not canonical")
+	}
+	return &protocol.FaceIdentity{ID: strconv.FormatInt(id, 10), Label: storedLabel, Scopes: canonical}, nil
 }
 
 // CanonicalFaceScopes 校验、去重并按字典序排列 Face scopes。

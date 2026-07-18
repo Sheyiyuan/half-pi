@@ -15,15 +15,16 @@ import (
 
 // Peer 封装 WebSocket 连接及其元数据。
 type Peer struct {
-	ID        string
-	Type      PeerType
-	Conn      *websocket.Conn
-	JoinedAt  time.Time
-	hub       *Hub
-	session   *protocol.Session
-	Info      *protocol.HandInfo // Hand 注册时上报的静态设备信息
-	inCipher  *wss.AES128GCM
-	outCipher *wss.AES128GCM
+	ID          string
+	Type        PeerType
+	PrincipalID string
+	Conn        *websocket.Conn
+	JoinedAt    time.Time
+	hub         *Hub
+	session     *protocol.Session
+	Info        *protocol.HandInfo // Hand 注册时上报的静态设备信息
+	inCipher    *wss.AES128GCM
+	outCipher   *wss.AES128GCM
 
 	writeOnce sync.Once
 	writeGate chan struct{} // 保护 Conn 写入，gorilla/websocket 要求单 writer
