@@ -78,7 +78,8 @@ func (p *Peer) writeJSONLocked(ctx context.Context, v any) error {
 	}
 	interruptDone := make(chan struct{})
 	stopInterrupt := context.AfterFunc(ctx, func() {
-		_ = p.Conn.SetWriteDeadline(time.Now())
+		// Close is safe concurrently with writes and reliably interrupts a blocked writer.
+		_ = p.Conn.Close()
 		close(interruptDone)
 	})
 	defer func() {
