@@ -50,13 +50,20 @@ type Approval struct {
 	ExpiresAt  int64  `json:"expires_at"`  // Unix 毫秒
 }
 
+// RPCBackgroundOptions 配置 RPC 作为后台任务启动。
+type RPCBackgroundOptions struct {
+	TaskID       string `json:"task_id"`
+	MaxRuntimeMS int64  `json:"max_runtime_ms"`
+}
+
 // RPC 由 Mind 发送，请求 Hand 执行工具。
 type RPC struct {
-	RunID      string         `json:"run_id"`
-	Tool       string         `json:"tool"`
-	Args       map[string]any `json:"args"`
-	DeadlineAt int64          `json:"deadline_at"` // Unix 毫秒
-	Approval   *Approval      `json:"approval,omitempty"`
+	RunID      string                `json:"run_id"`
+	Tool       string                `json:"tool"`
+	Args       map[string]any        `json:"args"`
+	DeadlineAt int64                 `json:"deadline_at"` // Unix 毫秒
+	Approval   *Approval             `json:"approval,omitempty"`
+	Background *RPCBackgroundOptions `json:"background,omitempty"`
 }
 
 // RPCAccepted 表示 Hand 已完成本地守门并开始执行。
@@ -100,11 +107,13 @@ type RPCProgress struct {
 
 // RPCResult 是 Hand 执行工具后的最终返回。
 type RPCResult struct {
-	RunID     string `json:"run_id"`
-	Success   bool   `json:"success"`
-	Output    string `json:"output,omitempty"`
-	Error     string `json:"error,omitempty"`
-	Truncated bool   `json:"truncated,omitempty"`
+	RunID      string     `json:"run_id"`
+	Success    bool       `json:"success"`
+	Output     string     `json:"output,omitempty"`
+	Error      string     `json:"error,omitempty"`
+	Truncated  bool       `json:"truncated,omitempty"`
+	TaskID     string     `json:"task_id,omitempty"`
+	TaskStatus TaskStatus `json:"task_status,omitempty"`
 }
 
 // RPCCancel 请求 Hand 取消指定 run。
@@ -129,12 +138,47 @@ var (
 // ApprovalDigest 计算绑定 run、Hand、工具和参数的 SHA-256 摘要。
 // 参数对象键由 encoding/json 确定性排序；字符串不做 Unicode 归一化。
 func ApprovalDigest(runID, handID, tool string, args map[string]any) (string, error) {
+	return RPCApprovalDigest(RPC{RunID: runID, Tool: tool, Args: args}, handID)
+}
+
+// RPCApprovalDigest 计算绑定完整 RPC 执行模式的 SHA-256 审批摘要。
+// 前台 RPC 保持 ApprovalDigest 的既有摘要；后台模式额外绑定 task_id 和 max_runtime_ms。
+func RPCApprovalDigest(rpc RPC, handID string) (string, error) {
+	if rpc.Background != nil {
+		payload := struct {
+			RunID        string         `json:"run_id"`
+			HandID       string         `json:"hand_id"`
+			Tool         string         `json:"tool"`
+			Args         map[string]any `json:"args"`
+			Background   bool           `json:"background"`
+			TaskID       string         `json:"task_id"`
+			MaxRuntimeMS int64          `json:"max_runtime_ms"`
+		}{
+			RunID:        rpc.RunID,
+			HandID:       handID,
+			Tool:         rpc.Tool,
+			Args:         rpc.Args,
+			Background:   true,
+			TaskID:       rpc.Background.TaskID,
+			MaxRuntimeMS: rpc.Background.MaxRuntimeMS,
+		}
+		return approvalDigest(payload)
+	}
 	payload := struct {
 		RunID  string         `json:"run_id"`
 		HandID string         `json:"hand_id"`
 		Tool   string         `json:"tool"`
 		Args   map[string]any `json:"args"`
-	}{runID, handID, tool, args}
+	}{
+		RunID:  rpc.RunID,
+		HandID: handID,
+		Tool:   rpc.Tool,
+		Args:   rpc.Args,
+	}
+	return approvalDigest(payload)
+}
+
+func approvalDigest(payload any) (string, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return "", fmt.Errorf("marshal approval digest payload: %w", err)
@@ -145,6 +189,17 @@ func ApprovalDigest(runID, handID, tool string, args map[string]any) (string, er
 
 // ValidateApproval 校验 Approval 是否能授权指定请求的确认步骤。
 func ValidateApproval(approval *Approval, runID, handID, tool string, args map[string]any, now time.Time) error {
+	return ValidateRPCApproval(approval, RPC{RunID: runID, Tool: tool, Args: args}, handID, now)
+}
+
+// ValidateRPCApproval 校验 Approval 是否授权完整 RPC，包括前后台执行模式。
+func ValidateRPCApproval(approval *Approval, rpc RPC, handID string, now time.Time) error {
+	return validateApproval(approval, now, func() (string, error) {
+		return RPCApprovalDigest(rpc, handID)
+	})
+}
+
+func validateApproval(approval *Approval, now time.Time, digest func() (string, error)) error {
 	if approval == nil || !approval.Approved || approval.Source == "" || !approval.OneShot {
 		return ErrApprovalRequired
 	}
@@ -152,11 +207,11 @@ func ValidateApproval(approval *Approval, runID, handID, tool string, args map[s
 	if approval.ApprovedAt <= 0 || approval.ExpiresAt <= approval.ApprovedAt || nowMs < approval.ApprovedAt || nowMs > approval.ExpiresAt {
 		return ErrApprovalExpired
 	}
-	digest, err := ApprovalDigest(runID, handID, tool, args)
+	want, err := digest()
 	if err != nil {
 		return err
 	}
-	if approval.ArgsDigest != digest {
+	if approval.ArgsDigest != want {
 		return ErrApprovalDigestMismatch
 	}
 	return nil
@@ -175,6 +230,14 @@ func ValidateRPC(rpc RPC, now time.Time) error {
 	}
 	if rpc.DeadlineAt <= now.UnixMilli() {
 		return fmt.Errorf("deadline has expired")
+	}
+	if rpc.Background != nil {
+		if rpc.Background.TaskID != rpc.RunID {
+			return fmt.Errorf("background task_id must equal run_id")
+		}
+		if rpc.Background.MaxRuntimeMS <= 0 || rpc.Background.MaxRuntimeMS > MaxTaskRuntimeMS {
+			return fmt.Errorf("background max_runtime_ms must be between 1 and %d", MaxTaskRuntimeMS)
+		}
 	}
 	return nil
 }
@@ -231,6 +294,17 @@ func ValidateRPCProgress(msg RPCProgress) error {
 func ValidateRPCResult(msg RPCResult) error {
 	if msg.RunID == "" {
 		return fmt.Errorf("run_id is required")
+	}
+	if (msg.TaskID == "") != (msg.TaskStatus == "") {
+		return fmt.Errorf("task_id and task_status must be provided together")
+	}
+	if msg.TaskID != "" {
+		if msg.TaskID != msg.RunID {
+			return fmt.Errorf("task_id must equal run_id")
+		}
+		if !validTaskStatus(msg.TaskStatus) {
+			return fmt.Errorf("unknown task status %q", msg.TaskStatus)
+		}
 	}
 	return nil
 }

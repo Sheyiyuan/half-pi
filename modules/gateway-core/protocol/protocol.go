@@ -12,18 +12,24 @@ import (
 )
 
 const (
-	TypeRegister        = "register"
-	TypeRegistered      = "registered"
-	TypeRPC             = "rpc"
-	TypeRPCAccepted     = "rpc_accepted"
-	TypeRPCRejected     = "rpc_rejected"
-	TypeRPCProgress     = "rpc_progress"
-	TypeRPCResult       = "rpc_result"
-	TypeRPCCancel       = "rpc_cancel"
-	TypeRPCCancelResult = "rpc_cancel_result"
-	TypePing            = "ping"
-	TypePong            = "pong"
-	TypeError           = "error"
+	TypeRegister         = "register"
+	TypeRegistered       = "registered"
+	TypeRPC              = "rpc"
+	TypeRPCAccepted      = "rpc_accepted"
+	TypeRPCRejected      = "rpc_rejected"
+	TypeRPCProgress      = "rpc_progress"
+	TypeRPCResult        = "rpc_result"
+	TypeRPCCancel        = "rpc_cancel"
+	TypeRPCCancelResult  = "rpc_cancel_result"
+	TypeTaskStatusReq    = "task_status_req"
+	TypeTaskStatusResp   = "task_status_resp"
+	TypeTaskLogReq       = "task_log_req"
+	TypeTaskLogResp      = "task_log_resp"
+	TypeTaskCancel       = "task_cancel"
+	TypeTaskCancelResult = "task_cancel_result"
+	TypePing             = "ping"
+	TypePong             = "pong"
+	TypeError            = "error"
 
 	TypeHandInfoReq  = "hand_info_req"  // Mind → Hand：查询可用工具列表
 	TypeHandInfoResp = "hand_info_resp" // Hand → Mind：返回工具列表
