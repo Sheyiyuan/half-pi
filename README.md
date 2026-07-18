@@ -106,8 +106,8 @@ modules/
 | 技能 | 从 `~/.half-pi/skills/` 加载 `.skill.md`，按需向 LLM 暴露技能全文 |
 | 工具 | 文件读取、文件写入、精确编辑、搜索、正则搜索、命令执行、安全预查 |
 | 安全 | `strict` / `normal` / `trust` / `yolo` 四种模式，黑名单、灰名单和审批接口 |
-| 通信 | WebSocket Hub、Envelope 协议、连接序号防重放、AES-128-GCM 加密原语 |
-| Hand | 令牌注册、工具发现、远程调用、取消、超时、自动重连 |
+| 通信 | WebSocket Hub、四步挑战握手、连接序号防重放、注册后 AES-128-GCM 强制加密 |
+| Hand | 独立 token/application key 注册、工具发现、远程调用、取消、超时、自动重连 |
 | 后台任务 | Hand 本地 SQLite 与受限日志文件，Mind 保存脱敏快照 |
 | 审计 | 远程执行状态迁移、审批摘要、结果来源校验 |
 
@@ -121,7 +121,7 @@ modules/
 
 ### Hand
 
-- 使用独立令牌向 Mind 注册，并上报操作系统、架构、主机名和工作目录。
+- 使用独立 token 和 application key 向 Mind 注册，并上报操作系统、架构、主机名和工作目录。
 - 自动重连和指数退避。
 - 工具发现、远程调用执行、截止时间、显式取消、有界进度流和输出截断。
 - 工具允许/拒绝策略，以及执行前的本地安全检查。
@@ -166,7 +166,7 @@ make run-mind
 
 ### 3. 创建并连接 Hand
 
-在 Mind REPL 中创建令牌：
+在 Mind REPL 中创建凭据。token 和 application key 只在创建时显示一次：
 
 ```text
 /hand add my-pc
@@ -175,7 +175,7 @@ make run-mind
 在另一终端或另一台设备上启动 Hand：
 
 ```bash
-make run-hand ARGS="--server ws://127.0.0.1:15707/ws --token <token> --id my-pc"
+make run-hand ARGS="--server ws://127.0.0.1:15707/ws --token <token> --application-key <key> --id my-pc"
 ```
 
 连接远程设备时，把 `--server` 改为该设备可访问的 Mind 地址。当前默认链路未启用 TLS，请参阅下面的安全边界。
@@ -217,7 +217,12 @@ REPL 命令：
 /mode [name]            查看或切换安全模式
 /session                列出会话
 /session <prefix>       切换会话
-/hand                   管理 Hand 令牌
+/hand                   列出 Hand 凭据
+/hand add <label>       创建 Hand 凭据
+/hand remove --id <id>  撤销 Hand 凭据
+/face add <label> --scopes <scopes> 创建 Face 凭据
+/face list              列出 Face 凭据
+/face remove --id <id>  撤销 Face 凭据
 /hand online            查看在线 Hand
 /hand info <id>         查询 Hand 能力
 /hand select <id>       选择默认 Hand
@@ -232,18 +237,19 @@ Half Pi 会让 AI 接触真实设备，因此安全能力不是附属功能。
 
 **已经实现：**
 
-- 每个 Hand 使用独立随机令牌注册，令牌可单独撤销。
+- Hand 和 Face 使用分离的凭据表、认证路径和权限；同名节点可共存，凭据可按类型撤销。
+- 四步挑战握手使用独立 token/application key 派生方向隔离的会话密钥，`registered` 及后续业务 payload 强制 AES-128-GCM 加密。
 - 连接建立后校验 `session_id`、`from`、`to` 和严格递增的 `seq`，拒绝重放和乱序消息。
 - Mind 校验远程执行结果是否来自预期 Hand。
 - Mind 负责用户审批和全局策略，Hand 负责本机工具权限和最终安全检查。
 - Approval 摘要使用 SHA-256 绑定 `run_id`、`hand_id`、工具和参数，并带有效期。
 - 工具输出有大小上限，远程任务支持截止时间和取消。
-- Hand 令牌绑定创建时的 Hand ID，不能冒用其他 Hand 身份；升级前创建的未绑定令牌需要重新生成。
+- Hand 凭据绑定创建时的 label，不能冒用其他身份；旧 `hand_tokens` 和旧三步握手不再认证，升级后必须重新执行 `/hand add <label>`。
 
 **尚未完成：**
 
-- 当前默认连接是 `ws://`。仓库已经提供 AES-128-GCM 与 Envelope AAD 加密原语，但尚未接入实际 Mind-Hand 消息链路；生产环境目前应置于可信网络或 TLS 反向代理后。
-- Hand 令牌当前以明文保存在本地 SQLite 中。
+- 当前默认连接是 `ws://`。应用层加密可以证明对端持有 application key，但不能证明主机身份；非 loopback 生产部署仍应使用 TLS/WSS。
+- Hand/Face 长期凭据以明文保存在受限本地 SQLite 中；数据库泄露等同凭据泄露。Unix 路径会收紧到目录 `0700`、文件 `0600`，Windows 原生 ACL 仍需发布环境验收。
 - 审计目前聚焦远程执行状态和脱敏审批元数据，尚未覆盖完整的多端用户身份与审批交互链路。
 - 当前安全规则是基础实现，不等同于 OS 沙箱。
 

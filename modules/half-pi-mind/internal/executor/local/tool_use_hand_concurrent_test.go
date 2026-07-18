@@ -21,6 +21,7 @@ import (
 
 func TestUseHandConcurrentRunsDoNotCrossDeliver(t *testing.T) {
 	h := hub.New()
+	enableTestHandshake(h)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{}
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -31,7 +32,7 @@ func TestUseHandConcurrentRunsDoNotCrossDeliver(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("parallel-hand", hub.PeerHand, "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("parallel-hand"))
 	if err != nil {
 		t.Fatal(err)
 	}

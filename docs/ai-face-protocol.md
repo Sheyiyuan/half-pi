@@ -2,7 +2,7 @@
 
 ## 状态
 
-本文面向未来的 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol 已在 `modules/gateway-core/protocol/face.go` 与 `face_validate.go` 中实现并通过 race 测试；Face 独立鉴权、Gateway、Chat runtime、审批 broker 和客户端尚未实现，本文不声明当前可连接使用。
+本文面向未来的 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立 Face 凭据、四步挑战握手和注册后强制加密已经实现并通过 race 测试；Face Gateway、Chat runtime、审批 broker 和客户端尚未实现，当前连接只会收到加密的“运行时未实现”错误，本文不声明业务可用。
 
 架构和完整生命周期见 [`face-protocol.md`](face-protocol.md)。本文只说明客户端应依赖的正式协议契约。
 
@@ -17,9 +17,9 @@
 
 ## 鉴权假设
 
-未来 Face 注册仍使用 WebSocket `register` envelope，但必须使用与 Hand 分离的 Face token。服务端鉴权完成后，应把 token 解析为包含 identity 和 scope 的主体。
+Face 注册使用 version 1 WebSocket 四步挑战握手，必须同时使用与 Hand 分离的 Face token 和 application key。服务端按 Face 凭据表认证，注册成功后业务 payload 全部强制加密；Face scope 已随凭据规范存储，后续 Gateway 将其解析为授权主体。
 
-当前阶段尚未实现该注册路径。未来单用户 Alpha 采用以下访问模型：
+当前阶段已实现注册和安全分流，但尚未实现 scope 驱动的 command routing。未来单用户 Alpha 采用以下访问模型：
 
 - 有效 Face identity 默认可访问该 Mind 中全部 conversation。
 - 写操作仍由 scope 控制。
@@ -37,6 +37,8 @@
 | `face:runs:cancel` | 取消远程执行 |
 | `face:approve` | 裁决审批 |
 | `face:hands:read` | 查看 Hand 和工具能力 |
+| `face:tasks:read` | 查询后台任务和日志 |
+| `face:tasks:cancel` | 取消后台任务；同时需要 `face:tasks:read` |
 
 ## 消息类型
 
@@ -55,6 +57,10 @@ face.run.get
 face.run.cancel
 face.hand.list
 face.hand.get
+face.task.list
+face.task.get
+face.task.log
+face.task.cancel
 ```
 
 Mind 返回：
@@ -183,10 +189,9 @@ conversation.changed
 
 ## 未来实现清单
 
-1. Face/Hand 独立 token 和 Mind 级 peer dispatcher。
-2. Face Gateway 的 scope 校验、幂等 registry、有界出站队列和慢连接策略。
-3. Conversation Actor、快照聚合和结构化事件投影。
-4. Chat accepted/result/cancel 和异步审批 broker。
-5. JSONL Headless Agent Face 与确定性 Scripted LLM E2E。
+1. Face Gateway 的 scope 校验、幂等 registry、有界出站队列和慢连接策略。
+2. Conversation Actor、快照聚合和结构化事件投影。
+3. Chat accepted/result/cancel 和异步审批 broker。
+4. JSONL Headless Agent Face 与确定性 Scripted LLM E2E。
 
 以上运行时能力全部复用当前 wire protocol，不新增 AI 专用消息语义。

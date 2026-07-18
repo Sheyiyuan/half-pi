@@ -103,8 +103,10 @@ func TestTaskValidators(t *testing.T) {
 	}
 	invalidLogResponses := []TaskLogResp{
 		{ID: "req-1", TaskID: "run-1", Offset: -1},
+		{ID: "req-1", TaskID: "run-1", Data: nil},
 		{ID: "req-1", TaskID: "run-1", Offset: 9, NextOffset: 10, Data: []byte("xx")},
 		{ID: "req-1", TaskID: "run-1", Data: bytes.Repeat([]byte("x"), MaxTaskLogResponseBytes+1), NextOffset: MaxTaskLogResponseBytes + 1},
+		{ID: "req-1", TaskID: "run-1", Offset: int64(^uint64(0) >> 1), NextOffset: 0, Data: []byte("x")},
 	}
 	for _, msg := range invalidLogResponses {
 		if err := ValidateTaskLogResp(msg); err == nil {

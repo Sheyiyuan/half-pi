@@ -2,6 +2,8 @@ package wss
 
 import (
 	"bytes"
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -146,5 +148,99 @@ func TestEncryptDecryptEnvelopePayload(t *testing.T) {
 	tampered.Seq = 2
 	if _, err := DecryptEnvelopePayload[protocol.RPC](c, &tampered); err == nil {
 		t.Fatal("tampered header should fail AAD authentication")
+	}
+}
+
+func TestDecryptEnvelopePayloadStrictAndBounded(t *testing.T) {
+	key, _ := GenerateKey()
+	cipher, _ := NewAES128GCM(key)
+	base := protocol.Envelope{MsgID: "strict", Type: protocol.TypePing, SessionID: "session", From: "face", To: "mind", Seq: 1}
+
+	unknown := base
+	if err := cipher.EncryptEnvelopePayload(&unknown, json.RawMessage(`{"ts":1,"unknown":true}`)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecryptEnvelopePayload[protocol.Ping](cipher, &unknown); err == nil {
+		t.Fatal("unknown plaintext field was accepted")
+	}
+
+	trailing := base
+	ciphertext, err := cipher.Encrypt([]byte(`{"ts":1} {}`), trailing.AAD())
+	if err != nil {
+		t.Fatal(err)
+	}
+	trailing.Payload, err = protocol.NewEncryptedPayload(AlgAES128GCM, ciphertext)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecryptEnvelopePayload[protocol.Ping](cipher, &trailing); err == nil {
+		t.Fatal("trailing plaintext JSON was accepted")
+	}
+
+	tooLarge := strings.Repeat("x", MaxPlaintextPayload+1)
+	if err := cipher.EncryptEnvelopePayload(&base, tooLarge); err == nil {
+		t.Fatal("oversized plaintext was encrypted")
+	}
+}
+
+func TestWorstCaseOneMiBRPCResultFitsWireLimits(t *testing.T) {
+	key, _ := GenerateKey()
+	cipher, _ := NewAES128GCM(key)
+	env := protocol.Envelope{MsgID: "worst-case", Type: protocol.TypeRPCResult, SessionID: "session", From: "hand", To: "mind", Seq: 1}
+	result := protocol.RPCResult{RunID: "run-1", Success: true, Output: strings.Repeat("\x00", 1<<20)}
+	if err := cipher.EncryptEnvelopePayload(&env, result); err != nil {
+		t.Fatalf("encrypt worst-case result: %v", err)
+	}
+	wire, err := json.Marshal(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(wire) > MaxFrameSize {
+		t.Fatalf("worst-case frame = %d bytes, limit %d", len(wire), MaxFrameSize)
+	}
+	got, err := DecryptEnvelopePayload[protocol.RPCResult](cipher, &env)
+	if err != nil || got.Output != result.Output {
+		t.Fatalf("worst-case result round trip failed: %v", err)
+	}
+}
+
+func TestDecryptEnvelopePayloadRejectsMalformedEncryption(t *testing.T) {
+	key, _ := GenerateKey()
+	cipher, _ := NewAES128GCM(key)
+	base := protocol.Envelope{MsgID: "bad", Type: protocol.TypePing, SessionID: "session", From: "face", To: "mind", Seq: 1}
+	for name, payload := range map[string]string{
+		"plaintext":      `{"ts":1}`,
+		"unknown alg":    `{"alg":"other","data":"AAAA"}`,
+		"invalid base64": `{"alg":"AES-128-GCM","data":"***"}`,
+		"short cipher":   `{"alg":"AES-128-GCM","data":"AA=="}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := base
+			env.Payload = []byte(payload)
+			if _, err := DecryptEnvelopePayload[protocol.Ping](cipher, &env); err == nil {
+				t.Fatal("malformed encrypted payload was accepted")
+			}
+		})
+	}
+}
+
+func TestEnvelopeEncryptionBindsEveryHeader(t *testing.T) {
+	key, _ := GenerateKey()
+	cipher, _ := NewAES128GCM(key)
+	base := protocol.Envelope{MsgID: "msg", Type: protocol.TypePing, SessionID: "session", From: "face", To: "mind", Seq: 1}
+	if err := cipher.EncryptEnvelopePayload(&base, protocol.Ping{Timestamp: 1}); err != nil {
+		t.Fatal(err)
+	}
+	mutations := []protocol.Envelope{base, base, base, base, base, base}
+	mutations[0].MsgID = "other"
+	mutations[1].Type = protocol.TypePong
+	mutations[2].SessionID = "other"
+	mutations[3].From = "other"
+	mutations[4].To = "other"
+	mutations[5].Seq = 2
+	for _, mutation := range mutations {
+		if _, err := DecryptEnvelopePayload[protocol.Ping](cipher, &mutation); err == nil {
+			t.Fatalf("tampered header decrypted: %+v", mutation)
+		}
 	}
 }

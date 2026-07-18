@@ -1,6 +1,9 @@
 package protocol
 
-import "fmt"
+import (
+	"fmt"
+	"math"
+)
 
 const (
 	// MaxTaskRuntimeMS 是后台任务可请求的最长运行时间（24 小时）。
@@ -146,8 +149,14 @@ func ValidateTaskLogResp(msg TaskLogResp) error {
 	if msg.Offset < 0 {
 		return fmt.Errorf("offset must not be negative")
 	}
+	if msg.Data == nil {
+		return fmt.Errorf("task log data is required")
+	}
 	if len(msg.Data) > MaxTaskLogResponseBytes {
 		return fmt.Errorf("task log data exceeds %d bytes", MaxTaskLogResponseBytes)
+	}
+	if msg.Offset > math.MaxInt64-int64(len(msg.Data)) {
+		return fmt.Errorf("next_offset overflows int64")
 	}
 	if msg.NextOffset != msg.Offset+int64(len(msg.Data)) {
 		return fmt.Errorf("next_offset must equal offset plus data length")

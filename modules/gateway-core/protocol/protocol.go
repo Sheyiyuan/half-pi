@@ -8,32 +8,50 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sync"
 )
 
 const (
-	TypeRegister         = "register"
-	TypeRegistered       = "registered"
-	TypeRPC              = "rpc"
-	TypeRPCAccepted      = "rpc_accepted"
-	TypeRPCRejected      = "rpc_rejected"
-	TypeRPCProgress      = "rpc_progress"
-	TypeRPCResult        = "rpc_result"
-	TypeRPCCancel        = "rpc_cancel"
-	TypeRPCCancelResult  = "rpc_cancel_result"
-	TypeTaskStatusReq    = "task_status_req"
-	TypeTaskStatusResp   = "task_status_resp"
-	TypeTaskLogReq       = "task_log_req"
-	TypeTaskLogResp      = "task_log_resp"
-	TypeTaskCancel       = "task_cancel"
-	TypeTaskCancelResult = "task_cancel_result"
-	TypePing             = "ping"
-	TypePong             = "pong"
-	TypeError            = "error"
+	TypeRegister          = "register"
+	TypeRegisterChallenge = "register_challenge"
+	TypeRegisterProof     = "register_proof"
+	TypeRegistered        = "registered"
+	TypeRPC               = "rpc"
+	TypeRPCAccepted       = "rpc_accepted"
+	TypeRPCRejected       = "rpc_rejected"
+	TypeRPCProgress       = "rpc_progress"
+	TypeRPCResult         = "rpc_result"
+	TypeRPCCancel         = "rpc_cancel"
+	TypeRPCCancelResult   = "rpc_cancel_result"
+	TypeTaskStatusReq     = "task_status_req"
+	TypeTaskStatusResp    = "task_status_resp"
+	TypeTaskLogReq        = "task_log_req"
+	TypeTaskLogResp       = "task_log_resp"
+	TypeTaskCancel        = "task_cancel"
+	TypeTaskCancelResult  = "task_cancel_result"
+	TypePing              = "ping"
+	TypePong              = "pong"
+	TypeError             = "error"
 
 	TypeHandInfoReq  = "hand_info_req"  // Mind → Hand：查询可用工具列表
 	TypeHandInfoResp = "hand_info_resp" // Hand → Mind：返回工具列表
 	TypeHandEvent    = "hand_event"     // Hand → Mind：主动监控事件上报
+)
+
+const (
+	// ProtocolVersion 是当前唯一支持的 wire protocol 版本。
+	ProtocolVersion = 1
+	// HandshakeAlgorithm 是注册证明和会话 payload 使用的算法。
+	HandshakeAlgorithm = "AES-128-GCM"
+)
+
+// PeerType 标识注册节点的角色。
+type PeerType string
+
+const (
+	PeerFace PeerType = "face"
+	PeerHand PeerType = "hand"
 )
 
 // Envelope 是所有 WS 消息的包装，携带路由和加密上下文。
@@ -71,10 +89,11 @@ func (e *Envelope) AAD() []byte {
 
 // Register 是 Face 或 Hand 首次连接时发送的注册消息。
 type Register struct {
-	ClientID string   `json:"client_id"`
-	Token    string   `json:"token"`
-	Type     string   `json:"type"`           // "face" | "hand"
-	Info     HandInfo `json:"info,omitempty"` // Hand 静态设备信息
+	ProtocolVersion int       `json:"protocol_version"`
+	ClientID        string    `json:"client_id"`
+	Token           string    `json:"token"`
+	Type            PeerType  `json:"type"`
+	Info            *HandInfo `json:"info,omitempty"`
 }
 
 // HandInfo Hand 注册时上报的静态设备信息。
@@ -87,9 +106,51 @@ type HandInfo struct {
 
 // Registered 是服务端接受注册后返回给客户端的会话信息。
 type Registered struct {
-	ClientID  string `json:"client_id"`
-	ServerID  string `json:"server_id"`
-	SessionID string `json:"session_id"`
+	ProtocolVersion int    `json:"protocol_version"`
+	ClientID        string `json:"client_id"`
+	ServerID        string `json:"server_id"`
+	SessionID       string `json:"session_id"`
+}
+
+// RegisterChallenge 是服务端绑定当前连接发出的单次挑战。
+type RegisterChallenge struct {
+	ProtocolVersion int    `json:"protocol_version"`
+	HandshakeID     string `json:"handshake_id"`
+	ServerID        string `json:"server_id"`
+	SessionID       string `json:"session_id"`
+	Challenge       string `json:"challenge"`
+	ExpiresAt       int64  `json:"expires_at"`
+	Algorithm       string `json:"algorithm"`
+}
+
+// RegisterProof 是客户端对注册挑战的持钥证明。
+type RegisterProof struct {
+	ProtocolVersion int    `json:"protocol_version"`
+	HandshakeID     string `json:"handshake_id"`
+	Algorithm       string `json:"algorithm"`
+	Proof           string `json:"proof"`
+}
+
+// HandshakeTranscript 是会话密钥派生使用的规范 transcript。
+type HandshakeTranscript struct {
+	ProtocolVersion int      `json:"protocol_version"`
+	PeerType        PeerType `json:"peer_type"`
+	Label           string   `json:"label"`
+	HandshakeID     string   `json:"handshake_id"`
+	ServerID        string   `json:"server_id"`
+	SessionID       string   `json:"session_id"`
+	Challenge       string   `json:"challenge"`
+}
+
+// RegisterProofAAD 是 register proof 的固定附加认证数据。
+type RegisterProofAAD struct {
+	ProtocolVersion int      `json:"protocol_version"`
+	Type            string   `json:"type"`
+	PeerType        PeerType `json:"peer_type"`
+	Label           string   `json:"label"`
+	HandshakeID     string   `json:"handshake_id"`
+	ServerID        string   `json:"server_id"`
+	SessionID       string   `json:"session_id"`
 }
 
 // EncryptedPayload 是 payload 加密后的 JSON 表示。
@@ -163,11 +224,26 @@ func NewEnvelope(msgID, typ string, payload any) (*Envelope, error) {
 
 // DecodePayload 将 Envelope 的 Payload 反序列化为目标类型。
 func DecodePayload[T any](env *Envelope) (T, error) {
+	return StrictDecode[T](env.Payload)
+}
+
+// StrictDecode 严格解码单个 JSON 值，拒绝未知字段和 trailing data。
+func StrictDecode[T any](data []byte) (T, error) {
 	var v T
-	decoder := json.NewDecoder(bytes.NewReader(env.Payload))
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
 	decoder.UseNumber()
 	if err := decoder.Decode(&v); err != nil {
 		return v, err
+	}
+	if decoder.More() {
+		return v, fmt.Errorf("trailing JSON data")
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err == nil {
+		return v, fmt.Errorf("trailing JSON data")
+	} else if err != io.EOF {
+		return v, fmt.Errorf("trailing JSON data: %w", err)
 	}
 	return v, nil
 }

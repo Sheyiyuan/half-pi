@@ -43,7 +43,7 @@ func init() {
 			}
 
 			// 校验在线
-			peer := bridge.Hub.Peer(params.HandID)
+			peer := bridge.Hub.PeerByType(hub.PeerHand, params.HandID)
 			if peer == nil || peer.Type != hub.PeerHand {
 				return &executor.ToolResult{
 					Error: fmt.Sprintf("Hand %q 不在线或不存在，用 list_hands 查看可用设备", params.HandID),

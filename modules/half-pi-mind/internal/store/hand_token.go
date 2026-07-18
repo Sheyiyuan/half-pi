@@ -1,9 +1,7 @@
 package store
 
 import (
-	"crypto/rand"
 	"database/sql"
-	"encoding/hex"
 	"fmt"
 	"time"
 )
@@ -17,104 +15,95 @@ type HandToken struct {
 	CreatedAt time.Time
 }
 
+// LegacyHandTokenCount 返回尚未迁移且不会参与认证的旧 Hand token 行数。
+func (s *Store) LegacyHandTokenCount() (int, error) {
+	var count int
+	if err := s.db.QueryRow(`SELECT count(*) FROM hand_tokens`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count legacy Hand tokens: %w", err)
+	}
+	return count, nil
+}
+
 // GenerateToken 生成 16 字节 hex 令牌。
 func GenerateToken() string {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	token, err := generateCredentialSecret()
+	if err != nil {
 		panic(fmt.Sprintf("generate token: %v", err))
 	}
-	return hex.EncodeToString(b)
+	return token
 }
 
 // AddHandToken 添加一个 Hand 令牌并返回记录。
+// Deprecated: 使用 AddHandCredential。
 func (s *Store) AddHandToken(label string) (*HandToken, error) {
-	token := GenerateToken()
-	_, err := s.db.Exec(
-		`INSERT INTO hand_tokens (label, hand_id, token) VALUES (?, ?, ?)`,
-		label, label, token,
-	)
+	credential, err := s.AddHandCredential(label)
 	if err != nil {
-		return nil, fmt.Errorf("add hand token: %w", err)
+		return nil, err
 	}
-	return s.FindHandTokenByToken(token)
+	return legacyHandToken(credential), nil
 }
 
 // ListHandTokens 返回所有 Hand 令牌。
+// Deprecated: 使用 ListHandCredentials。
 func (s *Store) ListHandTokens() ([]HandToken, error) {
-	rows, err := s.db.Query(
-		`SELECT id, label, hand_id, token, created_at FROM hand_tokens ORDER BY id`,
-	)
+	credentials, err := s.ListHandCredentials()
 	if err != nil {
-		return nil, fmt.Errorf("list hand tokens: %w", err)
+		return nil, err
 	}
-	defer rows.Close()
-
-	var tokens []HandToken
-	for rows.Next() {
-		var ht HandToken
-		var ca string
-		if err := rows.Scan(&ht.ID, &ht.Label, &ht.HandID, &ht.Token, &ca); err != nil {
-			return nil, fmt.Errorf("scan hand token: %w", err)
-		}
-		ht.CreatedAt = parseTime(ca)
-		tokens = append(tokens, ht)
+	tokens := make([]HandToken, 0, len(credentials))
+	for i := range credentials {
+		tokens = append(tokens, *legacyHandToken(&credentials[i]))
 	}
-	return tokens, rows.Err()
+	return tokens, nil
 }
 
 // RemoveHandToken 按 id 删除 Hand 令牌。
+// Deprecated: 使用 RemoveHandCredential。
 func (s *Store) RemoveHandToken(id int64) error {
-	result, err := s.db.Exec(`DELETE FROM hand_tokens WHERE id = ?`, id)
-	if err != nil {
-		return fmt.Errorf("remove hand token: %w", err)
-	}
-	n, _ := result.RowsAffected()
-	if n == 0 {
-		return fmt.Errorf("hand token %d not found", id)
-	}
-	return nil
+	return s.RemoveHandCredential(id)
 }
 
 // ValidateHandToken 验证令牌是否有效，返回匹配的 HandToken 或错误。
+// Deprecated: 使用 AuthenticateHandCredential。
 func (s *Store) ValidateHandToken(token string) (*HandToken, error) {
-	if token == "" {
-		return nil, fmt.Errorf("empty token")
+	if err := validateCredentialSecret("token", token); err != nil {
+		return nil, fmt.Errorf("invalid token")
 	}
 	row := s.db.QueryRow(
-		`SELECT id, label, hand_id, token, created_at FROM hand_tokens WHERE token = ?`, token,
+		`SELECT id, label, token, application_key, created_at FROM hand_credentials WHERE token = ?`, token,
 	)
-	var ht HandToken
-	var ca string
-	err := row.Scan(&ht.ID, &ht.Label, &ht.HandID, &ht.Token, &ca)
+	credential, err := scanCredential(row)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("invalid token")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("validate token: %w", err)
 	}
-	ht.CreatedAt = parseTime(ca)
-	return &ht, nil
+	return legacyHandToken(&credential), nil
 }
 
 // AuthenticateHandToken 验证 token 是否绑定到声明的 Hand ID。
+// Deprecated: 使用 AuthenticateHandCredential。
 func (s *Store) AuthenticateHandToken(token, handID string) (*HandToken, error) {
-	if handID == "" {
-		return nil, fmt.Errorf("empty Hand ID")
-	}
-	ht, err := s.ValidateHandToken(token)
+	credential, err := s.AuthenticateHandCredential(handID, token)
 	if err != nil {
 		return nil, err
 	}
-	if ht.HandID == "" {
-		return nil, fmt.Errorf("legacy token is not bound to a Hand ID; create a new token")
-	}
-	if ht.HandID != handID {
-		return nil, fmt.Errorf("token is not valid for Hand %q", handID)
-	}
-	return ht, nil
+	return legacyHandToken(credential), nil
 }
 
 // FindHandTokenByToken 按令牌值查找记录（用于注册返回）。
+// Deprecated: 使用 AuthenticateHandCredential。
 func (s *Store) FindHandTokenByToken(token string) (*HandToken, error) {
 	return s.ValidateHandToken(token)
+}
+
+func legacyHandToken(credential *Credential) *HandToken {
+	return &HandToken{
+		ID:        credential.ID,
+		Label:     credential.Label,
+		HandID:    credential.Label,
+		Token:     credential.Token,
+		CreatedAt: credential.CreatedAt,
+	}
 }

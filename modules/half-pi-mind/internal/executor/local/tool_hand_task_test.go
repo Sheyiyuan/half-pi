@@ -19,7 +19,7 @@ func TestGetHandTaskEnforcesCurrentSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	authority := remoteexec.NewAuthority(hub.New(), remoteexec.NewRegistry(), nil, nil)
+	authority := remoteexec.NewAuthority(hub.New(), remoteexec.NewRegistry(), nil)
 	service := remoteexec.NewTaskService(authority, db)
 	if err := service.CreateStartSnapshot(remoteexec.Task{
 		TaskID: "0123456789abcdef", SessionID: "session-a", HandID: "hand-a", Tool: "tool", ArgsDigest: "digest",

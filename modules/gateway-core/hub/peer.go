@@ -10,21 +10,32 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
 )
 
 // Peer 封装 WebSocket 连接及其元数据。
 type Peer struct {
-	ID       string
-	Type     PeerType
-	Conn     *websocket.Conn
-	JoinedAt time.Time
-	hub      *Hub
-	session  *protocol.Session
-	Info     *protocol.HandInfo // Hand 注册时上报的静态设备信息
+	ID        string
+	Type      PeerType
+	Conn      *websocket.Conn
+	JoinedAt  time.Time
+	hub       *Hub
+	session   *protocol.Session
+	Info      *protocol.HandInfo // Hand 注册时上报的静态设备信息
+	inCipher  *wss.AES128GCM
+	outCipher *wss.AES128GCM
 
 	writeOnce sync.Once
 	writeGate chan struct{} // 保护 Conn 写入，gorilla/websocket 要求单 writer
 	closeOnce sync.Once
+}
+
+// Key 返回 Peer 的复合身份。
+func (p *Peer) Key() PeerKey {
+	if p == nil {
+		return PeerKey{}
+	}
+	return PeerKey{Type: p.Type, Label: p.ID}
 }
 
 // SessionID 返回当前连接的会话 ID。
@@ -35,28 +46,22 @@ func (p *Peer) SessionID() string {
 	return p.session.SessionID
 }
 
-// WriteJSON 线程安全地写 JSON 到 WebSocket 连接，带写入超时。
-func (p *Peer) WriteJSON(v any) error {
-	return p.WriteJSONContext(context.Background(), v)
-}
-
-// WriteJSONContext 线程安全地写 JSON，并允许上下文中断阻塞写入。
-func (p *Peer) WriteJSONContext(ctx context.Context, v any) error {
-	if err := p.acquireWriter(ctx); err != nil {
-		return err
-	}
-	defer p.releaseWriter()
-	return p.writeJSONLocked(ctx, v)
-}
-
 // SendContext 在同一写锁内分配序号并发送，保证线序与写入顺序一致。
-func (p *Peer) SendContext(ctx context.Context, env protocol.Envelope) error {
+func (p *Peer) SendContext(ctx context.Context, env protocol.Envelope) (err error) {
 	if err := p.acquireWriter(ctx); err != nil {
 		return err
 	}
 	defer p.releaseWriter()
 	stamped, err := p.stampOutgoing(env)
 	if err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			_ = p.Conn.Close()
+		}
+	}()
+	if err := p.outCipher.EncryptEnvelopePayload(&stamped, json.RawMessage(env.Payload)); err != nil {
 		return err
 	}
 	return p.writeJSONLocked(ctx, stamped)
@@ -101,7 +106,7 @@ func (p *Peer) Close() {
 func (p *Peer) Serve() {
 	defer p.hub.RemovePeer(p)
 
-	p.Conn.SetReadLimit(1 << 20)
+	p.Conn.SetReadLimit(wss.MaxFrameSize)
 
 	go p.keepalive()
 
@@ -112,15 +117,18 @@ func (p *Peer) Serve() {
 			return
 		}
 
-		var env protocol.Envelope
-		if err := json.Unmarshal(raw, &env); err != nil {
-			p.sendError("", "parse_error", "invalid message format")
-			continue
+		env, err := protocol.StrictDecode[protocol.Envelope](raw)
+		if err != nil {
+			return
 		}
-		if err := p.hub.Accept(p, env); err != nil {
-			p.sendError(env.MsgID, "rejected", err.Error())
-			continue
+		if err := p.session.Accept(env); err != nil {
+			return
 		}
+		plain, err := wss.DecryptEnvelopePayload[json.RawMessage](p.inCipher, &env)
+		if err != nil {
+			return
+		}
+		env.Payload = plain
 		if p.hub.onMessage != nil {
 			p.hub.onMessage(p, env)
 		}
@@ -161,18 +169,6 @@ func (p *Peer) acquireWriter(ctx context.Context) error {
 
 func (p *Peer) releaseWriter() {
 	p.writeGate <- struct{}{}
-}
-
-func (p *Peer) sendError(msgID, code, message string) {
-	env, err := protocol.NewEnvelope("", protocol.TypeError, protocol.ErrorMsg{
-		MsgID:   msgID,
-		Code:    code,
-		Message: message,
-	})
-	if err != nil {
-		return
-	}
-	_ = p.SendContext(context.Background(), *env)
 }
 
 func (p *Peer) stampOutgoing(env protocol.Envelope) (protocol.Envelope, error) {

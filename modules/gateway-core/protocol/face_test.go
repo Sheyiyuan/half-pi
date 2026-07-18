@@ -15,6 +15,7 @@ func TestIsFaceMessageType(t *testing.T) {
 		TypeFaceConversationCreate, TypeFaceConversationSnapshot,
 		TypeFaceConversationRename, TypeFaceSubscribe, TypeFaceApprovalResolve,
 		TypeFaceRunGet, TypeFaceRunCancel, TypeFaceHandList, TypeFaceHandGet,
+		TypeFaceTaskList, TypeFaceTaskGet, TypeFaceTaskLog, TypeFaceTaskCancel,
 		TypeFaceAccepted, TypeFaceResult, TypeFaceError, TypeFaceSnapshot, TypeFaceEvent,
 	}
 	for _, typ := range types {
@@ -33,8 +34,9 @@ func TestFaceProtocolEnumValues(t *testing.T) {
 	scopes := []FaceScope{
 		FaceScopeChat, FaceScopeSessionsRead, FaceScopeSessionsWrite, FaceScopeRunsRead,
 		FaceScopeRunsCancel, FaceScopeApprove, FaceScopeHandsRead,
+		FaceScopeTasksRead, FaceScopeTasksCancel,
 	}
-	if got, want := strings.Join(faceScopeStrings(scopes), ","), "face:chat,face:sessions:read,face:sessions:write,face:runs:read,face:runs:cancel,face:approve,face:hands:read"; got != want {
+	if got, want := strings.Join(faceScopeStrings(scopes), ","), "face:chat,face:sessions:read,face:sessions:write,face:runs:read,face:runs:cancel,face:approve,face:hands:read,face:tasks:read,face:tasks:cancel"; got != want {
 		t.Fatalf("scope values = %q, want %q", got, want)
 	}
 
@@ -42,7 +44,9 @@ func TestFaceProtocolEnumValues(t *testing.T) {
 		FaceErrorInvalidRequest, FaceErrorUnauthorized, FaceErrorForbidden,
 		FaceErrorConversationNotFound, FaceErrorRequestConflict, FaceErrorRequestInProgress,
 		FaceErrorApprovalNotFound, FaceErrorApprovalExpired, FaceErrorRunNotFound,
-		FaceErrorHandNotFound, FaceErrorBusy, FaceErrorCancelled, FaceErrorTimeout, FaceErrorInternal,
+		FaceErrorHandNotFound, FaceErrorTaskFailed, FaceErrorTaskCancelled, FaceErrorTaskTimedOut,
+		FaceErrorTaskLost, FaceErrorTaskStale, FaceErrorTaskNotFound, FaceErrorHandOffline,
+		FaceErrorLogUnavailable, FaceErrorBusy, FaceErrorCancelled, FaceErrorTimeout, FaceErrorInternal,
 	}
 	for _, code := range errorCodes {
 		if !validFaceErrorCode(code) {
@@ -63,7 +67,6 @@ func TestFaceProtocolEnumValues(t *testing.T) {
 
 func TestFacePayloadsRoundTripAndValidate(t *testing.T) {
 	now := time.Date(2026, 7, 17, 12, 0, 0, 0, time.UTC)
-	finished := now.Add(time.Second)
 	approval := ApprovalRequest{
 		ApprovalID: "approval-1", ConversationID: "conv-1", RequestID: "req-1",
 		RunID: "run-1", Tool: "exec_command", Reason: "sensitive command",
@@ -78,8 +81,9 @@ func TestFacePayloadsRoundTripAndValidate(t *testing.T) {
 		PendingApprovals: []ApprovalSummary{approval},
 		ActiveRuns: []RemoteRunSummary{{
 			RunID: "run-1", RequestID: "req-1", HandID: "hand-1", Tool: "exec_command",
-			Status: RunSucceeded, DurationMs: 1000, CreatedAt: now, FinishedAt: &finished,
+			Status: RunRunning, DurationMs: 1000, CreatedAt: now,
 		}},
+		Tasks:           []TaskSummary{},
 		SnapshotVersion: 4,
 	}
 	tests := []struct {
@@ -199,7 +203,7 @@ func TestValidateFacePayloadRejectsMalformedJSON(t *testing.T) {
 }
 
 func TestValidateFacePayloadRejectsMalformedSnapshot(t *testing.T) {
-	valid := `{"request_id":"req-1","snapshot":{"conversation_id":"conv-1","name":"Work","mode":"normal","messages":[],"pending_chats":[],"pending_approvals":[],"active_runs":[],"snapshot_version":1}}`
+	valid := `{"request_id":"req-1","snapshot":{"conversation_id":"conv-1","name":"Work","mode":"normal","messages":[],"pending_chats":[],"pending_approvals":[],"active_runs":[],"tasks":[],"task_history_limit":0,"task_history_truncated":false,"snapshot_version":1}}`
 	if err := ValidateFacePayload(TypeFaceSnapshot, json.RawMessage(valid)); err != nil {
 		t.Fatalf("valid empty snapshot rejected: %v", err)
 	}
@@ -301,10 +305,15 @@ func validFaceEvent(t *testing.T, typ FaceEventType, data any, timestamp time.Ti
 	if err != nil {
 		t.Fatal(err)
 	}
-	return FaceEvent{
+	event := FaceEvent{
 		EventSeq: 1, ConversationID: "conv-1", RequestID: "req-1", Type: typ,
 		Source: "mind", Level: FaceEventLevelInfo, Message: string(typ), Data: raw, Timestamp: timestamp,
 	}
+	if typ == FaceEventHandConnected || typ == FaceEventHandDisconnected {
+		event.ConversationID = ""
+		event.RequestID = ""
+	}
+	return event
 }
 
 func assertNoSessionIDJSONTag(t *testing.T, typ reflect.Type, seen map[reflect.Type]bool) {

@@ -102,7 +102,7 @@ cd modules/half-pi-hand && go test -race -count=1 ./...
 make build        # 编译 mind/face/hand 到 bin/
 make run-mind     # 启动 Mind REPL（WS Hub 在 127.0.0.1:15707/ws）
 make run-hand     # 启动 Hand（默认用 ~/.half-pi/hand/config.toml）
-make run-hand ARGS="--token <token> --id <name>"  # Hand CLI 覆盖
+make run-hand ARGS="--token <token> --application-key <key> --id <name>"  # Hand CLI 覆盖
 make test         # 运行全部 4 个模块的测试
 ```
 
@@ -201,7 +201,7 @@ make test         # 运行全部 4 个模块的测试
 - `session_groups` 表：工作区管理（work_dir、soul_path）
 - `sessions` 表：会话管理（关联 group、soul_path 覆盖）
 - `messages` 表：消息持久化（role、tool_id、tool_calls、seq）
-- `hand_tokens` 表：Hand 认证令牌管理（CRUD + 验证）
+- `hand_credentials` / `face_tokens`：分类型 token + application key、scope 与认证管理；旧 `hand_tokens` 不再认证
 - 完整 CRUD + 事务批量写入 + 级联删除
 - 20 个单元测试 + race 覆盖
 
@@ -230,7 +230,7 @@ make test         # 运行全部 4 个模块的测试
   - **服务模式（默认）**：仅 WS Hub，日志写入 `~/.half-pi/logs/mind.log`，写 PID 文件，等待信号退出
   - **REPL 模式（`--repl`）**：WS Hub + 交互式 REPL，事件输出到终端
 - `--version` 打印版本号
-- 每 Hand 独立 Token（`hand_tokens` 表）
+- Hand/Face 独立凭据表，token 与 application key 分离
 - REPL 命令：`/hand add/list/remove`、`/peers`
 - 连接/断开事件通过 EventBus 发布到日志/终端
 - `server.enabled` 配置开关
@@ -316,7 +316,7 @@ make test         # 运行全部 4 个模块的测试
 - 配置文件 `~/.half-pi/hand/config.toml`，优先级 CLI > 环境变量 > 文件
 
 ### 2026-07-14：Hand Token 管理
-- SQLite `hand_tokens` 表，每 Hand 独立令牌
+- SQLite `hand_credentials` 表，每 Hand 独立 token/application key；旧 `hand_tokens` fail closed
 - REPL `/hand add <label>` 生成 32 字符 hex token
 - `/hand list` / `/hand remove <id>` 管理
 - `hub.OnHandshake` 回调验证 token

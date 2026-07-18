@@ -163,8 +163,11 @@ func TestHandExecUsesSharedAuthorityAndEmitsResultForOriginalSession(t *testing.
 	writer := &captureWriter{wrote: make(chan events.Event, 8)}
 	bus.Subscribe(writer)
 	wsHub := hub.New()
-	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus,
-		func(token, handID string) (string, error) { return "test", nil })
+	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus)
+	const applicationKey = "22222222222222222222222222222222"
+	wsHub.OnHandshake(func(hub.PeerKey, protocol.Register) (string, error) { return applicationKey, nil })
+	wsHub.OnMessage(authority.HandleHandMessage)
+	wsHub.OnDisconnect(authority.HandleHandDisconnect)
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, upgradeErr := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -173,11 +176,16 @@ func TestHandExecUsesSharedAuthorityAndEmitsResultForOriginalSession(t *testing.
 		}
 	}))
 	t.Cleanup(srv.Close)
-	client, err := wss.NewClient("ws"+strings.TrimPrefix(srv.URL, "http")).ConnectAndRegister(handID, hub.PeerHand, "token", nil)
+	client, err := wss.NewClient("ws" + strings.TrimPrefix(srv.URL, "http")).ConnectAndRegister(wss.Credentials{
+		Label: handID, Type: hub.PeerHand,
+		Token: "11111111111111111111111111111111", ApplicationKey: applicationKey,
+		Info: &protocol.HandInfo{OS: "linux", Arch: "amd64", Hostname: "test"},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		wsHub.RemoveByType(hub.PeerHand, handID)
 		_ = authority.Close()
 		bus.Close()
 	})

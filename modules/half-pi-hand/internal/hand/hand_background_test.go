@@ -69,7 +69,7 @@ func TestHandBackgroundRequiresModeBoundApproval(t *testing.T) {
 	rpc := testRPC("0123456789abcdef", toolName, map[string]any{}, time.Second)
 	rpc.Background = &protocol.RPCBackgroundOptions{TaskID: rpc.RunID, MaxRuntimeMS: 1000}
 	env, _ := protocol.NewEnvelope("", protocol.TypeRPC, rpc)
-	if err := hubServer.Send("aaaaaaaaaaaaaaaa", *env); err != nil {
+	if err := hubServer.SendToType(hub.PeerHand, "aaaaaaaaaaaaaaaa", *env); err != nil {
 		t.Fatal(err)
 	}
 	if result := <-rejected; result.Code != protocol.RejectApprovalRequired {
@@ -80,7 +80,7 @@ func TestHandBackgroundRequiresModeBoundApproval(t *testing.T) {
 	rpc.Approval = &protocol.Approval{Approved: true, Source: "mind", OneShot: true, ArgsDigest: foregroundDigest,
 		ApprovedAt: time.Now().Add(-time.Second).UnixMilli(), ExpiresAt: time.Now().Add(time.Minute).UnixMilli()}
 	env, _ = protocol.NewEnvelope("", protocol.TypeRPC, rpc)
-	if err := hubServer.Send("aaaaaaaaaaaaaaaa", *env); err != nil {
+	if err := hubServer.SendToType(hub.PeerHand, "aaaaaaaaaaaaaaaa", *env); err != nil {
 		t.Fatal(err)
 	}
 	if result := <-rejected; result.Code != protocol.RejectApprovalDigestMismatch {
@@ -112,7 +112,7 @@ func TestHandBackgroundSurvivesDisconnectAndReconnect(t *testing.T) {
 	id := "1234567890abcdef"
 	rpc := approvedBackgroundRPC(t, id, "bbbbbbbbbbbbbbbb", toolName, map[string]any{}, time.Minute)
 	env, _ := protocol.NewEnvelope("", protocol.TypeRPC, rpc)
-	if err := hubServer.Send("bbbbbbbbbbbbbbbb", *env); err != nil {
+	if err := hubServer.SendToType(hub.PeerHand, "bbbbbbbbbbbbbbbb", *env); err != nil {
 		t.Fatal(err)
 	}
 	waitMessageType(t, messages, protocol.TypeRPCResult)
@@ -123,11 +123,11 @@ func TestHandBackgroundSurvivesDisconnectAndReconnect(t *testing.T) {
 	}
 	stopFirst()
 	deadline := time.Now().Add(time.Second)
-	for hubServer.Peer("bbbbbbbbbbbbbbbb") != nil && time.Now().Before(deadline) {
+	for hubServer.PeerByType(hub.PeerHand, "bbbbbbbbbbbbbbbb") != nil && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("bbbbbbbbbbbbbbbb", hub.PeerHand, "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("bbbbbbbbbbbbbbbb"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,11 +136,11 @@ func TestHandBackgroundSurvivesDisconnectAndReconnect(t *testing.T) {
 	t.Cleanup(func() { session.Conn.Close() })
 	go NewWithTaskManager(session, nil, manager).Serve(ctx)
 	deadline = time.Now().Add(time.Second)
-	for hubServer.Peer("bbbbbbbbbbbbbbbb") == nil && time.Now().Before(deadline) {
+	for hubServer.PeerByType(hub.PeerHand, "bbbbbbbbbbbbbbbb") == nil && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
 	statusReq, _ := protocol.NewEnvelope("", protocol.TypeTaskStatusReq, protocol.TaskStatusReq{ID: "status-1", TaskID: id})
-	if err := hubServer.Send("bbbbbbbbbbbbbbbb", *statusReq); err != nil {
+	if err := hubServer.SendToType(hub.PeerHand, "bbbbbbbbbbbbbbbb", *statusReq); err != nil {
 		t.Fatal(err)
 	}
 	statusEnv := waitMessageType(t, messages, protocol.TypeTaskStatusResp)
@@ -164,7 +164,7 @@ func TestHandBackgroundSurvivesDisconnectAndReconnect(t *testing.T) {
 		t.Fatalf("executions = %d", executions.Load())
 	}
 	duplicate, _ := protocol.NewEnvelope("", protocol.TypeRPC, rpc)
-	if err := hubServer.Send("bbbbbbbbbbbbbbbb", *duplicate); err != nil {
+	if err := hubServer.SendToType(hub.PeerHand, "bbbbbbbbbbbbbbbb", *duplicate); err != nil {
 		t.Fatal(err)
 	}
 	resultEnv := waitMessageType(t, messages, protocol.TypeRPCResult)
@@ -177,6 +177,7 @@ func TestHandBackgroundSurvivesDisconnectAndReconnect(t *testing.T) {
 func startReconnectableHand(t *testing.T, handID string, manager *taskmanager.Manager, onMessage func(protocol.Envelope)) (*hub.Hub, string, func()) {
 	t.Helper()
 	hubServer := hub.New()
+	enableTestHandshake(hubServer)
 	hubServer.OnMessage(func(_ *hub.Peer, msg protocol.Envelope) { onMessage(msg) })
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
@@ -186,7 +187,7 @@ func startReconnectableHand(t *testing.T, handID string, manager *taskmanager.Ma
 	}))
 	t.Cleanup(srv.Close)
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister(handID, hub.PeerHand, "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials(handID))
 	if err != nil {
 		t.Fatal(err)
 	}

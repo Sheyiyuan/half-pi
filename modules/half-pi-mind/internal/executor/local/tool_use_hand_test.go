@@ -20,6 +20,7 @@ import (
 
 func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 	h := hub.New()
+	enableTestHandshake(h)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{}
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -31,7 +32,7 @@ func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("remote-hand", hub.PeerHand, "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("remote-hand"))
 	if err != nil {
 		t.Fatalf("ConnectAndRegister: %v", err)
 	}
@@ -83,8 +84,8 @@ func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 		resultCh <- tool.Execute(ctx, args)
 	}()
 
-	var env protocol.Envelope
-	if err := session.Conn.ReadJSON(&env); err != nil {
+	env, err := session.Read()
+	if err != nil {
 		t.Fatalf("read rpc: %v", err)
 	}
 	rpc, err := protocol.DecodePayload[protocol.RPC](&env)

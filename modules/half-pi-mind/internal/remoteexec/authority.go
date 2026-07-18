@@ -10,9 +10,6 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 )
 
-// AuthenticateFunc 校验 Hand token 是否有权使用声明的 Hand ID，并返回日志标签。
-type AuthenticateFunc func(token, handID string) (string, error)
-
 type pendingCall struct {
 	ch           chan protocol.Envelope
 	expectedPeer string
@@ -30,33 +27,16 @@ type Authority struct {
 	orderedMu sync.Mutex
 }
 
-// NewAuthority 创建 Authority 并安装唯一的 Hub 生命周期回调。
-func NewAuthority(h *hub.Hub, registry *Registry, bus *events.EventBus, authenticate AuthenticateFunc) *Authority {
-	a := &Authority{Hub: h, Registry: registry, bus: bus, pending: make(map[string]*pendingCall)}
-	h.OnHandshake(func(peer *hub.Peer, msg protocol.Envelope) error {
-		reg, err := protocol.DecodePayload[protocol.Register](&msg)
-		if err != nil {
-			return err
-		}
-		if reg.Token == "" {
-			return fmt.Errorf("token is required")
-		}
-		if authenticate == nil {
-			return fmt.Errorf("authentication is not configured")
-		}
-		label, err := authenticate(reg.Token, reg.ClientID)
-		if err != nil {
-			return err
-		}
-		a.publish(events.LevelInfo, events.TypeSystem, fmt.Sprintf("[HUB] %s (%s) 已连接", peer.ID, label))
-		return nil
-	})
-	h.OnDisconnect(a.handleDisconnect)
-	h.OnMessage(a.handleMessage)
-	return a
+// NewAuthority 创建远程执行权威。Hub 回调由 Mind dispatcher 统一安装。
+func NewAuthority(h *hub.Hub, registry *Registry, bus *events.EventBus) *Authority {
+	return &Authority{Hub: h, Registry: registry, bus: bus, pending: make(map[string]*pendingCall)}
 }
 
-func (a *Authority) handleDisconnect(peer *hub.Peer) {
+// HandleHandDisconnect 处理已认证 Hand 断连。
+func (a *Authority) HandleHandDisconnect(peer *hub.Peer) {
+	if peer == nil || peer.Type != hub.PeerHand {
+		return
+	}
 	if err := a.Registry.MarkLostByPeer(peer.ID, peer.SessionID()); err != nil {
 		a.publish(events.LevelError, events.TypeSystem, err.Error())
 	}
@@ -99,7 +79,8 @@ func (a *Authority) Close() error {
 	return err
 }
 
-func (a *Authority) handleMessage(peer *hub.Peer, msg protocol.Envelope) {
+// HandleHandMessage 处理已解密 Hand 业务消息。
+func (a *Authority) HandleHandMessage(peer *hub.Peer, msg protocol.Envelope) {
 	if peer.Type != hub.PeerHand {
 		return
 	}

@@ -69,7 +69,7 @@ func init() {
 				return &executor.ToolResult{Error: "未指定 Hand 且没有默认 Hand。请先用 select_hand 设置，或用 list_hands 查看可用设备。"}
 			}
 
-			peer := bridge.Hub.Peer(handID)
+			peer := bridge.Hub.PeerByType(hub.PeerHand, handID)
 			if peer == nil || peer.Type != hub.PeerHand {
 				return &executor.ToolResult{Error: fmt.Sprintf("Hand %q 不在线或不存在", handID)}
 			}

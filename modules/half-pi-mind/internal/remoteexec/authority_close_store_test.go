@@ -34,7 +34,7 @@ func TestAuthorityClosePersistsLostAndWakesWaiter(t *testing.T) {
 	}
 	defer release()
 
-	authority := remoteexec.NewAuthority(hub.New(), registry, nil, nil)
+	authority := remoteexec.NewAuthority(hub.New(), registry, nil)
 	if err := authority.Close(); err != nil {
 		t.Fatal(err)
 	}

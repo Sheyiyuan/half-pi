@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 )
 
 // IsFaceMessageType 判断消息类型是否属于统一 Face 协议。
@@ -15,6 +16,7 @@ func IsFaceMessageType(typ string) bool {
 		TypeFaceConversationSnapshot, TypeFaceConversationRename,
 		TypeFaceSubscribe, TypeFaceApprovalResolve,
 		TypeFaceRunGet, TypeFaceRunCancel, TypeFaceHandList, TypeFaceHandGet,
+		TypeFaceTaskList, TypeFaceTaskGet, TypeFaceTaskLog, TypeFaceTaskCancel,
 		TypeFaceAccepted, TypeFaceResult, TypeFaceError, TypeFaceSnapshot, TypeFaceEvent:
 		return true
 	default:
@@ -101,6 +103,30 @@ func ValidateFacePayload(typ string, payload json.RawMessage) error {
 		if err == nil {
 			err = requireFields(v.RequestID, "request_id", v.HandID, "hand_id")
 		}
+	case TypeFaceTaskList:
+		var v FaceTaskList
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = validateFaceTaskList(v)
+		}
+	case TypeFaceTaskGet:
+		var v FaceTaskGet
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = requireFields(v.RequestID, "request_id", v.ConversationID, "conversation_id", v.TaskID, "task_id")
+		}
+	case TypeFaceTaskLog:
+		var v FaceTaskLog
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = validateFaceTaskLog(v)
+		}
+	case TypeFaceTaskCancel:
+		var v FaceTaskCancel
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = requireFields(v.RequestID, "request_id", v.ConversationID, "conversation_id", v.TaskID, "task_id")
+		}
 	case TypeFaceAccepted:
 		var v FaceAccepted
 		err = decodeFacePayload(payload, &v)
@@ -127,6 +153,9 @@ func ValidateFacePayload(typ string, payload json.RawMessage) error {
 		}
 		if err == nil && len(v.Data) > 0 {
 			err = validateRawJSON(v.Data, "data")
+		}
+		if err == nil {
+			err = validateFaceResult(v)
 		}
 	case TypeFaceError:
 		var v FaceError
@@ -197,19 +226,150 @@ func requireFields(fields ...string) error {
 	return nil
 }
 
+// ValidateFaceScopes 校验 Face 权限集合非空、无重复且全部已知。
+func ValidateFaceScopes(scopes []FaceScope) error {
+	if len(scopes) == 0 {
+		return fmt.Errorf("at least one Face scope is required")
+	}
+	seen := make(map[FaceScope]struct{}, len(scopes))
+	for _, scope := range scopes {
+		if !validFaceScope(scope) {
+			return fmt.Errorf("unknown Face scope %q", scope)
+		}
+		if _, ok := seen[scope]; ok {
+			return fmt.Errorf("duplicate Face scope %q", scope)
+		}
+		seen[scope] = struct{}{}
+	}
+	return nil
+}
+
 func validateSubscribe(v FaceSubscribe) error {
 	if err := requireFields(v.RequestID, "request_id"); err != nil {
 		return err
 	}
+	conversationIDs := make(map[string]struct{}, len(v.ConversationIDs))
 	for _, id := range v.ConversationIDs {
 		if id == "" {
 			return fmt.Errorf("conversation_ids must not contain empty values")
 		}
+		if _, ok := conversationIDs[id]; ok {
+			return fmt.Errorf("conversation_ids must not contain duplicate values")
+		}
+		conversationIDs[id] = struct{}{}
 	}
+	eventTypes := make(map[FaceEventType]struct{}, len(v.EventTypes))
 	for _, typ := range v.EventTypes {
 		if !validFaceEventType(typ) {
 			return fmt.Errorf("unknown event type %q", typ)
 		}
+		if _, ok := eventTypes[typ]; ok {
+			return fmt.Errorf("event_types must not contain duplicate values")
+		}
+		eventTypes[typ] = struct{}{}
+	}
+	return nil
+}
+
+func validateFaceTaskList(v FaceTaskList) error {
+	if err := requireFields(v.RequestID, "request_id", v.ConversationID, "conversation_id"); err != nil {
+		return err
+	}
+	if v.Limit < 0 || v.Limit > MaxFaceTaskListLimit {
+		return fmt.Errorf("limit must be zero or between 1 and %d", MaxFaceTaskListLimit)
+	}
+	statuses := make(map[TaskStatus]struct{}, len(v.Statuses))
+	for _, status := range v.Statuses {
+		if !validTaskStatus(status) {
+			return fmt.Errorf("unknown task status %q", status)
+		}
+		if _, ok := statuses[status]; ok {
+			return fmt.Errorf("statuses must not contain duplicate values")
+		}
+		statuses[status] = struct{}{}
+	}
+	return nil
+}
+
+func validateFaceTaskLog(v FaceTaskLog) error {
+	if err := requireFields(v.RequestID, "request_id", v.ConversationID, "conversation_id", v.TaskID, "task_id"); err != nil {
+		return err
+	}
+	if v.Offset < 0 {
+		return fmt.Errorf("offset must not be negative")
+	}
+	if v.Limit <= 0 || v.Limit > MaxTaskLogResponseBytes {
+		return fmt.Errorf("limit must be between 1 and %d", MaxTaskLogResponseBytes)
+	}
+	return nil
+}
+
+func validateFaceResult(v FaceResult) error {
+	switch v.Status {
+	case FaceResultSucceeded:
+		if v.ErrorCode != "" || v.Error != "" {
+			return fmt.Errorf("succeeded result must not contain error_code or error")
+		}
+	case FaceResultFailed, FaceResultCancelled, FaceResultTimedOut:
+		if v.ErrorCode == "" || v.Error == "" {
+			return fmt.Errorf("non-succeeded result requires error_code and error")
+		}
+	}
+	return nil
+}
+
+// ValidateFaceResultData 严格解码并校验 task 操作的 result data。
+func ValidateFaceResultData(operation FaceOperation, data json.RawMessage) error {
+	var err error
+	switch operation {
+	case FaceOperationTaskList:
+		var v TaskListResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			if v.Tasks == nil {
+				err = fmt.Errorf("tasks is required")
+			} else if len(v.Tasks) > MaxFaceTaskListLimit {
+				err = fmt.Errorf("tasks exceeds %d items", MaxFaceTaskListLimit)
+			} else {
+				for i, task := range v.Tasks {
+					if err = validateTaskSummary(task); err != nil {
+						break
+					}
+					if i > 0 && !taskSummaryBefore(v.Tasks[i-1], task) {
+						err = fmt.Errorf("tasks must be sorted by updated_at and task_id descending")
+						break
+					}
+				}
+			}
+		}
+	case FaceOperationTaskGet:
+		var v TaskGetResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			err = validateTaskSummary(v.Task)
+		}
+	case FaceOperationTaskLog:
+		var v TaskLogResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			err = validateTaskLogResult(v)
+		}
+	case FaceOperationTaskCancel:
+		var v FaceTaskCancelResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			switch v.Outcome {
+			case string(TaskCancelCancelled), string(TaskCancelAlreadyDone), string(TaskCancelUnknownTask), string(TaskCancelFailed):
+				err = validateTaskSummary(v.Task)
+			default:
+				err = fmt.Errorf("unknown task cancel outcome %q", v.Outcome)
+			}
+		}
+	default:
+		return fmt.Errorf("operation %q has no task result data", operation)
+	}
+	if err != nil {
+		return fmt.Errorf("validate %s result data: %w", operation, err)
 	}
 	return nil
 }
@@ -218,11 +378,14 @@ func validateConversationSnapshot(v ConversationSnapshot) error {
 	if err := requireFields(v.ConversationID, "snapshot.conversation_id", v.Name, "snapshot.name", v.Mode, "snapshot.mode"); err != nil {
 		return err
 	}
-	if v.Messages == nil || v.PendingChats == nil || v.PendingApprovals == nil || v.ActiveRuns == nil {
+	if v.Messages == nil || v.PendingChats == nil || v.PendingApprovals == nil || v.ActiveRuns == nil || v.Tasks == nil {
 		return fmt.Errorf("snapshot collections are required")
 	}
-	if v.SnapshotVersion < 0 {
-		return fmt.Errorf("snapshot.snapshot_version must not be negative")
+	if v.SnapshotVersion < 1 {
+		return fmt.Errorf("snapshot.snapshot_version must be positive")
+	}
+	if v.TaskHistoryLimit < 0 || v.TaskHistoryLimit > MaxFaceTaskHistoryLimit {
+		return fmt.Errorf("snapshot.task_history_limit must be between 0 and %d", MaxFaceTaskHistoryLimit)
 	}
 	for _, chat := range v.PendingChats {
 		if err := requireFields(chat.RequestID, "pending_chats.request_id"); err != nil || chat.StartedAt.IsZero() {
@@ -244,9 +407,111 @@ func validateConversationSnapshot(v ConversationSnapshot) error {
 		if !validRunStatus(run.Status) {
 			return fmt.Errorf("unknown run status %q", run.Status)
 		}
+		if IsTerminalRunStatus(run.Status) {
+			return fmt.Errorf("active_runs must contain only non-terminal statuses")
+		}
 		if run.DurationMs < 0 || run.CreatedAt.IsZero() {
 			return fmt.Errorf("active run duration and created_at are invalid")
 		}
+	}
+	terminalTasks := 0
+	for _, task := range v.Tasks {
+		if err := validateTaskSummary(task); err != nil {
+			return err
+		}
+		if task.ConversationID != v.ConversationID {
+			return fmt.Errorf("task conversation_id must match snapshot conversation_id")
+		}
+		if IsTerminalTaskStatus(task.Status) {
+			terminalTasks++
+		}
+	}
+	if terminalTasks > v.TaskHistoryLimit {
+		return fmt.Errorf("terminal tasks exceed task_history_limit")
+	}
+	if v.TaskHistoryTruncated && v.TaskHistoryLimit > 0 && terminalTasks != v.TaskHistoryLimit {
+		return fmt.Errorf("truncated task history must fill task_history_limit")
+	}
+	return nil
+}
+
+func taskSummaryBefore(previous, current TaskSummary) bool {
+	if previous.UpdatedAt.Equal(current.UpdatedAt) {
+		return previous.TaskID > current.TaskID
+	}
+	return previous.UpdatedAt.After(current.UpdatedAt)
+}
+
+func validateTaskSummary(v TaskSummary) error {
+	if err := requireFields(v.TaskID, "task_id", v.ConversationID, "conversation_id", v.HandID, "hand_id", v.Tool, "tool", v.ArgsDigest, "args_digest"); err != nil {
+		return err
+	}
+	if !validTaskStatus(v.Status) {
+		return fmt.Errorf("unknown task status %q", v.Status)
+	}
+	if v.CreatedAt.IsZero() || v.UpdatedAt.IsZero() {
+		return fmt.Errorf("created_at and updated_at are required")
+	}
+	if v.UpdatedAt.Before(v.CreatedAt) {
+		return fmt.Errorf("updated_at must not precede created_at")
+	}
+	if v.StartedAt != nil && v.StartedAt.Before(v.CreatedAt) {
+		return fmt.Errorf("started_at must not precede created_at")
+	}
+	if IsTerminalTaskStatus(v.Status) != (v.FinishedAt != nil) {
+		return fmt.Errorf("finished_at must be set exactly for terminal status")
+	}
+	if v.FinishedAt != nil {
+		if v.FinishedAt.Before(v.CreatedAt) || (v.StartedAt != nil && v.FinishedAt.Before(*v.StartedAt)) || v.UpdatedAt.Before(*v.FinishedAt) {
+			return fmt.Errorf("finished_at is inconsistent with task timestamps")
+		}
+	}
+	if v.LogBytes < 0 {
+		return fmt.Errorf("log_bytes must not be negative")
+	}
+	wantCode := taskStatusErrorCode(v.Status)
+	if v.ErrorCode != wantCode {
+		return fmt.Errorf("status %q requires error_code %q", v.Status, wantCode)
+	}
+	if v.ErrorCode == "" && v.Error != "" {
+		return fmt.Errorf("error requires error_code")
+	}
+	return nil
+}
+
+func taskStatusErrorCode(status TaskStatus) FaceErrorCode {
+	switch status {
+	case TaskFailed:
+		return FaceErrorTaskFailed
+	case TaskCancelled:
+		return FaceErrorTaskCancelled
+	case TaskTimedOut:
+		return FaceErrorTaskTimedOut
+	case TaskLost:
+		return FaceErrorTaskLost
+	default:
+		return ""
+	}
+}
+
+func validateTaskLogResult(v TaskLogResult) error {
+	if err := requireFields(v.TaskID, "task_id"); err != nil {
+		return err
+	}
+	if v.Offset < 0 {
+		return fmt.Errorf("offset must not be negative")
+	}
+	if v.Data == nil {
+		return fmt.Errorf("task log data is required")
+	}
+	if len(v.Data) > MaxTaskLogResponseBytes {
+		return fmt.Errorf("task log data exceeds %d bytes", MaxTaskLogResponseBytes)
+	}
+	if v.Offset > math.MaxInt64-int64(len(v.Data)) {
+		return fmt.Errorf("next_offset overflows int64")
+	}
+	if v.NextOffset != v.Offset+int64(len(v.Data)) {
+		return fmt.Errorf("next_offset must equal offset plus data length")
 	}
 	return nil
 }
@@ -270,6 +535,9 @@ func validateFaceEvent(v FaceEvent) error {
 	if len(v.Data) == 0 {
 		return fmt.Errorf("data is required")
 	}
+	if err := validateFaceEventCorrelation(v); err != nil {
+		return err
+	}
 
 	switch v.Type {
 	case FaceEventChatStarted:
@@ -277,25 +545,31 @@ func validateFaceEvent(v FaceEvent) error {
 		if err := decodeFacePayload(v.Data, &data); err != nil {
 			return fmt.Errorf("data: %w", err)
 		}
-		return requireFields(data.RequestID, "data.request_id")
+		return validateEventRequestID(v, data.RequestID)
 	case FaceEventChatToolCalled:
 		var data ChatToolCalledEventData
 		if err := decodeFacePayload(v.Data, &data); err != nil {
 			return fmt.Errorf("data: %w", err)
 		}
-		return requireFields(data.RequestID, "data.request_id", data.Tool, "data.tool", data.ArgsDigest, "data.args_digest")
+		if err := requireFields(data.Tool, "data.tool", data.ArgsDigest, "data.args_digest"); err != nil {
+			return err
+		}
+		return validateEventRequestID(v, data.RequestID)
 	case FaceEventChatToolCompleted:
 		var data ChatToolCompletedEventData
 		if err := decodeFacePayload(v.Data, &data); err != nil {
 			return fmt.Errorf("data: %w", err)
 		}
-		return requireFields(data.RequestID, "data.request_id", data.Tool, "data.tool")
+		if err := requireFields(data.Tool, "data.tool"); err != nil {
+			return err
+		}
+		return validateEventRequestID(v, data.RequestID)
 	case FaceEventChatCompleted:
 		var data ChatCompletedEventData
 		if err := decodeFacePayload(v.Data, &data); err != nil {
 			return fmt.Errorf("data: %w", err)
 		}
-		return requireFields(data.RequestID, "data.request_id")
+		return validateEventRequestID(v, data.RequestID)
 	case FaceEventChatFailed:
 		var data ChatFailedEventData
 		if err := decodeFacePayload(v.Data, &data); err != nil {
@@ -303,6 +577,9 @@ func validateFaceEvent(v FaceEvent) error {
 		}
 		if err := requireFields(data.RequestID, "data.request_id"); err != nil {
 			return err
+		}
+		if data.RequestID != v.RequestID {
+			return fmt.Errorf("data.request_id must match request_id")
 		}
 		if !validFaceErrorCode(data.Code) {
 			return fmt.Errorf("unknown error code %q", data.Code)
@@ -312,13 +589,18 @@ func validateFaceEvent(v FaceEvent) error {
 		if err := decodeFacePayload(v.Data, &data); err != nil {
 			return fmt.Errorf("data: %w", err)
 		}
-		return requireFields(data.RequestID, "data.request_id")
+		return validateEventRequestID(v, data.RequestID)
 	case FaceEventApprovalRequested:
 		var data ApprovalRequestedEventData
 		if err := decodeFacePayload(v.Data, &data); err != nil {
 			return fmt.Errorf("data: %w", err)
 		}
-		return validateApprovalRequest(data)
+		if err := validateApprovalRequest(data); err != nil {
+			return err
+		}
+		if data.ConversationID != v.ConversationID || data.RequestID != v.RequestID {
+			return fmt.Errorf("approval data correlation must match event correlation")
+		}
 	case FaceEventApprovalResolved:
 		var data ApprovalResolvedEventData
 		if err := decodeFacePayload(v.Data, &data); err != nil {
@@ -364,15 +646,56 @@ func validateFaceEvent(v FaceEvent) error {
 		if err := requireFields(data.ConversationID, "data.conversation_id"); err != nil {
 			return err
 		}
-		if data.SnapshotVersion < 0 {
-			return fmt.Errorf("data.snapshot_version must not be negative")
+		if data.ConversationID != v.ConversationID {
+			return fmt.Errorf("data.conversation_id must match conversation_id")
+		}
+		if data.SnapshotVersion < 1 {
+			return fmt.Errorf("data.snapshot_version must be positive")
+		}
+	case FaceEventTaskChanged:
+		var data TaskChangedEventData
+		if err := decodeFacePayload(v.Data, &data); err != nil {
+			return fmt.Errorf("data: %w", err)
+		}
+		if err := validateTaskSummary(data); err != nil {
+			return err
+		}
+		if data.ConversationID != v.ConversationID {
+			return fmt.Errorf("data.conversation_id must match conversation_id")
+		}
+	}
+	return nil
+}
+
+func validateEventRequestID(v FaceEvent, requestID string) error {
+	if err := requireFields(requestID, "data.request_id"); err != nil {
+		return err
+	}
+	if requestID != v.RequestID {
+		return fmt.Errorf("data.request_id must match request_id")
+	}
+	return nil
+}
+
+func validateFaceEventCorrelation(v FaceEvent) error {
+	switch v.Type {
+	case FaceEventChatStarted, FaceEventChatToolCalled, FaceEventChatToolCompleted,
+		FaceEventChatCompleted, FaceEventChatFailed, FaceEventChatCancelled:
+		return requireFields(v.ConversationID, "conversation_id", v.RequestID, "request_id")
+	case FaceEventApprovalRequested, FaceEventApprovalResolved:
+		return requireFields(v.ConversationID, "conversation_id")
+	case FaceEventRemoteRunChanged, FaceEventTaskChanged, FaceEventConversationChanged:
+		return requireFields(v.ConversationID, "conversation_id")
+	case FaceEventHandConnected, FaceEventHandDisconnected:
+		if v.ConversationID != "" || v.RequestID != "" {
+			return fmt.Errorf("Hand lifecycle event must not contain conversation_id or request_id")
 		}
 	}
 	return nil
 }
 
 func validateApprovalRequest(v ApprovalRequest) error {
-	if err := requireFields(v.ApprovalID, "approval_id", v.ConversationID, "conversation_id", v.RequestID, "request_id", v.Tool, "tool", v.Reason, "reason", v.ArgsDigest, "args_digest"); err != nil {
+	if err := requireFields(v.ApprovalID, "approval_id", v.ConversationID, "conversation_id", v.Tool, "tool", v.Reason, "reason", v.ArgsDigest, "args_digest"); err != nil {
 		return err
 	}
 	if v.ExpiresAt.IsZero() {
@@ -386,7 +709,20 @@ func validFaceErrorCode(code FaceErrorCode) bool {
 	case FaceErrorInvalidRequest, FaceErrorUnauthorized, FaceErrorForbidden,
 		FaceErrorConversationNotFound, FaceErrorRequestConflict, FaceErrorRequestInProgress,
 		FaceErrorApprovalNotFound, FaceErrorApprovalExpired, FaceErrorRunNotFound,
-		FaceErrorHandNotFound, FaceErrorBusy, FaceErrorCancelled, FaceErrorTimeout, FaceErrorInternal:
+		FaceErrorHandNotFound, FaceErrorTaskFailed, FaceErrorTaskCancelled, FaceErrorTaskTimedOut,
+		FaceErrorTaskLost, FaceErrorTaskStale, FaceErrorTaskNotFound, FaceErrorHandOffline,
+		FaceErrorLogUnavailable, FaceErrorBusy, FaceErrorCancelled, FaceErrorTimeout, FaceErrorInternal:
+		return true
+	default:
+		return false
+	}
+}
+
+func validFaceScope(scope FaceScope) bool {
+	switch scope {
+	case FaceScopeChat, FaceScopeSessionsRead, FaceScopeSessionsWrite, FaceScopeRunsRead,
+		FaceScopeRunsCancel, FaceScopeApprove, FaceScopeHandsRead, FaceScopeTasksRead,
+		FaceScopeTasksCancel:
 		return true
 	default:
 		return false
@@ -416,7 +752,8 @@ func validFaceEventType(typ FaceEventType) bool {
 	case FaceEventChatStarted, FaceEventChatToolCalled, FaceEventChatToolCompleted,
 		FaceEventChatCompleted, FaceEventChatFailed, FaceEventChatCancelled,
 		FaceEventApprovalRequested, FaceEventApprovalResolved, FaceEventRemoteRunChanged,
-		FaceEventHandConnected, FaceEventHandDisconnected, FaceEventConversationChanged:
+		FaceEventHandConnected, FaceEventHandDisconnected, FaceEventConversationChanged,
+		FaceEventTaskChanged:
 		return true
 	default:
 		return false
@@ -437,7 +774,8 @@ func validFaceOperation(operation FaceOperation) bool {
 	case FaceOperationChat, FaceOperationChatCancel, FaceOperationConversationList,
 		FaceOperationConversationCreate, FaceOperationConversationSnapshot,
 		FaceOperationConversationRename, FaceOperationSubscribe, FaceOperationApprovalResolve,
-		FaceOperationRunGet, FaceOperationRunCancel, FaceOperationHandList, FaceOperationHandGet:
+		FaceOperationRunGet, FaceOperationRunCancel, FaceOperationHandList, FaceOperationHandGet,
+		FaceOperationTaskList, FaceOperationTaskGet, FaceOperationTaskLog, FaceOperationTaskCancel:
 		return true
 	default:
 		return false

@@ -11,21 +11,29 @@ import (
 
 // Store wraps an SQLite database connection.
 type Store struct {
-	db *sql.DB
+	db   *sql.DB
+	path string
 }
 
 // New opens the SQLite database at the given path and creates tables.
 func New(path string) (*Store, error) {
+	if err := secureDatabasePaths(path); err != nil {
+		return nil, fmt.Errorf("secure database paths: %w", err)
+	}
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
 	db.SetMaxOpenConns(1)
 
-	s := &Store{db: db}
+	s := &Store{db: db, path: path}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, err
+	}
+	if err := secureSQLiteFiles(path); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("secure SQLite files: %w", err)
 	}
 	return s, nil
 }
@@ -34,9 +42,30 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// AuthenticateHandCredentialKey 验证 Hand 凭据并返回 application key。
+func (s *Store) AuthenticateHandCredentialKey(label, token string) (string, error) {
+	credential, err := s.AuthenticateHandCredential(label, token)
+	if err != nil {
+		return "", err
+	}
+	return credential.ApplicationKey, nil
+}
+
+// AuthenticateFaceCredentialKey 验证 Face 凭据并返回 application key。
+func (s *Store) AuthenticateFaceCredentialKey(label, token string) (string, error) {
+	credential, err := s.AuthenticateFaceToken(label, token)
+	if err != nil {
+		return "", err
+	}
+	return credential.ApplicationKey, nil
+}
+
 func (s *Store) migrate() error {
 	if _, err := s.db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		return fmt.Errorf("enable WAL: %w", err)
+	}
+	if err := secureSQLiteFiles(s.path); err != nil {
+		return fmt.Errorf("secure SQLite files after enabling WAL: %w", err)
 	}
 	if _, err := s.db.Exec("PRAGMA foreign_keys=ON"); err != nil {
 		return fmt.Errorf("enable foreign keys: %w", err)
@@ -77,6 +106,21 @@ func (s *Store) migrate() error {
 			label      TEXT NOT NULL,
 			token      TEXT NOT NULL UNIQUE,
 			created_at TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS hand_credentials (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			label           TEXT NOT NULL UNIQUE,
+			token           TEXT NOT NULL UNIQUE,
+			application_key TEXT NOT NULL UNIQUE,
+			created_at      TEXT NOT NULL DEFAULT (datetime('now'))
+		)`,
+		`CREATE TABLE IF NOT EXISTS face_tokens (
+			id              INTEGER PRIMARY KEY AUTOINCREMENT,
+			label           TEXT NOT NULL UNIQUE,
+			token           TEXT NOT NULL UNIQUE,
+			application_key TEXT NOT NULL UNIQUE,
+			scopes          TEXT NOT NULL,
+			created_at      TEXT NOT NULL DEFAULT (datetime('now'))
 		)`,
 		`CREATE TABLE IF NOT EXISTS remote_runs (
 			id TEXT PRIMARY KEY,

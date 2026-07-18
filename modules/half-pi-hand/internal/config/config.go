@@ -2,9 +2,11 @@
 package config
 
 import (
+	"encoding/hex"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
 
 	"github.com/BurntSushi/toml"
@@ -15,6 +17,8 @@ const (
 	DefaultServerURL = "ws://127.0.0.1:15707/ws"
 )
 
+var handLabelPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$`)
+
 // Config Hand 运行时配置。
 type Config struct {
 	Server ServerConfig `toml:"server"`
@@ -23,8 +27,9 @@ type Config struct {
 
 // ServerConfig Mind 连接配置。
 type ServerConfig struct {
-	URL   string `toml:"url"`
-	Token string `toml:"token"`
+	URL            string `toml:"url"`
+	Token          string `toml:"token"`
+	ApplicationKey string `toml:"application_key"`
 }
 
 // RetryConfig 断线重连策略。
@@ -93,8 +98,11 @@ func DefaultPath() string {
 	return filepath.Join(home, ".half-pi", "hand", "config.toml")
 }
 
-// Load 加载 TOML 配置文件，并用环境变量覆盖 token。
+// Load 加载 TOML 配置文件，并用环境变量覆盖凭据。
 func Load(path string) (*Config, error) {
+	if err := secureConfigPath(path, false); err != nil {
+		return nil, fmt.Errorf("secure config: %w", err)
+	}
 	var cfg Config
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
@@ -103,6 +111,9 @@ func Load(path string) (*Config, error) {
 	if v := os.Getenv("HAND_TOKEN"); v != "" {
 		cfg.Server.Token = v
 	}
+	if v := os.Getenv("HALF_PI_HAND_APPLICATION_KEY"); v != "" {
+		cfg.Server.ApplicationKey = v
+	}
 
 	if cfg.Server.URL == "" {
 		cfg.Server.URL = DefaultServerURL
@@ -110,6 +121,8 @@ func Load(path string) (*Config, error) {
 
 	if cfg.Hand.Limits.MaxOutputSize <= 0 {
 		cfg.Hand.Limits.MaxOutputSize = 1 << 20
+	} else if cfg.Hand.Limits.MaxOutputSize > 1<<20 {
+		return nil, fmt.Errorf("hand.limits.max_output_size must not exceed 1048576")
 	}
 
 	if cfg.Hand.Retry.MaxBackoff <= 0 {
@@ -145,23 +158,39 @@ func Load(path string) (*Config, error) {
 	return &cfg, nil
 }
 
+// ValidateCredentials 校验 Hand 注册所需的不可变三要素。
+func (c *Config) ValidateCredentials() error {
+	if !handLabelPattern.MatchString(c.Hand.ID) {
+		return fmt.Errorf("hand.id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
+	}
+	for name, value := range map[string]string{
+		"server.token":           c.Server.Token,
+		"server.application_key": c.Server.ApplicationKey,
+	} {
+		decoded, err := hex.DecodeString(value)
+		if err != nil || len(decoded) != 16 || hex.EncodeToString(decoded) != value {
+			return fmt.Errorf("%s must be 32 lowercase hex characters", name)
+		}
+	}
+	return nil
+}
+
 // WriteDefault 写入默认配置文件（0600），已存在时不覆盖。
 func WriteDefault(path string) error {
-	if _, err := os.Stat(path); err == nil {
+	if err := secureConfigPath(path, true); err != nil {
+		return fmt.Errorf("secure config path: %w", err)
+	}
+	if _, err := os.Lstat(path); err == nil {
 		return nil
 	} else if !os.IsNotExist(err) {
 		return err
-	}
-
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return fmt.Errorf("create config dir: %w", err)
 	}
 
 	defaultCfg := `# half-pi Hand 配置文件
 [server]
 url = "ws://127.0.0.1:15707/ws"
 token = ""
+application_key = ""
 
 [hand]
 id = ""
@@ -191,5 +220,16 @@ max_retained = 1000
 # command = "df / | awk 'NR==2{print $5}' | tr -d '%'"
 # condition = "> 85"
 `
-	return os.WriteFile(path, []byte(defaultCfg), 0600)
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write([]byte(defaultCfg)); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return secureConfigPath(path, false)
 }

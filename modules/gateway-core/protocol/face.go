@@ -6,6 +6,17 @@ import (
 )
 
 const (
+	// DefaultFaceTaskListLimit 是 Face 任务列表的默认分页大小。
+	DefaultFaceTaskListLimit = 50
+	// MaxFaceTaskListLimit 是 Face 任务列表的最大分页大小。
+	MaxFaceTaskListLimit = 200
+	// DefaultFaceTaskHistoryLimit 是快照默认包含的终态任务数量。
+	DefaultFaceTaskHistoryLimit = 50
+	// MaxFaceTaskHistoryLimit 是快照可包含的终态任务硬上限。
+	MaxFaceTaskHistoryLimit = 500
+)
+
+const (
 	TypeFaceChat                 = "face.chat"
 	TypeFaceChatCancel           = "face.chat.cancel"
 	TypeFaceConversationList     = "face.conversation.list"
@@ -18,6 +29,10 @@ const (
 	TypeFaceRunCancel            = "face.run.cancel"
 	TypeFaceHandList             = "face.hand.list"
 	TypeFaceHandGet              = "face.hand.get"
+	TypeFaceTaskList             = "face.task.list"
+	TypeFaceTaskGet              = "face.task.get"
+	TypeFaceTaskLog              = "face.task.log"
+	TypeFaceTaskCancel           = "face.task.cancel"
 
 	TypeFaceAccepted = "face.accepted"
 	TypeFaceResult   = "face.result"
@@ -37,6 +52,8 @@ const (
 	FaceScopeRunsCancel    FaceScope = "face:runs:cancel"
 	FaceScopeApprove       FaceScope = "face:approve"
 	FaceScopeHandsRead     FaceScope = "face:hands:read"
+	FaceScopeTasksRead     FaceScope = "face:tasks:read"
+	FaceScopeTasksCancel   FaceScope = "face:tasks:cancel"
 )
 
 // FaceIdentity 是通过鉴权的 Face 身份及其权限集合。
@@ -60,6 +77,14 @@ const (
 	FaceErrorApprovalExpired      FaceErrorCode = "approval_expired"
 	FaceErrorRunNotFound          FaceErrorCode = "run_not_found"
 	FaceErrorHandNotFound         FaceErrorCode = "hand_not_found"
+	FaceErrorTaskFailed           FaceErrorCode = "task_failed"
+	FaceErrorTaskCancelled        FaceErrorCode = "task_cancelled"
+	FaceErrorTaskTimedOut         FaceErrorCode = "task_timed_out"
+	FaceErrorTaskLost             FaceErrorCode = "task_lost"
+	FaceErrorTaskStale            FaceErrorCode = "task_stale"
+	FaceErrorTaskNotFound         FaceErrorCode = "task_not_found"
+	FaceErrorHandOffline          FaceErrorCode = "hand_offline"
+	FaceErrorLogUnavailable       FaceErrorCode = "log_unavailable"
 	FaceErrorBusy                 FaceErrorCode = "busy"
 	FaceErrorCancelled            FaceErrorCode = "cancelled"
 	FaceErrorTimeout              FaceErrorCode = "timeout"
@@ -102,6 +127,7 @@ const (
 	FaceEventHandConnected       FaceEventType = "hand.connected"
 	FaceEventHandDisconnected    FaceEventType = "hand.disconnected"
 	FaceEventConversationChanged FaceEventType = "conversation.changed"
+	FaceEventTaskChanged         FaceEventType = "task.changed"
 )
 
 // FaceEventLevel 是 Face 事件的严重级别。
@@ -129,6 +155,10 @@ const (
 	FaceOperationRunCancel            FaceOperation = "run.cancel"
 	FaceOperationHandList             FaceOperation = "hand.list"
 	FaceOperationHandGet              FaceOperation = "hand.get"
+	FaceOperationTaskList             FaceOperation = "task.list"
+	FaceOperationTaskGet              FaceOperation = "task.get"
+	FaceOperationTaskLog              FaceOperation = "task.log"
+	FaceOperationTaskCancel           FaceOperation = "task.cancel"
 )
 
 // FaceCommandMeta 是所有 Face command 共用的关联字段。
@@ -217,6 +247,40 @@ type FaceHandGet struct {
 	HandID    string `json:"hand_id"`
 }
 
+// FaceTaskList 请求分页列出指定对话的后台任务。
+type FaceTaskList struct {
+	RequestID      string       `json:"request_id"`
+	ConversationID string       `json:"conversation_id"`
+	HandID         string       `json:"hand_id,omitempty"`
+	Statuses       []TaskStatus `json:"statuses,omitempty"`
+	Cursor         string       `json:"cursor,omitempty"`
+	Limit          int          `json:"limit,omitempty"`
+}
+
+// FaceTaskGet 请求读取指定对话中的后台任务。
+type FaceTaskGet struct {
+	RequestID      string `json:"request_id"`
+	ConversationID string `json:"conversation_id"`
+	TaskID         string `json:"task_id"`
+}
+
+// FaceTaskLog 请求从精确字节偏移读取后台任务日志。
+type FaceTaskLog struct {
+	RequestID      string `json:"request_id"`
+	ConversationID string `json:"conversation_id"`
+	TaskID         string `json:"task_id"`
+	Offset         int64  `json:"offset"`
+	Limit          int    `json:"limit"`
+}
+
+// FaceTaskCancel 请求取消指定对话中的后台任务。
+type FaceTaskCancel struct {
+	RequestID      string `json:"request_id"`
+	ConversationID string `json:"conversation_id"`
+	TaskID         string `json:"task_id"`
+	Reason         string `json:"reason,omitempty"`
+}
+
 // FaceAccepted 表示 command 已进入处理流程。
 type FaceAccepted struct {
 	RequestID       string        `json:"request_id"`
@@ -295,7 +359,7 @@ type ChatSummary struct {
 type ApprovalRequest struct {
 	ApprovalID     string    `json:"approval_id"`
 	ConversationID string    `json:"conversation_id"`
-	RequestID      string    `json:"request_id"`
+	RequestID      string    `json:"request_id,omitempty"`
 	RunID          string    `json:"run_id,omitempty"`
 	Tool           string    `json:"tool"`
 	Reason         string    `json:"reason"`
@@ -329,17 +393,39 @@ type HandSummary struct {
 	Tools     []ToolInfo `json:"tools,omitempty"`
 }
 
+// TaskSummary 是 Face 可见的后台任务完整摘要。
+type TaskSummary struct {
+	TaskID         string        `json:"task_id"`
+	ConversationID string        `json:"conversation_id"`
+	HandID         string        `json:"hand_id"`
+	Tool           string        `json:"tool"`
+	ArgsDigest     string        `json:"args_digest"`
+	Status         TaskStatus    `json:"status"`
+	CreatedAt      time.Time     `json:"created_at"`
+	StartedAt      *time.Time    `json:"started_at,omitempty"`
+	FinishedAt     *time.Time    `json:"finished_at,omitempty"`
+	UpdatedAt      time.Time     `json:"updated_at"`
+	LogBytes       int64         `json:"log_bytes"`
+	Truncated      bool          `json:"truncated"`
+	Stale          bool          `json:"stale"`
+	ErrorCode      FaceErrorCode `json:"error_code,omitempty"`
+	Error          string        `json:"error,omitempty"`
+}
+
 // ConversationSnapshot 是断线恢复所需的对话权威状态。
 type ConversationSnapshot struct {
-	ConversationID   string             `json:"conversation_id"`
-	Name             string             `json:"name"`
-	Mode             string             `json:"mode"`
-	ActiveHand       string             `json:"active_hand,omitempty"`
-	Messages         []FaceMessage      `json:"messages"`
-	PendingChats     []ChatSummary      `json:"pending_chats"`
-	PendingApprovals []ApprovalSummary  `json:"pending_approvals"`
-	ActiveRuns       []RemoteRunSummary `json:"active_runs"`
-	SnapshotVersion  int64              `json:"snapshot_version"`
+	ConversationID       string             `json:"conversation_id"`
+	Name                 string             `json:"name"`
+	Mode                 string             `json:"mode"`
+	ActiveHand           string             `json:"active_hand,omitempty"`
+	Messages             []FaceMessage      `json:"messages"`
+	PendingChats         []ChatSummary      `json:"pending_chats"`
+	PendingApprovals     []ApprovalSummary  `json:"pending_approvals"`
+	ActiveRuns           []RemoteRunSummary `json:"active_runs"`
+	Tasks                []TaskSummary      `json:"tasks"`
+	TaskHistoryLimit     int                `json:"task_history_limit"`
+	TaskHistoryTruncated bool               `json:"task_history_truncated"`
+	SnapshotVersion      int64              `json:"snapshot_version"`
 }
 
 // ConversationListResult 是 conversation.list 的结构化结果。
@@ -350,6 +436,34 @@ type ConversationListResult struct {
 // HandListResult 是 hand.list 的结构化结果。
 type HandListResult struct {
 	Hands []HandSummary `json:"hands"`
+}
+
+// TaskListResult 是 task.list 的分页结果。
+type TaskListResult struct {
+	Tasks      []TaskSummary `json:"tasks"`
+	NextCursor string        `json:"next_cursor,omitempty"`
+}
+
+// TaskGetResult 是 task.get 的结构化结果。
+type TaskGetResult struct {
+	Task TaskSummary `json:"task"`
+}
+
+// TaskLogResult 是 task.log 的字节区间结果。
+// encoding/json 会将 Data 的 []byte 表示编码为 base64 字符串。
+type TaskLogResult struct {
+	TaskID     string `json:"task_id"`
+	Offset     int64  `json:"offset"`
+	NextOffset int64  `json:"next_offset"`
+	Data       []byte `json:"data"`
+	EOF        bool   `json:"eof"`
+	Truncated  bool   `json:"truncated"`
+}
+
+// FaceTaskCancelResult 是 task.cancel 的结构化结果。
+type FaceTaskCancelResult struct {
+	Outcome string      `json:"outcome"`
+	Task    TaskSummary `json:"task"`
 }
 
 // ChatStartedEventData 是 chat.started 的结构化数据。
@@ -425,3 +539,6 @@ type ConversationChangedEventData struct {
 	ConversationID  string `json:"conversation_id"`
 	SnapshotVersion int64  `json:"snapshot_version"`
 }
+
+// TaskChangedEventData 是 task.changed 携带的完整任务摘要。
+type TaskChangedEventData = TaskSummary

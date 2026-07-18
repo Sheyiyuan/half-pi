@@ -61,7 +61,7 @@ func TestTaskServiceDeniesCrossSessionAndKeepsOfflineSnapshotStale(t *testing.T)
 		TaskID: "task-1", SessionID: "session-a", HandID: "hand-1", Tool: "tool",
 		ArgsDigest: "digest", Status: protocol.TaskRunning, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}}}
-	authority := NewAuthority(hub.New(), NewRegistry(), nil, nil)
+	authority := NewAuthority(hub.New(), NewRegistry(), nil)
 	service := NewTaskService(authority, store)
 	if _, err := service.Get(context.Background(), "session-b", "task-1"); !errors.Is(err, ErrTaskNotOwned) {
 		t.Fatalf("cross-session error = %v", err)
@@ -77,7 +77,7 @@ func TestTaskServiceGetReturnsCallerCancellationWhileMarkingStale(t *testing.T) 
 		TaskID: "task-1", SessionID: "session-a", HandID: "hand-1", Tool: "tool",
 		Status: protocol.TaskPending, CreatedAt: time.Now(), UpdatedAt: time.Now(),
 	}}}
-	service := NewTaskService(NewAuthority(hub.New(), NewRegistry(), nil, nil), store)
+	service := NewTaskService(NewAuthority(hub.New(), NewRegistry(), nil), store)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := service.Get(ctx, "session-a", "task-1"); !errors.Is(err, context.Canceled) {
@@ -91,7 +91,7 @@ func TestTaskServiceGetReturnsCallerCancellationWhileMarkingStale(t *testing.T) 
 
 func TestTaskServiceStartRunCanSucceedBeforeTaskLaterFails(t *testing.T) {
 	store := &memoryTaskStore{}
-	authority := NewAuthority(hub.New(), NewRegistry(), nil, nil)
+	authority := NewAuthority(hub.New(), NewRegistry(), nil)
 	service := NewTaskService(authority, store)
 	if err := service.CreateStartSnapshot(Task{
 		TaskID: "task-1", SessionID: "session-a", HandID: "hand-1", Tool: "tool", ArgsDigest: "digest",
@@ -116,7 +116,7 @@ func TestTaskServiceStartRunCanSucceedBeforeTaskLaterFails(t *testing.T) {
 
 func TestTaskServiceTerminalStartResultRequiresReconciliation(t *testing.T) {
 	store := &memoryTaskStore{}
-	service := NewTaskService(NewAuthority(hub.New(), NewRegistry(), nil, nil), store)
+	service := NewTaskService(NewAuthority(hub.New(), NewRegistry(), nil), store)
 	if err := service.CreateStartSnapshot(Task{
 		TaskID: "task-1", SessionID: "session-a", HandID: "hand-1", Tool: "tool", ArgsDigest: "digest",
 	}); err != nil {
@@ -138,7 +138,7 @@ func TestTaskServiceStaleSnapshotPreservesExecutionError(t *testing.T) {
 		TaskID: "task-1", SessionID: "session-a", HandID: "hand-1", Tool: "tool",
 		Status: protocol.TaskFailed, Error: "execution failed", CreatedAt: time.Now(), FinishedAt: time.Now(), UpdatedAt: time.Now(),
 	}}}
-	service := NewTaskService(NewAuthority(hub.New(), NewRegistry(), nil, nil), store)
+	service := NewTaskService(NewAuthority(hub.New(), NewRegistry(), nil), store)
 	task, err := service.Get(context.Background(), "session-a", "task-1")
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +150,7 @@ func TestTaskServiceStaleSnapshotPreservesExecutionError(t *testing.T) {
 
 func TestTaskServiceFailStartCreatesTerminalTask(t *testing.T) {
 	store := &memoryTaskStore{}
-	service := NewTaskService(NewAuthority(hub.New(), NewRegistry(), nil, nil), store)
+	service := NewTaskService(NewAuthority(hub.New(), NewRegistry(), nil), store)
 	if err := service.CreateStartSnapshot(Task{
 		TaskID: "task-1", SessionID: "session-a", HandID: "hand-1", Tool: "tool", ArgsDigest: "digest",
 	}); err != nil {
@@ -170,7 +170,7 @@ func TestTaskServiceLocksOnlySameTask(t *testing.T) {
 		"task-a": {TaskID: "task-a", SessionID: "session-a", Status: protocol.TaskPending},
 		"task-b": {TaskID: "task-b", SessionID: "session-a", Status: protocol.TaskPending},
 	}}
-	service := NewTaskService(NewAuthority(hub.New(), NewRegistry(), nil, nil), store)
+	service := NewTaskService(NewAuthority(hub.New(), NewRegistry(), nil), store)
 	unlockA := service.lockTask("task-a")
 
 	differentDone := make(chan error, 1)

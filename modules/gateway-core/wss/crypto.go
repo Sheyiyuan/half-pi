@@ -1,8 +1,7 @@
 // Package wss 提供应用层加密 WebSocket 通信，用于 Face-Mind-Hand 消息交换。
 //
 // 加密在应用层完成（AES-128-GCM），不依赖 TLS 证书。
-// ⚠️ 实验性：当前仅提供 Encrypt/Decrypt 原语，缺少 key exchange、key ID。
-// 重放防护由 protocol.Envelope 的 session/seq 和 hub.Accept 提供。
+// 重放防护由 protocol.Envelope 的 session/seq 提供。
 // 生产环境请配合 TLS 使用。
 package wss
 
@@ -20,6 +19,10 @@ import (
 const (
 	KeySize      = 16
 	AlgAES128GCM = "AES-128-GCM"
+	// MaxPlaintextPayload 是注册后单个解密 payload 的最大字节数。
+	MaxPlaintextPayload = 7 << 20
+	// MaxFrameSize 是 WebSocket 单帧 Envelope 的最大字节数。
+	MaxFrameSize = 10 << 20
 )
 
 // GenerateKey 生成 16 字节 AES-128 随机密钥。
@@ -81,6 +84,9 @@ func (c *AES128GCM) EncryptEnvelopePayload(env *protocol.Envelope, payload any) 
 	if err != nil {
 		return fmt.Errorf("marshal payload: %w", err)
 	}
+	if len(plain) > MaxPlaintextPayload {
+		return fmt.Errorf("plaintext payload exceeds %d bytes", MaxPlaintextPayload)
+	}
 	ciphertext, err := c.Encrypt(plain, env.AAD())
 	if err != nil {
 		return err
@@ -103,13 +109,19 @@ func DecryptEnvelopePayload[T any](c *AES128GCM, env *protocol.Envelope) (T, err
 	if payload.Alg != AlgAES128GCM {
 		return zero, fmt.Errorf("unsupported payload alg: %s", payload.Alg)
 	}
+	if len(ciphertext) > MaxPlaintextPayload+c.aead.NonceSize()+c.aead.Overhead() {
+		return zero, fmt.Errorf("encrypted payload exceeds plaintext limit")
+	}
 	plain, err := c.Decrypt(ciphertext, env.AAD())
 	if err != nil {
 		return zero, err
 	}
-	var out T
-	if err := json.Unmarshal(plain, &out); err != nil {
-		return zero, fmt.Errorf("unmarshal payload: %w", err)
+	if len(plain) > MaxPlaintextPayload {
+		return zero, fmt.Errorf("plaintext payload exceeds %d bytes", MaxPlaintextPayload)
+	}
+	out, err := protocol.StrictDecode[T](plain)
+	if err != nil {
+		return zero, fmt.Errorf("decode payload: %w", err)
 	}
 	return out, nil
 }

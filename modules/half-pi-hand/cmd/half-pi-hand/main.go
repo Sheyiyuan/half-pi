@@ -23,6 +23,7 @@ func main() {
 	cfgPath := flag.String("config", "", "配置文件路径（默认 ~/.half-pi/hand/config.toml）")
 	server := flag.String("server", "", "Mind WebSocket 地址")
 	token := flag.String("token", "", "认证令牌")
+	applicationKey := flag.String("application-key", "", "应用密钥")
 	id := flag.String("id", "", "Hand 唯一标识")
 	flag.Parse()
 
@@ -46,19 +47,19 @@ func main() {
 	if *token != "" {
 		cfg.Server.Token = *token
 	}
+	if *applicationKey != "" {
+		cfg.Server.ApplicationKey = *applicationKey
+	}
 	if *id != "" {
 		cfg.Hand.ID = *id
 	}
 
-	if cfg.Hand.ID == "" {
-		hostname, err := os.Hostname()
-		if err != nil {
-			hostname = "hand"
-		}
-		cfg.Hand.ID = hostname
-	}
 	if cfg.Server.URL == "" {
 		cfg.Server.URL = config.DefaultServerURL
+	}
+	if err := cfg.ValidateCredentials(); err != nil {
+		fmt.Fprintf(os.Stderr, "Hand 凭据无效: %v\n", err)
+		os.Exit(1)
 	}
 
 	if cfg.Hand.WorkDir != "" {
@@ -87,9 +88,16 @@ func main() {
 	maxBackoff := time.Duration(cfg.Hand.Retry.MaxBackoff) * time.Second
 
 	for {
-		conn, err := wss.NewClient(cfg.Server.URL).ConnectAndRegister(cfg.Hand.ID, "hand", cfg.Server.Token, info)
+		conn, err := wss.NewClient(cfg.Server.URL).ConnectAndRegister(wss.Credentials{
+			Label: cfg.Hand.ID, Type: "hand", Token: cfg.Server.Token,
+			ApplicationKey: cfg.Server.ApplicationKey, Info: info,
+		})
 		if err != nil {
 			if ctx.Err() != nil {
+				return
+			}
+			if !shouldRetry(err) {
+				fmt.Fprintf(os.Stderr, "永久握手失败: %v\n", err)
 				return
 			}
 			fmt.Fprintf(os.Stderr, "连接失败: %v，%v 后重试\n", err, backoff)
@@ -122,6 +130,11 @@ func main() {
 		}
 		backoff = sleepBackoff(backoff, maxBackoff)
 	}
+}
+
+func shouldRetry(err error) bool {
+	var handshakeErr *wss.HandshakeError
+	return !errors.As(err, &handshakeErr) || handshakeErr.Code == "duplicate_peer"
 }
 
 func sleepBackoff(current, max time.Duration) time.Duration {

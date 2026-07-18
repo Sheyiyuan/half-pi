@@ -308,3 +308,53 @@ func TestEncryptedPayloadEncoding(t *testing.T) {
 		t.Fatalf("decoded data = %v, want %v", data, raw)
 	}
 }
+
+func TestHandshakePayloadStrictRoundTrip(t *testing.T) {
+	register := Register{ProtocolVersion: ProtocolVersion, ClientID: "hand-1", Token: "00112233445566778899aabbccddeeff", Type: PeerHand, Info: &HandInfo{OS: "linux", Arch: "amd64", Hostname: "host"}}
+	env, err := NewEnvelope("register-1", TypeRegister, register)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodePayload[Register](env)
+	if err != nil || got.ProtocolVersion != ProtocolVersion || got.Info == nil || got.Info.Hostname != "host" {
+		t.Fatalf("register round trip = %+v, %v", got, err)
+	}
+
+	for _, payload := range []string{
+		`{"protocol_version":1,"client_id":"face","token":"00112233445566778899aabbccddeeff","type":"face","unknown":true}`,
+		`{"protocol_version":1,"client_id":"face","token":"00112233445566778899aabbccddeeff","type":"face"} {}`,
+	} {
+		if _, err := StrictDecode[Register]([]byte(payload)); err == nil {
+			t.Fatalf("strict decode accepted %s", payload)
+		}
+	}
+}
+
+func TestHandshakeTranscriptAndProofAADCanonicalJSON(t *testing.T) {
+	transcript := HandshakeTranscript{
+		ProtocolVersion: 1,
+		PeerType:        PeerFace,
+		Label:           "face-1",
+		HandshakeID:     "handshake-1",
+		ServerID:        "mind",
+		SessionID:       "session-1",
+		Challenge:       "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+	}
+	got, err := json.Marshal(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"protocol_version":1,"peer_type":"face","label":"face-1","handshake_id":"handshake-1","server_id":"mind","session_id":"session-1","challenge":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}`
+	if string(got) != want {
+		t.Fatalf("transcript JSON = %s, want %s", got, want)
+	}
+	aad := RegisterProofAAD{ProtocolVersion: 1, Type: TypeRegisterProof, PeerType: PeerFace, Label: "face-1", HandshakeID: "handshake-1", ServerID: "mind", SessionID: "session-1"}
+	got, err = json.Marshal(aad)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want = `{"protocol_version":1,"type":"register_proof","peer_type":"face","label":"face-1","handshake_id":"handshake-1","server_id":"mind","session_id":"session-1"}`
+	if string(got) != want {
+		t.Fatalf("proof AAD JSON = %s, want %s", got, want)
+	}
+}

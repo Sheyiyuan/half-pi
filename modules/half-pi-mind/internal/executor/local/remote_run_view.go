@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
@@ -57,7 +58,7 @@ func CancelRemoteRun(ctx context.Context, bridge *RemoteBridge, runID string) (R
 	if bridge.SessionID != nil && run.SessionID != bridge.SessionID() {
 		return RemoteRunView{}, fmt.Errorf("run %q 不属于当前会话", runID)
 	}
-	peer := bridge.Hub.Peer(run.HandID)
+	peer := bridge.Hub.PeerByType(hub.PeerHand, run.HandID)
 	if peer == nil || peer.SessionID() != run.ConnectionID {
 		return RemoteRunView{}, fmt.Errorf("run %q 的原 Hand 连接已断开", runID)
 	}

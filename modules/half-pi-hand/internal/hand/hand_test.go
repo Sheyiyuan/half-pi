@@ -32,6 +32,7 @@ func testRPC(runID, tool string, args map[string]any, timeout time.Duration) pro
 func startTestHand(t *testing.T, handID string, cfg *config.Config, onMessage func(protocol.Envelope)) *hub.Hub {
 	t.Helper()
 	h := hub.New()
+	enableTestHandshake(h)
 	h.OnMessage(func(_ *hub.Peer, msg protocol.Envelope) {
 		onMessage(msg)
 	})
@@ -45,7 +46,7 @@ func startTestHand(t *testing.T, handID string, cfg *config.Config, onMessage fu
 	t.Cleanup(srv.Close)
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister(handID, hub.PeerHand, "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials(handID))
 	if err != nil {
 		t.Fatalf("ConnectAndRegister: %v", err)
 	}
@@ -60,6 +61,7 @@ func startTestHand(t *testing.T, handID string, cfg *config.Config, onMessage fu
 
 func TestHandRPCIntegration(t *testing.T) {
 	h := hub.New()
+	enableTestHandshake(h)
 	resultCh := make(chan protocol.RPCResult, 1)
 	messageTypes := make(chan string, 2)
 	h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
@@ -85,7 +87,7 @@ func TestHandRPCIntegration(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("test-hand", "hand", "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("test-hand"))
 	if err != nil {
 		t.Fatalf("ConnectAndRegister: %v", err)
 	}
@@ -104,7 +106,7 @@ func TestHandRPCIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := h.Send("test-hand", *rpcEnv); err != nil {
+	if err := h.SendToType(hub.PeerHand, "test-hand", *rpcEnv); err != nil {
 		t.Fatalf("send RPC: %v", err)
 	}
 	if got := <-messageTypes; got != protocol.TypeRPCAccepted {
@@ -154,7 +156,7 @@ func TestHandGenericToolDoesNotReceiveProgress(t *testing.T) {
 		}
 	})
 	env, _ := protocol.NewEnvelope("", protocol.TypeRPC, testRPC("generic-progress-run", toolName, map[string]any{}, time.Second))
-	if err := h.Send("generic-progress-hand", *env); err != nil {
+	if err := h.SendToType(hub.PeerHand, "generic-progress-hand", *env); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -242,7 +244,7 @@ func TestHandAllowListMiss(t *testing.T) {
 	})
 	rpcEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC,
 		testRPC("allow-miss", "exec_command", map[string]any{"command": "echo no"}, time.Second))
-	if err := h.Send("allow-list-hand", *rpcEnv); err != nil {
+	if err := h.SendToType(hub.PeerHand, "allow-list-hand", *rpcEnv); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -269,7 +271,7 @@ func TestHandMalformedRPCWithRunIDIsRejected(t *testing.T) {
 		Type:    protocol.TypeRPC,
 		Payload: json.RawMessage(`{"run_id":"malformed-run","tool":"read_file","args":[],"deadline_at":9999999999999}`),
 	}
-	if err := h.Send("malformed-hand", env); err != nil {
+	if err := h.SendToType(hub.PeerHand, "malformed-hand", env); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -313,7 +315,7 @@ func TestHandApprovalGuardsDefaultConfirm(t *testing.T) {
 
 	missing := testRPC("approval-missing", toolName, map[string]any{"value": 1}, time.Second)
 	missingEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC, missing)
-	if err := h.Send("approval-hand", *missingEnv); err != nil {
+	if err := h.SendToType(hub.PeerHand, "approval-hand", *missingEnv); err != nil {
 		t.Fatal(err)
 	}
 	if rejected := <-rejectedCh; rejected.Code != protocol.RejectApprovalRequired {
@@ -326,7 +328,7 @@ func TestHandApprovalGuardsDefaultConfirm(t *testing.T) {
 		ApprovedAt: time.Now().Add(-time.Second).UnixMilli(), ExpiresAt: time.Now().Add(time.Second).UnixMilli(),
 	}
 	wrongEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC, wrong)
-	if err := h.Send("approval-hand", *wrongEnv); err != nil {
+	if err := h.SendToType(hub.PeerHand, "approval-hand", *wrongEnv); err != nil {
 		t.Fatal(err)
 	}
 	if rejected := <-rejectedCh; rejected.Code != protocol.RejectApprovalDigestMismatch {
@@ -340,7 +342,7 @@ func TestHandApprovalGuardsDefaultConfirm(t *testing.T) {
 		ApprovedAt: time.Now().Add(-time.Second).UnixMilli(), ExpiresAt: time.Now().Add(time.Second).UnixMilli(),
 	}
 	validEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC, valid)
-	if err := h.Send("approval-hand", *validEnv); err != nil {
+	if err := h.SendToType(hub.PeerHand, "approval-hand", *validEnv); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -387,7 +389,7 @@ func TestHandApprovalSatisfiesCheckConfirmAndPreservesOutputLimit(t *testing.T) 
 		ApprovedAt: time.Now().Add(-time.Second).UnixMilli(), ExpiresAt: time.Now().Add(time.Second).UnixMilli(),
 	}
 	env, _ := protocol.NewEnvelope("", protocol.TypeRPC, rpc)
-	if err := h.Send("check-confirm-hand", *env); err != nil {
+	if err := h.SendToType(hub.PeerHand, "check-confirm-hand", *env); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -433,10 +435,10 @@ func TestHandConcurrentDuplicateRunExecutesOnce(t *testing.T) {
 	rpc := testRPC("same-run", toolName, map[string]any{}, time.Second)
 	first, _ := protocol.NewEnvelope("", protocol.TypeRPC, rpc)
 	second, _ := protocol.NewEnvelope("", protocol.TypeRPC, rpc)
-	if err := h.Send("duplicate-hand", *first); err != nil {
+	if err := h.SendToType(hub.PeerHand, "duplicate-hand", *first); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.Send("duplicate-hand", *second); err != nil {
+	if err := h.SendToType(hub.PeerHand, "duplicate-hand", *second); err != nil {
 		t.Fatal(err)
 	}
 
@@ -477,7 +479,7 @@ func TestHandCancelRunningRPC(t *testing.T) {
 	})
 	rpcEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC,
 		testRPC("cancel-run", "exec_command", map[string]any{"command": "sleep 5", "timeout": 10}, 10*time.Second))
-	if err := h.Send("cancel-hand", *rpcEnv); err != nil {
+	if err := h.SendToType(hub.PeerHand, "cancel-hand", *rpcEnv); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -486,7 +488,7 @@ func TestHandCancelRunningRPC(t *testing.T) {
 		t.Fatal("timeout waiting for accepted")
 	}
 	cancelEnv, _ := protocol.NewEnvelope("", protocol.TypeRPCCancel, protocol.RPCCancel{RunID: "cancel-run", Reason: "user"})
-	if err := h.Send("cancel-hand", *cancelEnv); err != nil {
+	if err := h.SendToType(hub.PeerHand, "cancel-hand", *cancelEnv); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -547,7 +549,7 @@ func TestHandCancelConcurrentRunDoesNotCancelSurvivor(t *testing.T) {
 	for _, run := range []string{"cancelled-run", "survivor-run"} {
 		env, _ := protocol.NewEnvelope("", protocol.TypeRPC,
 			testRPC(run, toolName, map[string]any{"id": run}, 5*time.Second))
-		if err := h.Send("concurrent-cancel-hand", *env); err != nil {
+		if err := h.SendToType(hub.PeerHand, "concurrent-cancel-hand", *env); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -566,7 +568,7 @@ func TestHandCancelConcurrentRunDoesNotCancelSurvivor(t *testing.T) {
 
 	cancelEnv, _ := protocol.NewEnvelope("", protocol.TypeRPCCancel,
 		protocol.RPCCancel{RunID: "cancelled-run", Reason: "user"})
-	if err := h.Send("concurrent-cancel-hand", *cancelEnv); err != nil {
+	if err := h.SendToType(hub.PeerHand, "concurrent-cancel-hand", *cancelEnv); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -603,7 +605,7 @@ func TestHandCancelUnknownAndCompletedRun(t *testing.T) {
 		}
 	})
 	unknownEnv, _ := protocol.NewEnvelope("", protocol.TypeRPCCancel, protocol.RPCCancel{RunID: "unknown-run", Reason: "user"})
-	if err := h.Send("cancel-status-hand", *unknownEnv); err != nil {
+	if err := h.SendToType(hub.PeerHand, "cancel-status-hand", *unknownEnv); err != nil {
 		t.Fatal(err)
 	}
 	if result := <-cancelCh; result.Status != protocol.CancelUnknownRun {
@@ -612,7 +614,7 @@ func TestHandCancelUnknownAndCompletedRun(t *testing.T) {
 
 	rpcEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC,
 		testRPC("done-run", "exec_command", map[string]any{"command": "echo done"}, time.Second))
-	if err := h.Send("cancel-status-hand", *rpcEnv); err != nil {
+	if err := h.SendToType(hub.PeerHand, "cancel-status-hand", *rpcEnv); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -621,7 +623,7 @@ func TestHandCancelUnknownAndCompletedRun(t *testing.T) {
 		t.Fatal("timeout waiting for completed result")
 	}
 	doneCancel, _ := protocol.NewEnvelope("", protocol.TypeRPCCancel, protocol.RPCCancel{RunID: "done-run", Reason: "user"})
-	if err := h.Send("cancel-status-hand", *doneCancel); err != nil {
+	if err := h.SendToType(hub.PeerHand, "cancel-status-hand", *doneCancel); err != nil {
 		t.Fatal(err)
 	}
 	if result := <-cancelCh; result.Status != protocol.CancelAlreadyDone {
@@ -631,6 +633,7 @@ func TestHandCancelUnknownAndCompletedRun(t *testing.T) {
 
 func TestHandDisconnectCancelsRunningRPC(t *testing.T) {
 	hubServer := hub.New()
+	enableTestHandshake(hubServer)
 	acceptedCh := make(chan struct{}, 1)
 	hubServer.OnMessage(func(_ *hub.Peer, msg protocol.Envelope) {
 		if msg.Type == protocol.TypeRPCAccepted {
@@ -647,7 +650,7 @@ func TestHandDisconnectCancelsRunningRPC(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("disconnect-hand", hub.PeerHand, "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("disconnect-hand"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,7 +661,7 @@ func TestHandDisconnectCancelsRunningRPC(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 	rpcEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC,
 		testRPC("disconnect-run", "exec_command", map[string]any{"command": "sleep 5", "timeout": 10}, 10*time.Second))
-	if err := hubServer.Send("disconnect-hand", *rpcEnv); err != nil {
+	if err := hubServer.SendToType(hub.PeerHand, "disconnect-hand", *rpcEnv); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -666,7 +669,7 @@ func TestHandDisconnectCancelsRunningRPC(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("timeout waiting for accepted")
 	}
-	hubServer.Remove("disconnect-hand")
+	hubServer.RemoveByType(hub.PeerHand, "disconnect-hand")
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		hand.tasksMu.Lock()
@@ -710,7 +713,7 @@ func TestHandInfoIncludesToolSchemas(t *testing.T) {
 		}
 	})
 	req, _ := protocol.NewEnvelope("", protocol.TypeHandInfoReq, protocol.HandInfoReq{ID: "schema-request"})
-	if err := h.Send("schema-hand", *req); err != nil {
+	if err := h.SendToType(hub.PeerHand, "schema-hand", *req); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -732,6 +735,7 @@ func TestHandInfoIncludesToolSchemas(t *testing.T) {
 
 func TestHandServeStopsOnContextCancel(t *testing.T) {
 	h := hub.New()
+	enableTestHandshake(h)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{}
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -743,7 +747,7 @@ func TestHandServeStopsOnContextCancel(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("test-hand-cancel", "hand", "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("test-hand-cancel"))
 	if err != nil {
 		t.Fatalf("ConnectAndRegister: %v", err)
 	}
@@ -770,6 +774,7 @@ func TestHandServeStopsOnContextCancel(t *testing.T) {
 
 func TestHandUnknownTool(t *testing.T) {
 	h := hub.New()
+	enableTestHandshake(h)
 	rejectedCh := make(chan protocol.RPCRejected, 1)
 	h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
 		if msg.Type == protocol.TypeRPCRejected {
@@ -788,7 +793,7 @@ func TestHandUnknownTool(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("test-hand-2", "hand", "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("test-hand-2"))
 	if err != nil {
 		t.Fatalf("ConnectAndRegister: %v", err)
 	}
@@ -803,7 +808,7 @@ func TestHandUnknownTool(t *testing.T) {
 
 	rpcEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC,
 		testRPC("rpc-unknown", "nonexistent_tool", map[string]any{}, time.Second))
-	h.Send("test-hand-2", *rpcEnv)
+	h.SendToType(hub.PeerHand, "test-hand-2", *rpcEnv)
 
 	select {
 	case rejected := <-rejectedCh:
@@ -817,6 +822,7 @@ func TestHandUnknownTool(t *testing.T) {
 
 func TestHandDenyTool(t *testing.T) {
 	h := hub.New()
+	enableTestHandshake(h)
 	rejectedCh := make(chan protocol.RPCRejected, 1)
 	h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
 		if msg.Type == protocol.TypeRPCRejected {
@@ -835,7 +841,7 @@ func TestHandDenyTool(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("test-hand-3", "hand", "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("test-hand-3"))
 	if err != nil {
 		t.Fatalf("ConnectAndRegister: %v", err)
 	}
@@ -857,7 +863,7 @@ func TestHandDenyTool(t *testing.T) {
 
 	rpcEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC,
 		testRPC("rpc-denied", "exec_command", map[string]any{"command": "echo hello"}, time.Second))
-	h.Send("test-hand-3", *rpcEnv)
+	h.SendToType(hub.PeerHand, "test-hand-3", *rpcEnv)
 
 	select {
 	case rejected := <-rejectedCh:
@@ -874,6 +880,7 @@ func TestHandDenyTool(t *testing.T) {
 
 func TestHandBlockedCommand(t *testing.T) {
 	h := hub.New()
+	enableTestHandshake(h)
 	rejectedCh := make(chan protocol.RPCRejected, 1)
 	h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
 		if msg.Type == protocol.TypeRPCRejected {
@@ -892,7 +899,7 @@ func TestHandBlockedCommand(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("test-hand-4", "hand", "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("test-hand-4"))
 	if err != nil {
 		t.Fatalf("ConnectAndRegister: %v", err)
 	}
@@ -912,7 +919,7 @@ func TestHandBlockedCommand(t *testing.T) {
 		ApprovedAt: time.Now().Add(-time.Second).UnixMilli(), ExpiresAt: time.Now().Add(time.Second).UnixMilli(),
 	}
 	rpcEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC, rpc)
-	h.Send("test-hand-4", *rpcEnv)
+	h.SendToType(hub.PeerHand, "test-hand-4", *rpcEnv)
 
 	select {
 	case rejected := <-rejectedCh:
@@ -929,6 +936,7 @@ func TestHandBlockedCommand(t *testing.T) {
 
 func TestHandRPCTimeoutCancelsCommand(t *testing.T) {
 	h := hub.New()
+	enableTestHandshake(h)
 	resultCh := make(chan protocol.RPCResult, 1)
 	h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
 		if msg.Type == protocol.TypeRPCResult {
@@ -947,7 +955,7 @@ func TestHandRPCTimeoutCancelsCommand(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("test-hand-timeout", "hand", "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("test-hand-timeout"))
 	if err != nil {
 		t.Fatalf("ConnectAndRegister: %v", err)
 	}
@@ -962,7 +970,7 @@ func TestHandRPCTimeoutCancelsCommand(t *testing.T) {
 
 	rpcEnv, _ := protocol.NewEnvelope("", protocol.TypeRPC,
 		testRPC("rpc-timeout", "exec_command", map[string]any{"command": "sleep 2", "timeout": 5}, 100*time.Millisecond))
-	h.Send("test-hand-timeout", *rpcEnv)
+	h.SendToType(hub.PeerHand, "test-hand-timeout", *rpcEnv)
 
 	select {
 	case result := <-resultCh:

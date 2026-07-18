@@ -51,7 +51,7 @@ type handInfoResult struct {
 }
 
 func queryOneHand(ctx context.Context, bridge *RemoteBridge, handID string, timeout time.Duration) *executor.ToolResult {
-	peer := bridge.Hub.Peer(handID)
+	peer := bridge.Hub.PeerByType(hub.PeerHand, handID)
 	if peer == nil || peer.Type != hub.PeerHand {
 		return &executor.ToolResult{Error: fmt.Sprintf("Hand %q 不在线或不存在", handID)}
 	}
@@ -101,7 +101,7 @@ func doHandInfoQuery(ctx context.Context, bridge *RemoteBridge, handID string, t
 	if err != nil {
 		return handInfoResult{}, false
 	}
-	if err := bridge.Hub.Send(handID, *req); err != nil {
+	if err := bridge.Hub.SendToType(hub.PeerHand, handID, *req); err != nil {
 		return handInfoResult{}, false
 	}
 

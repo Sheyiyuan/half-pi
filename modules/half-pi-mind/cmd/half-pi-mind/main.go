@@ -14,6 +14,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/dispatcher"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/setup"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
@@ -51,6 +52,12 @@ func main() {
 		os.Exit(1)
 	}
 	defer db.Close()
+	if count, err := db.LegacyHandTokenCount(); err != nil {
+		fmt.Fprintf(os.Stderr, "legacy Hand credential check failed: %v\n", err)
+		os.Exit(1)
+	} else if count > 0 {
+		fmt.Fprintf(os.Stderr, "warning: %d legacy Hand credentials are disabled; recreate them with /hand add\n", count)
+	}
 	if recovered, err := db.RecoverRemoteRuns(); err != nil {
 		fmt.Fprintf(os.Stderr, "remote run recovery failed: %v\n", err)
 		os.Exit(1)
@@ -81,13 +88,8 @@ func main() {
 	}
 
 	wsHub := hub.New()
-	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus, func(token, handID string) (string, error) {
-		ht, err := db.AuthenticateHandToken(token, handID)
-		if err != nil {
-			return "", fmt.Errorf("invalid token")
-		}
-		return ht.Label, nil
-	})
+	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus)
+	dispatcher.Install(wsHub, db, authority)
 	taskService := remoteexec.NewTaskService(authority, db)
 
 	var httpServer *http.Server

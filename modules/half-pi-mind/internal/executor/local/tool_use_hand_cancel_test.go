@@ -39,6 +39,7 @@ func (a *toggledAuditor) TransitionRemoteRun(remoteexec.AuditTransition) error {
 
 func TestRequestRemoteCancelSendsRPCAndMarksTimeout(t *testing.T) {
 	h := hub.New()
+	enableTestHandshake(h)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{}
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -49,7 +50,7 @@ func TestRequestRemoteCancelSendsRPCAndMarksTimeout(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("cancel-hand", hub.PeerHand, "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("cancel-hand"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,15 +76,15 @@ func TestRequestRemoteCancelSendsRPCAndMarksTimeout(t *testing.T) {
 	})
 
 	bridge := &RemoteBridge{Hub: h, Runs: runs}
-	peer := h.Peer("cancel-hand")
+	peer := h.PeerByType(hub.PeerHand, "cancel-hand")
 	finished := make(chan struct{})
 	go func() {
 		requestRemoteCancel(bridge, peer, "cancel-run", "cancel-hand", "timeout")
 		close(finished)
 	}()
 
-	var env protocol.Envelope
-	if err := session.Conn.ReadJSON(&env); err != nil {
+	env, err := session.Read()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if env.Type != protocol.TypeRPCCancel {
@@ -112,6 +113,7 @@ func TestRequestRemoteCancelSendsRPCAndMarksTimeout(t *testing.T) {
 
 func TestRequestRemoteCancelStillSendsWhenAuditFails(t *testing.T) {
 	h := hub.New()
+	enableTestHandshake(h)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{}
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -120,7 +122,7 @@ func TestRequestRemoteCancelStillSendsWhenAuditFails(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	session, err := wss.NewClient("ws"+strings.TrimPrefix(srv.URL, "http")).ConnectAndRegister("audit-hand", hub.PeerHand, "", nil)
+	session, err := wss.NewClient("ws" + strings.TrimPrefix(srv.URL, "http")).ConnectAndRegister(testHandCredentials("audit-hand"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +150,7 @@ func TestRequestRemoteCancelStillSendsWhenAuditFails(t *testing.T) {
 	auditor.fail <- true
 	finished := make(chan struct{})
 	go func() {
-		requestRemoteCancel(&RemoteBridge{Hub: h, Runs: runs}, h.Peer("audit-hand"), "audit-cancel-run", "audit-hand", "timeout")
+		requestRemoteCancel(&RemoteBridge{Hub: h, Runs: runs}, h.PeerByType(hub.PeerHand, "audit-hand"), "audit-cancel-run", "audit-hand", "timeout")
 		close(finished)
 	}()
 
@@ -177,6 +179,7 @@ func TestRequestRemoteCancelStillSendsWhenAuditFails(t *testing.T) {
 
 func TestUseHandTimeoutSendsCancel(t *testing.T) {
 	h := hub.New()
+	enableTestHandshake(h)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upgrader := websocket.Upgrader{}
 		conn, err := upgrader.Upgrade(w, r, nil)
@@ -187,7 +190,7 @@ func TestUseHandTimeoutSendsCancel(t *testing.T) {
 	defer srv.Close()
 
 	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http")
-	session, err := wss.NewClient(wsURL).ConnectAndRegister("timeout-hand", hub.PeerHand, "", nil)
+	session, err := wss.NewClient(wsURL).ConnectAndRegister(testHandCredentials("timeout-hand"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,8 +225,8 @@ func TestUseHandTimeoutSendsCancel(t *testing.T) {
 		resultCh <- tool.Execute(WithRemoteBridge(context.Background(), bridge), args)
 	}()
 
-	var rpcEnv protocol.Envelope
-	if err := session.Conn.ReadJSON(&rpcEnv); err != nil {
+	rpcEnv, err := session.Read()
+	if err != nil {
 		t.Fatal(err)
 	}
 	rpc, err := protocol.DecodePayload[protocol.RPC](&rpcEnv)
@@ -235,8 +238,8 @@ func TestUseHandTimeoutSendsCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var cancelEnv protocol.Envelope
-	if err := session.Conn.ReadJSON(&cancelEnv); err != nil {
+	cancelEnv, err := session.Read()
+	if err != nil {
 		t.Fatal(err)
 	}
 	if cancelEnv.Type != protocol.TypeRPCCancel {

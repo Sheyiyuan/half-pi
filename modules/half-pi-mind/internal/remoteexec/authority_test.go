@@ -36,14 +36,14 @@ func (w *authorityEventWriter) Close() error { return nil }
 func TestAuthorityRoutesLifecycleWithoutCore(t *testing.T) {
 	registry := NewRegistry()
 	wsHub := hub.New()
-	authority := NewAuthority(wsHub, registry, nil, func(string, string) (string, error) { return "test", nil })
+	authority := NewAuthority(wsHub, registry, nil)
 	createSentRun(t, registry, "run-1", "hand-1")
 	done, _ := registry.Done("run-1")
 	peer := &hub.Peer{ID: "hand-1", Type: hub.PeerHand}
 	accepted, _ := protocol.NewEnvelope("", protocol.TypeRPCAccepted, protocol.RPCAccepted{RunID: "run-1", StartedAt: time.Now().UnixMilli()})
-	authority.handleMessage(peer, *accepted)
+	authority.HandleHandMessage(peer, *accepted)
 	result, _ := protocol.NewEnvelope("", protocol.TypeRPCResult, protocol.RPCResult{RunID: "run-1", Success: true})
-	authority.handleMessage(peer, *result)
+	authority.HandleHandMessage(peer, *result)
 	select {
 	case <-done:
 	default:
@@ -58,7 +58,7 @@ func TestAuthorityRoutesLifecycleWithoutCore(t *testing.T) {
 func TestAuthorityFailClosesTerminalAuditFailure(t *testing.T) {
 	auditor := &recordingAuditor{}
 	registry := NewRegistry(auditor)
-	authority := NewAuthority(hub.New(), registry, nil, func(string, string) (string, error) { return "test", nil })
+	authority := NewAuthority(hub.New(), registry, nil)
 	createSentRun(t, registry, "run-audit-failure", "hand-1")
 	if err := registry.ApplyAccepted("hand-1", protocol.RPCAccepted{
 		RunID: "run-audit-failure", StartedAt: time.Now().UnixMilli(),
@@ -72,7 +72,7 @@ func TestAuthorityFailClosesTerminalAuditFailure(t *testing.T) {
 	result, _ := protocol.NewEnvelope("", protocol.TypeRPCResult, protocol.RPCResult{
 		RunID: "run-audit-failure", Success: true,
 	})
-	authority.handleMessage(&hub.Peer{ID: "hand-1", Type: hub.PeerHand}, *result)
+	authority.HandleHandMessage(&hub.Peer{ID: "hand-1", Type: hub.PeerHand}, *result)
 	select {
 	case <-done:
 	default:
@@ -87,22 +87,33 @@ func TestAuthorityFailClosesTerminalAuditFailure(t *testing.T) {
 func TestAuthorityDisconnectMarksRunsLost(t *testing.T) {
 	registry := NewRegistry()
 	wsHub := hub.New()
-	authority := NewAuthority(wsHub, registry, nil, func(string, string) (string, error) { return "test", nil })
+	authority := NewAuthority(wsHub, registry, nil)
 	createSentRun(t, registry, "run-1", "hand-1")
-	authority.handleDisconnect(&hub.Peer{ID: "hand-1", Type: hub.PeerHand})
+	authority.HandleHandDisconnect(&hub.Peer{ID: "hand-1", Type: hub.PeerHand})
 	run, _ := registry.Snapshot("run-1")
 	if run.Status != protocol.RunLost {
 		t.Fatalf("status = %s, want lost", run.Status)
 	}
 }
 
+func TestAuthorityIgnoresFaceDisconnect(t *testing.T) {
+	registry := NewRegistry()
+	authority := NewAuthority(hub.New(), registry, nil)
+	createSentRun(t, registry, "run-1", "same-label")
+	authority.HandleHandDisconnect(&hub.Peer{ID: "same-label", Type: hub.PeerFace})
+	run, _ := registry.Snapshot("run-1")
+	if run.Status != protocol.RunSent {
+		t.Fatalf("status = %s, want sent", run.Status)
+	}
+}
+
 func TestAuthorityRoutesPendingHandInfo(t *testing.T) {
-	authority := NewAuthority(hub.New(), NewRegistry(), nil, func(string, string) (string, error) { return "test", nil })
+	authority := NewAuthority(hub.New(), NewRegistry(), nil)
 	ch, cancel := authority.PendingCall("info-1", 0, "hand-1")
 	defer cancel()
 	peer := &hub.Peer{ID: "hand-1", Type: hub.PeerHand}
 	response, _ := protocol.NewEnvelope("", protocol.TypeHandInfoResp, protocol.HandInfoResp{ID: "info-1"})
-	authority.handleMessage(peer, *response)
+	authority.HandleHandMessage(peer, *response)
 	select {
 	case <-ch:
 	case <-time.After(time.Second):
@@ -111,19 +122,19 @@ func TestAuthorityRoutesPendingHandInfo(t *testing.T) {
 }
 
 func TestAuthorityRoutesTaskErrorsOnlyFromExpectedHand(t *testing.T) {
-	authority := NewAuthority(hub.New(), NewRegistry(), nil, func(string, string) (string, error) { return "test", nil })
+	authority := NewAuthority(hub.New(), NewRegistry(), nil)
 	ch, cancel := authority.PendingCall("request-1", 0, "hand-1")
 	defer cancel()
 	errEnv, _ := protocol.NewEnvelope("", protocol.TypeError, protocol.ErrorMsg{
 		MsgID: "request-1", Code: "unknown_task", Message: "missing",
 	})
-	authority.handleMessage(&hub.Peer{ID: "hand-2", Type: hub.PeerHand}, *errEnv)
+	authority.HandleHandMessage(&hub.Peer{ID: "hand-2", Type: hub.PeerHand}, *errEnv)
 	select {
 	case <-ch:
 		t.Fatal("wrong Hand response was delivered")
 	default:
 	}
-	authority.handleMessage(&hub.Peer{ID: "hand-1", Type: hub.PeerHand}, *errEnv)
+	authority.HandleHandMessage(&hub.Peer{ID: "hand-1", Type: hub.PeerHand}, *errEnv)
 	select {
 	case got := <-ch:
 		if got.Type != protocol.TypeError {
@@ -135,14 +146,14 @@ func TestAuthorityRoutesTaskErrorsOnlyFromExpectedHand(t *testing.T) {
 }
 
 func TestAuthorityPendingPeerCallRejectsWrongConnection(t *testing.T) {
-	authority := NewAuthority(hub.New(), NewRegistry(), nil, nil)
+	authority := NewAuthority(hub.New(), NewRegistry(), nil)
 	expected := &hub.Peer{ID: "hand-1", Type: hub.PeerHand}
 	ch, cancel := authority.PendingPeerCall("request-1", 0, expected)
 	defer cancel()
 	env, _ := protocol.NewEnvelope("", protocol.TypeTaskCancelResult, protocol.TaskCancelResult{
 		ID: "request-1", TaskID: "task-1", Status: protocol.TaskCancelCancelled,
 	})
-	authority.handleMessage(&hub.Peer{ID: "hand-1", Type: hub.PeerHand}, *env)
+	authority.HandleHandMessage(&hub.Peer{ID: "hand-1", Type: hub.PeerHand}, *env)
 	select {
 	case <-ch:
 		t.Fatal("response from a different peer connection was delivered")
@@ -151,11 +162,11 @@ func TestAuthorityPendingPeerCallRejectsWrongConnection(t *testing.T) {
 }
 
 func TestAuthorityDeliversMalformedTaskResponseByEnvelopeID(t *testing.T) {
-	authority := NewAuthority(hub.New(), NewRegistry(), nil, nil)
+	authority := NewAuthority(hub.New(), NewRegistry(), nil)
 	peer := &hub.Peer{ID: "hand-1", Type: hub.PeerHand}
 	ch, cancel := authority.PendingPeerCall("request-1", 0, peer)
 	defer cancel()
-	authority.handleMessage(peer, protocol.Envelope{
+	authority.HandleHandMessage(peer, protocol.Envelope{
 		MsgID: "request-1", Type: protocol.TypeTaskStatusResp, Payload: []byte(`{"id":`),
 	})
 	select {
@@ -173,29 +184,29 @@ func TestAuthorityPublishesOnlyAcceptedProgress(t *testing.T) {
 	bus := events.NewEventBus()
 	writer := &authorityEventWriter{}
 	bus.Subscribe(writer)
-	authority := NewAuthority(hub.New(), registry, bus, func(string, string) (string, error) { return "test", nil })
+	authority := NewAuthority(hub.New(), registry, bus)
 	createSentRun(t, registry, "progress-run", "hand-1")
 	peer := &hub.Peer{ID: "hand-1", Type: hub.PeerHand}
 	early, _ := protocol.NewEnvelope("", protocol.TypeRPCProgress, protocol.RPCProgress{
 		RunID: "progress-run", Seq: 1, Kind: protocol.ProgressStdout, Data: "early",
 	})
-	authority.handleMessage(peer, *early)
+	authority.HandleHandMessage(peer, *early)
 	accepted, _ := protocol.NewEnvelope("", protocol.TypeRPCAccepted, protocol.RPCAccepted{
 		RunID: "progress-run", StartedAt: time.Now().UnixMilli(),
 	})
-	authority.handleMessage(peer, *accepted)
+	authority.HandleHandMessage(peer, *accepted)
 	for _, seq := range []int64{1, 1, 3} {
 		env, _ := protocol.NewEnvelope("", protocol.TypeRPCProgress, protocol.RPCProgress{
 			RunID: "progress-run", Seq: seq, Kind: protocol.ProgressStdout, Data: "data",
 		})
-		authority.handleMessage(peer, *env)
+		authority.HandleHandMessage(peer, *env)
 	}
 	result, _ := protocol.NewEnvelope("", protocol.TypeRPCResult, protocol.RPCResult{RunID: "progress-run", Success: true})
-	authority.handleMessage(peer, *result)
+	authority.HandleHandMessage(peer, *result)
 	late, _ := protocol.NewEnvelope("", protocol.TypeRPCProgress, protocol.RPCProgress{
 		RunID: "progress-run", Seq: 4, Kind: protocol.ProgressStdout, Data: "late",
 	})
-	authority.handleMessage(peer, *late)
+	authority.HandleHandMessage(peer, *late)
 	bus.Close()
 	writer.mu.Lock()
 	defer writer.mu.Unlock()
@@ -225,7 +236,7 @@ func TestAuthorityPublishesProgressBeforeResultDeterministically(t *testing.T) {
 	bus := events.NewEventBus()
 	writer := &authorityEventWriter{block: make(chan struct{}), start: make(chan struct{}, 1)}
 	bus.Subscribe(writer)
-	authority := NewAuthority(hub.New(), registry, bus, func(string, string) (string, error) { return "test", nil })
+	authority := NewAuthority(hub.New(), registry, bus)
 	createSentRun(t, registry, "ordered-run", "hand-1")
 	if err := registry.ApplyAccepted("hand-1", protocol.RPCAccepted{
 		RunID: "ordered-run", StartedAt: time.Now().UnixMilli(),
@@ -238,14 +249,14 @@ func TestAuthorityPublishesProgressBeforeResultDeterministically(t *testing.T) {
 	})
 	progressDone := make(chan struct{})
 	go func() {
-		authority.handleMessage(peer, *progress)
+		authority.HandleHandMessage(peer, *progress)
 		close(progressDone)
 	}()
 	<-writer.start
 	result, _ := protocol.NewEnvelope("", protocol.TypeRPCResult, protocol.RPCResult{RunID: "ordered-run", Success: true})
 	resultDone := make(chan struct{})
 	go func() {
-		authority.handleMessage(peer, *result)
+		authority.HandleHandMessage(peer, *result)
 		close(resultDone)
 	}()
 	select {
@@ -275,7 +286,7 @@ func TestAuthoritySerializesResultAdmissionBehindProgressPublication(t *testing.
 	bus := events.NewEventBus()
 	writer := &authorityEventWriter{block: make(chan struct{}), start: make(chan struct{}, 1)}
 	bus.Subscribe(writer)
-	authority := NewAuthority(hub.New(), registry, bus, func(string, string) (string, error) { return "test", nil })
+	authority := NewAuthority(hub.New(), registry, bus)
 	createSentRun(t, registry, "serialized-run", "hand-1")
 	if err := registry.ApplyAccepted("hand-1", protocol.RPCAccepted{
 		RunID: "serialized-run", StartedAt: time.Now().UnixMilli(),
@@ -286,12 +297,12 @@ func TestAuthoritySerializesResultAdmissionBehindProgressPublication(t *testing.
 	progress, _ := protocol.NewEnvelope("", protocol.TypeRPCProgress, protocol.RPCProgress{
 		RunID: "serialized-run", Seq: 1, Kind: protocol.ProgressStdout, Data: "first",
 	})
-	go authority.handleMessage(peer, *progress)
+	go authority.HandleHandMessage(peer, *progress)
 	<-writer.start
 	result, _ := protocol.NewEnvelope("", protocol.TypeRPCResult, protocol.RPCResult{RunID: "serialized-run", Success: true})
 	resultDone := make(chan struct{})
 	go func() {
-		authority.handleMessage(peer, *result)
+		authority.HandleHandMessage(peer, *result)
 		close(resultDone)
 	}()
 	time.Sleep(20 * time.Millisecond)

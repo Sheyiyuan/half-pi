@@ -303,7 +303,7 @@ func (s *TaskService) authorized(taskID, sessionID string) (Task, error) {
 }
 
 func (s *TaskService) currentPeer(handID string) (*hub.Peer, error) {
-	peer := s.hub.Peer(handID)
+	peer := s.hub.PeerByType(hub.PeerHand, handID)
 	if peer == nil || peer.Type != hub.PeerHand {
 		return nil, fmt.Errorf("%w: %q", ErrHandOffline, handID)
 	}

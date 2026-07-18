@@ -37,10 +37,10 @@ func Init() (*Env, error) {
 		EventLog:  filepath.Join(halfPiDir, "logs", "events.jsonl"),
 	}
 
-	// 创建目录
+	// 运行目录可能包含配置、数据库和凭据，统一限制为当前用户访问。
 	for _, dir := range []string{env.HomeDir, env.DataDir, env.LogDir, env.SkillsDir, filepath.Dir(env.DBPath)} {
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			return nil, fmt.Errorf("failed to create directory %s: %w", dir, err)
+		if err := secureDirectory(dir); err != nil {
+			return nil, fmt.Errorf("secure directory %s: %w", dir, err)
 		}
 	}
 
@@ -53,12 +53,10 @@ func Init() (*Env, error) {
 }
 
 func writeDefaultConfig(path string) error {
-	_, err := os.Stat(path)
-	if err == nil {
-		return nil // 文件已存在，不覆盖
-	}
-	if !os.IsNotExist(err) {
-		return fmt.Errorf("failed to check config file: %w", err)
+	if exists, err := secureOptionalRegular(path); err != nil {
+		return fmt.Errorf("secure config file: %w", err)
+	} else if exists {
+		return nil
 	}
 
 	defaultCfg := `# half-pi 配置文件
@@ -113,8 +111,16 @@ temperature = 0.3
 input_price_per_1k = 0.0
 output_price_per_1k = 0.0
 `
-	if err := os.WriteFile(path, []byte(defaultCfg), 0600); err != nil {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
 		return fmt.Errorf("failed to write default config: %w", err)
 	}
-	return nil
+	if _, err := f.Write([]byte(defaultCfg)); err != nil {
+		f.Close()
+		return fmt.Errorf("failed to write default config: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		return fmt.Errorf("failed to close default config: %w", err)
+	}
+	return secureRegular(path)
 }
