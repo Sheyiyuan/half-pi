@@ -55,6 +55,11 @@ type Auditor interface {
 	TransitionRemoteRun(AuditTransition) error
 }
 
+// TaskAuditor 原子持久化后台 run 及其任务快照。
+type TaskAuditor interface {
+	CreateRemoteRunTask(AuditRun, Task) error
+}
+
 // ProgressAuditor 可选地持久化进度；失败不得阻断 run 状态机。
 type ProgressAuditor interface {
 	AppendRemoteRunProgress(AuditProgress) error

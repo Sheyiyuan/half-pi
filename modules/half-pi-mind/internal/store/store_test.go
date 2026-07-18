@@ -500,6 +500,9 @@ func TestHandTokenValidate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ValidateHandToken: %v", err)
 	}
+	if matched.HandID != "test-hand" {
+		t.Fatalf("HandID = %q", matched.HandID)
+	}
 	if matched.Label != "test-hand" {
 		t.Errorf("label = %q", matched.Label)
 	}
@@ -512,6 +515,20 @@ func TestHandTokenValidate(t *testing.T) {
 	_, err = s.ValidateHandToken("")
 	if err == nil {
 		t.Error("ValidateHandToken should fail for empty token")
+	}
+}
+
+func TestHandTokenCannotChangeHandIdentity(t *testing.T) {
+	s := newTestStore(t)
+	ht, err := s.AddHandToken("hand-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AuthenticateHandToken(ht.Token, "hand-a"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.AuthenticateHandToken(ht.Token, "hand-b"); err == nil {
+		t.Fatal("token authenticated a different Hand ID")
 	}
 }
 

@@ -57,6 +57,12 @@ func main() {
 	} else if recovered > 0 {
 		fmt.Fprintf(os.Stderr, "recovered %d unfinished remote runs\n", recovered)
 	}
+	if recovered, err := db.RecoverRemoteTasks(); err != nil {
+		fmt.Fprintf(os.Stderr, "remote task recovery failed: %v\n", err)
+		os.Exit(1)
+	} else if recovered > 0 {
+		fmt.Fprintf(os.Stderr, "marked %d unfinished remote tasks stale\n", recovered)
+	}
 
 	bus := events.NewEventBus()
 	defer bus.Close()
@@ -75,13 +81,14 @@ func main() {
 	}
 
 	wsHub := hub.New()
-	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus, func(token string) (string, error) {
-		ht, err := db.ValidateHandToken(token)
+	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus, func(token, handID string) (string, error) {
+		ht, err := db.AuthenticateHandToken(token, handID)
 		if err != nil {
 			return "", fmt.Errorf("invalid token")
 		}
 		return ht.Label, nil
 	})
+	taskService := remoteexec.NewTaskService(authority, db)
 
 	var httpServer *http.Server
 	if cfg.Server.Enabled {
@@ -105,7 +112,7 @@ func main() {
 	}
 
 	if replMode {
-		runREPL(env, cfg, db, bus, authority)
+		runREPL(env, cfg, db, bus, authority, taskService)
 	} else {
 		runService(env, bus)
 	}

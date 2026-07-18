@@ -115,6 +115,15 @@ func (r *Registry) CreateWithMetadata(id, sessionID, handID, tool string, metada
 
 // CreateForPeer 创建并绑定具体 Hand 连接的 run。
 func (r *Registry) CreateForPeer(id, sessionID, handID, connectionID, tool string, metadata AuditMetadata) error {
+	return r.createForPeer(id, sessionID, handID, connectionID, tool, metadata, nil)
+}
+
+// CreateTaskForPeer 原子创建并绑定后台 run 与任务快照。
+func (r *Registry) CreateTaskForPeer(id, sessionID, handID, connectionID, tool string, metadata AuditMetadata, task Task) error {
+	return r.createForPeer(id, sessionID, handID, connectionID, tool, metadata, &task)
+}
+
+func (r *Registry) createForPeer(id, sessionID, handID, connectionID, tool string, metadata AuditMetadata, task *Task) error {
 	if id == "" || handID == "" || tool == "" {
 		return fmt.Errorf("run id, hand id and tool are required")
 	}
@@ -129,10 +138,24 @@ func (r *Registry) CreateForPeer(id, sessionID, handID, connectionID, tool strin
 		Status: protocol.RunCreated, CreatedAt: time.Now(), Metadata: metadata, done: make(chan struct{}),
 	}
 	if r.auditor != nil {
-		if err := r.auditor.CreateRemoteRun(AuditRun{
+		auditRun := AuditRun{
 			ID: id, SessionID: sessionID, HandID: handID, Tool: tool,
 			Metadata: metadata, Status: run.Status, CreatedAt: run.CreatedAt,
-		}); err != nil {
+		}
+		var err error
+		if task != nil {
+			task.TaskID, task.SessionID, task.HandID, task.Tool = id, sessionID, handID, tool
+			task.ArgsDigest = metadata.ArgsDigest
+			task.Status, task.CreatedAt, task.UpdatedAt, task.Stale = protocol.TaskPending, run.CreatedAt, run.CreatedAt, true
+			taskAuditor, ok := r.auditor.(TaskAuditor)
+			if !ok {
+				return fmt.Errorf("remote run auditor does not support atomic task creation")
+			}
+			err = taskAuditor.CreateRemoteRunTask(auditRun, *task)
+		} else {
+			err = r.auditor.CreateRemoteRun(auditRun)
+		}
+		if err != nil {
 			return err
 		}
 	}

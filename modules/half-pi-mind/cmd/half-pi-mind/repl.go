@@ -20,7 +20,7 @@ import (
 )
 
 // runREPL 初始化 Agent Core 并进入交互式 REPL。
-func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.EventBus, authority *remoteexec.Authority) {
+func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.EventBus, authority *remoteexec.Authority, taskService *remoteexec.TaskService) {
 	modelID := cfg.LLM.DefaultModel
 	if modelID == "" && len(cfg.LLM.Models) > 0 {
 		modelID = cfg.LLM.Models[0].ID
@@ -67,7 +67,7 @@ func runREPL(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.Ev
 		if existing, ok := actors[id]; ok {
 			return existing.core, existing.bridge, nil
 		}
-		bridge := &local.RemoteBridge{Hub: authority.Hub, Runs: authority.Registry, PendingCall: authority.PendingCall}
+		bridge := &local.RemoteBridge{Hub: authority.Hub, Runs: authority.Registry, Tasks: taskService, PendingCall: authority.PendingCall}
 		exec := local.New(bridge)
 		core, err := agentcore.New(provider, exec)
 		if err != nil {

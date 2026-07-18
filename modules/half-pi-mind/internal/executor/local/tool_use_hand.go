@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
@@ -24,29 +25,39 @@ func init() {
 				{Name: "hand_id", Type: "string", Description: "目标 Hand ID，不传则用默认 Hand"},
 				{Name: "confirm", Type: "boolean", Description: "设为 true 会在执行前请求用户确认"},
 				{Name: "timeout_ms", Type: "integer", Description: "超时毫秒数（默认 30000）"},
+				{Name: "background", Type: "boolean", Description: "作为 Hand 持久化后台任务启动（强制确认）"},
+				{Name: "task_timeout_ms", Type: "integer", Description: "后台任务最长运行毫秒数"},
 			},
 			Required: []string{"tool", "args"},
 		},
 		Execute: func(ctx context.Context, args json.RawMessage) *executor.ToolResult {
 			bridge := remoteBridgeFromContext(ctx)
-			if bridge == nil || bridge.Runs == nil {
+			if bridge == nil || bridge.Runs == nil || bridge.Hub == nil || bridge.ActiveHand == nil || bridge.CheckAndConfirm == nil {
 				return &executor.ToolResult{Error: "远程执行系统未初始化"}
 			}
 
 			var params struct {
-				Tool      string         `json:"tool"`
-				Args      map[string]any `json:"args"`
-				HandID    string         `json:"hand_id"`
-				Confirm   bool           `json:"confirm"`
-				TimeoutMs int            `json:"timeout_ms"`
+				Tool          string         `json:"tool"`
+				Args          map[string]any `json:"args"`
+				HandID        string         `json:"hand_id"`
+				Confirm       bool           `json:"confirm"`
+				TimeoutMs     int            `json:"timeout_ms"`
+				Background    bool           `json:"background"`
+				TaskTimeoutMs int64          `json:"task_timeout_ms"`
 			}
 			decoder := json.NewDecoder(bytes.NewReader(args))
 			decoder.UseNumber()
 			if err := decoder.Decode(&params); err != nil {
 				return &executor.ToolResult{Error: fmt.Sprintf("参数解析失败: %v", err)}
 			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				return &executor.ToolResult{Error: "参数解析失败: JSON 后存在多余内容"}
+			}
 			if params.Tool == "" {
 				return &executor.ToolResult{Error: "tool 参数不能为空"}
+			}
+			if params.Args == nil {
+				return &executor.ToolResult{Error: "args 参数必须是对象"}
 			}
 
 			// 1. 确定目标 Hand
@@ -67,7 +78,7 @@ func init() {
 			runID := protocol.MustNewMsgID()
 			cleanArgs, _ := json.Marshal(params.Args)
 			_, knownLocally := executor.FindTool(params.Tool)
-			blocked, reason := bridge.CheckAndConfirm(params.Tool, cleanArgs, params.Confirm || !knownLocally)
+			blocked, reason := bridge.CheckAndConfirm(params.Tool, cleanArgs, remoteNeedsConfirmation(params.Confirm, params.Background, knownLocally))
 			// 3. 超时
 			timeoutMs := params.TimeoutMs
 			if timeoutMs <= 0 {
@@ -76,7 +87,22 @@ func init() {
 			timeout := time.Duration(timeoutMs) * time.Millisecond
 			now := time.Now()
 			deadline := now.Add(timeout + cancelAckTimeout)
-			digest, err := protocol.ApprovalDigest(runID, handID, params.Tool, params.Args)
+			rpc := protocol.RPC{
+				RunID: runID, Tool: params.Tool, Args: params.Args, DeadlineAt: deadline.UnixMilli(),
+			}
+			if params.Background {
+				if bridge.Tasks == nil {
+					return &executor.ToolResult{Error: "后台任务系统未初始化"}
+				}
+				if params.TaskTimeoutMs <= 0 || params.TaskTimeoutMs > protocol.MaxTaskRuntimeMS {
+					return &executor.ToolResult{Error: fmt.Sprintf("task_timeout_ms 必须在 1 到 %d 之间", protocol.MaxTaskRuntimeMS)}
+				}
+				if bridge.SessionID == nil || bridge.SessionID() == "" {
+					return &executor.ToolResult{Error: "后台任务需要有效会话"}
+				}
+				rpc.Background = &protocol.RPCBackgroundOptions{TaskID: runID, MaxRuntimeMS: params.TaskTimeoutMs}
+			}
+			digest, err := protocol.RPCApprovalDigest(rpc, handID)
 			if err != nil {
 				return &executor.ToolResult{Error: fmt.Sprintf("创建审批摘要失败: %v", err)}
 			}
@@ -92,8 +118,14 @@ func init() {
 			metadata := remoteexec.AuditMetadata{
 				ArgsDigest: digest, ApprovalSource: "mind", ApprovalMode: mode, ApprovalReason: reason,
 			}
-			if err := bridge.Runs.CreateForPeer(runID, sessionID, handID, peer.SessionID(), params.Tool, metadata); err != nil {
-				return &executor.ToolResult{Error: fmt.Sprintf("创建远程执行记录失败: %v", err)}
+			var createErr error
+			if params.Background && !blocked {
+				createErr = bridge.Runs.CreateTaskForPeer(runID, sessionID, handID, peer.SessionID(), params.Tool, metadata, remoteexec.Task{})
+			} else {
+				createErr = bridge.Runs.CreateForPeer(runID, sessionID, handID, peer.SessionID(), params.Tool, metadata)
+			}
+			if createErr != nil {
+				return &executor.ToolResult{Error: fmt.Sprintf("创建远程执行记录失败: %v", createErr)}
 			}
 			if blocked {
 				if err := bridge.Runs.RejectLocal(runID, protocol.RejectCheckFailed, reason); err != nil {
@@ -110,27 +142,31 @@ func init() {
 				Approved: true, Source: "mind", Mode: mode, Reason: reason, OneShot: true,
 				ArgsDigest: digest, ApprovedAt: now.UnixMilli(), ExpiresAt: deadline.UnixMilli(),
 			}
+			rpc.Approval = approval
 			if err := bridge.Runs.Transition(runID, protocol.RunApproved); err != nil {
+				if params.Background {
+					return failBackgroundStart(bridge, runID, sessionID, "审批状态更新失败: "+err.Error())
+				}
 				return remoteRunFailure(bridge, runID, fmt.Sprintf("审批状态更新失败: %v", err))
 			}
 			done, release, _ := bridge.Runs.Wait(runID)
 			defer release()
 
-			rpcEnv, err := protocol.NewEnvelope("", protocol.TypeRPC, protocol.RPC{
-				RunID:      runID,
-				Tool:       params.Tool,
-				Args:       params.Args,
-				DeadlineAt: deadline.UnixMilli(),
-				Approval:   approval,
-			})
+			rpcEnv, err := protocol.NewEnvelope("", protocol.TypeRPC, rpc)
 			if err != nil {
 				if rejectErr := bridge.Runs.RejectLocal(runID, protocol.RejectInvalidRequest, err.Error()); rejectErr != nil {
 					return remoteRunFailure(bridge, runID, fmt.Sprintf("记录无效 RPC 失败: %v", rejectErr))
+				}
+				if params.Background {
+					return failBackgroundStart(bridge, runID, sessionID, "创建后台 RPC 失败: "+err.Error())
 				}
 				return remoteRunResult(bridge, runID, handID, timeout)
 			}
 
 			if err := bridge.Runs.Transition(runID, protocol.RunSent); err != nil {
+				if params.Background {
+					return failBackgroundStart(bridge, runID, sessionID, "发送状态更新失败: "+err.Error())
+				}
 				return remoteRunFailure(bridge, runID, fmt.Sprintf("发送状态更新失败: %v", err))
 			}
 			operationCtx, stopOperation := context.WithTimeout(ctx, timeout)
@@ -139,23 +175,104 @@ func init() {
 				if transitionErr := bridge.Runs.Transition(runID, protocol.RunLost); transitionErr != nil {
 					return remoteRunFailure(bridge, runID, fmt.Sprintf("记录 RPC 发送失败: %v", transitionErr))
 				}
+				if params.Background {
+					if ctx.Err() != nil {
+						return cancelBackgroundStart(bridge, runID, sessionID)
+					}
+					return backgroundStartFailure(bridge, runID, sessionID, "后台任务发送状态未知: "+err.Error())
+				}
 				return remoteRunResult(bridge, runID, handID, timeout)
 			}
 			notifyRunStarted(ctx, runID)
 
-			// 5. 等待终态；本地取消或超时会显式通知 Hand。
+			// 5. 等待终态；后台启动通过 task 协议对账，不使用前台 rpc_cancel。
 			select {
 			case <-done:
 			case <-operationCtx.Done():
+				if params.Background {
+					if ctx.Err() != nil {
+						return cancelBackgroundStart(bridge, runID, sessionID)
+					}
+					_ = bridge.Runs.MarkTimedOut(runID)
+					return reconcileBackgroundStart(bridge, runID, sessionID, "后台任务启动确认超时")
+				}
 				reason := "timeout"
 				if ctx.Err() != nil {
 					reason = "user"
 				}
 				requestRemoteCancel(bridge, peer, runID, handID, reason)
 			}
-			return remoteRunResult(bridge, runID, handID, timeout)
+			result := remoteRunResult(bridge, runID, handID, timeout)
+			if params.Background {
+				run, ok := bridge.Runs.Snapshot(runID)
+				if !ok || run.Result == nil || !result.Success {
+					if ok && run.Status == protocol.RunRejected {
+						return failBackgroundStart(bridge, runID, sessionID, result.Error)
+					}
+					return backgroundStartFailure(bridge, runID, sessionID, result.Error)
+				}
+				task, err := bridge.Tasks.ApplyStartResult(runID, sessionID, *run.Result)
+				if err != nil {
+					return &executor.ToolResult{Error: fmt.Sprintf("保存后台任务快照失败: %v", err)}
+				}
+				if task.Stale {
+					return reconcileBackgroundStart(bridge, runID, sessionID, "后台任务已进入终态，正在补全快照")
+				}
+				return taskToolResult(task)
+			}
+			return result
 		},
 	})
+}
+
+func backgroundStartFailure(bridge *RemoteBridge, taskID, sessionID, message string) *executor.ToolResult {
+	task, err := bridge.Tasks.MarkStartStale(taskID, sessionID, message)
+	if err != nil {
+		return &executor.ToolResult{Error: fmt.Sprintf("%s; 保存 stale 任务快照失败: %v", message, err)}
+	}
+	result := taskToolResult(task)
+	result.Success = false
+	result.Error = message
+	return result
+}
+
+func failBackgroundStart(bridge *RemoteBridge, taskID, sessionID, message string) *executor.ToolResult {
+	task, err := bridge.Tasks.FailStart(taskID, sessionID, message)
+	if err != nil {
+		return &executor.ToolResult{Error: fmt.Sprintf("%s; 保存后台任务终态失败: %v", message, err)}
+	}
+	result := taskToolResult(task)
+	result.Success = false
+	result.Error = message
+	return result
+}
+
+func reconcileBackgroundStart(bridge *RemoteBridge, taskID, sessionID, message string) *executor.ToolResult {
+	queryCtx, cancel := context.WithTimeout(context.Background(), taskQueryTimeout)
+	defer cancel()
+	task, err := bridge.Tasks.Get(queryCtx, sessionID, taskID)
+	if err == nil {
+		return taskToolResult(task)
+	}
+	return backgroundStartFailure(bridge, taskID, sessionID, fmt.Sprintf("%s: %v", message, err))
+}
+
+func cancelBackgroundStart(bridge *RemoteBridge, taskID, sessionID string) *executor.ToolResult {
+	cancelCtx, cancel := context.WithTimeout(context.Background(), taskQueryTimeout)
+	result, cancelErr := bridge.Tasks.Cancel(cancelCtx, sessionID, taskID, "user")
+	cancel()
+	_ = bridge.Runs.MarkLost(taskID, "background start cancelled by caller")
+	if cancelErr != nil {
+		return &executor.ToolResult{Error: fmt.Sprintf("后台任务启动已取消，但无法确认任务已停止: %v", cancelErr)}
+	}
+	if result.Status != protocol.TaskCancelCancelled {
+		return &executor.ToolResult{Error: fmt.Sprintf("后台任务启动等待已取消，但任务未被取消: %s", result.Status), Data: result}
+	}
+	return &executor.ToolResult{Error: "后台任务启动已取消，Hand 已确认取消"}
+}
+
+func remoteNeedsConfirmation(requested, background, knownLocally bool) bool {
+	return requested || background || !knownLocally
 }
 
 func remoteRunFailure(bridge *RemoteBridge, runID, message string) *executor.ToolResult {

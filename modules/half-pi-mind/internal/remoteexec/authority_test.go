@@ -36,7 +36,7 @@ func (w *authorityEventWriter) Close() error { return nil }
 func TestAuthorityRoutesLifecycleWithoutCore(t *testing.T) {
 	registry := NewRegistry()
 	wsHub := hub.New()
-	authority := NewAuthority(wsHub, registry, nil, func(string) (string, error) { return "test", nil })
+	authority := NewAuthority(wsHub, registry, nil, func(string, string) (string, error) { return "test", nil })
 	createSentRun(t, registry, "run-1", "hand-1")
 	done, _ := registry.Done("run-1")
 	peer := &hub.Peer{ID: "hand-1", Type: hub.PeerHand}
@@ -58,7 +58,7 @@ func TestAuthorityRoutesLifecycleWithoutCore(t *testing.T) {
 func TestAuthorityFailClosesTerminalAuditFailure(t *testing.T) {
 	auditor := &recordingAuditor{}
 	registry := NewRegistry(auditor)
-	authority := NewAuthority(hub.New(), registry, nil, func(string) (string, error) { return "test", nil })
+	authority := NewAuthority(hub.New(), registry, nil, func(string, string) (string, error) { return "test", nil })
 	createSentRun(t, registry, "run-audit-failure", "hand-1")
 	if err := registry.ApplyAccepted("hand-1", protocol.RPCAccepted{
 		RunID: "run-audit-failure", StartedAt: time.Now().UnixMilli(),
@@ -87,7 +87,7 @@ func TestAuthorityFailClosesTerminalAuditFailure(t *testing.T) {
 func TestAuthorityDisconnectMarksRunsLost(t *testing.T) {
 	registry := NewRegistry()
 	wsHub := hub.New()
-	authority := NewAuthority(wsHub, registry, nil, func(string) (string, error) { return "test", nil })
+	authority := NewAuthority(wsHub, registry, nil, func(string, string) (string, error) { return "test", nil })
 	createSentRun(t, registry, "run-1", "hand-1")
 	authority.handleDisconnect(&hub.Peer{ID: "hand-1", Type: hub.PeerHand})
 	run, _ := registry.Snapshot("run-1")
@@ -97,7 +97,7 @@ func TestAuthorityDisconnectMarksRunsLost(t *testing.T) {
 }
 
 func TestAuthorityRoutesPendingHandInfo(t *testing.T) {
-	authority := NewAuthority(hub.New(), NewRegistry(), nil, func(string) (string, error) { return "test", nil })
+	authority := NewAuthority(hub.New(), NewRegistry(), nil, func(string, string) (string, error) { return "test", nil })
 	ch, cancel := authority.PendingCall("info-1", 0, "hand-1")
 	defer cancel()
 	peer := &hub.Peer{ID: "hand-1", Type: hub.PeerHand}
@@ -110,12 +110,70 @@ func TestAuthorityRoutesPendingHandInfo(t *testing.T) {
 	}
 }
 
+func TestAuthorityRoutesTaskErrorsOnlyFromExpectedHand(t *testing.T) {
+	authority := NewAuthority(hub.New(), NewRegistry(), nil, func(string, string) (string, error) { return "test", nil })
+	ch, cancel := authority.PendingCall("request-1", 0, "hand-1")
+	defer cancel()
+	errEnv, _ := protocol.NewEnvelope("", protocol.TypeError, protocol.ErrorMsg{
+		MsgID: "request-1", Code: "unknown_task", Message: "missing",
+	})
+	authority.handleMessage(&hub.Peer{ID: "hand-2", Type: hub.PeerHand}, *errEnv)
+	select {
+	case <-ch:
+		t.Fatal("wrong Hand response was delivered")
+	default:
+	}
+	authority.handleMessage(&hub.Peer{ID: "hand-1", Type: hub.PeerHand}, *errEnv)
+	select {
+	case got := <-ch:
+		if got.Type != protocol.TypeError {
+			t.Fatalf("type = %s", got.Type)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("expected Hand error was not delivered")
+	}
+}
+
+func TestAuthorityPendingPeerCallRejectsWrongConnection(t *testing.T) {
+	authority := NewAuthority(hub.New(), NewRegistry(), nil, nil)
+	expected := &hub.Peer{ID: "hand-1", Type: hub.PeerHand}
+	ch, cancel := authority.PendingPeerCall("request-1", 0, expected)
+	defer cancel()
+	env, _ := protocol.NewEnvelope("", protocol.TypeTaskCancelResult, protocol.TaskCancelResult{
+		ID: "request-1", TaskID: "task-1", Status: protocol.TaskCancelCancelled,
+	})
+	authority.handleMessage(&hub.Peer{ID: "hand-1", Type: hub.PeerHand}, *env)
+	select {
+	case <-ch:
+		t.Fatal("response from a different peer connection was delivered")
+	default:
+	}
+}
+
+func TestAuthorityDeliversMalformedTaskResponseByEnvelopeID(t *testing.T) {
+	authority := NewAuthority(hub.New(), NewRegistry(), nil, nil)
+	peer := &hub.Peer{ID: "hand-1", Type: hub.PeerHand}
+	ch, cancel := authority.PendingPeerCall("request-1", 0, peer)
+	defer cancel()
+	authority.handleMessage(peer, protocol.Envelope{
+		MsgID: "request-1", Type: protocol.TypeTaskStatusResp, Payload: []byte(`{"id":`),
+	})
+	select {
+	case got := <-ch:
+		if got.MsgID != "request-1" {
+			t.Fatalf("message ID = %q", got.MsgID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("malformed task response did not wake pending caller")
+	}
+}
+
 func TestAuthorityPublishesOnlyAcceptedProgress(t *testing.T) {
 	registry := NewRegistry()
 	bus := events.NewEventBus()
 	writer := &authorityEventWriter{}
 	bus.Subscribe(writer)
-	authority := NewAuthority(hub.New(), registry, bus, func(string) (string, error) { return "test", nil })
+	authority := NewAuthority(hub.New(), registry, bus, func(string, string) (string, error) { return "test", nil })
 	createSentRun(t, registry, "progress-run", "hand-1")
 	peer := &hub.Peer{ID: "hand-1", Type: hub.PeerHand}
 	early, _ := protocol.NewEnvelope("", protocol.TypeRPCProgress, protocol.RPCProgress{
@@ -167,7 +225,7 @@ func TestAuthorityPublishesProgressBeforeResultDeterministically(t *testing.T) {
 	bus := events.NewEventBus()
 	writer := &authorityEventWriter{block: make(chan struct{}), start: make(chan struct{}, 1)}
 	bus.Subscribe(writer)
-	authority := NewAuthority(hub.New(), registry, bus, func(string) (string, error) { return "test", nil })
+	authority := NewAuthority(hub.New(), registry, bus, func(string, string) (string, error) { return "test", nil })
 	createSentRun(t, registry, "ordered-run", "hand-1")
 	if err := registry.ApplyAccepted("hand-1", protocol.RPCAccepted{
 		RunID: "ordered-run", StartedAt: time.Now().UnixMilli(),
@@ -217,7 +275,7 @@ func TestAuthoritySerializesResultAdmissionBehindProgressPublication(t *testing.
 	bus := events.NewEventBus()
 	writer := &authorityEventWriter{block: make(chan struct{}), start: make(chan struct{}, 1)}
 	bus.Subscribe(writer)
-	authority := NewAuthority(hub.New(), registry, bus, func(string) (string, error) { return "test", nil })
+	authority := NewAuthority(hub.New(), registry, bus, func(string, string) (string, error) { return "test", nil })
 	createSentRun(t, registry, "serialized-run", "hand-1")
 	if err := registry.ApplyAccepted("hand-1", protocol.RPCAccepted{
 		RunID: "serialized-run", StartedAt: time.Now().UnixMilli(),

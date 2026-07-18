@@ -31,6 +31,7 @@ func loadSoul(mode string) string {
 2. 用 get_hand_info 获取目标 Hand 的准确工具 schema。
 3. 需要会话默认设备时用 select_hand。
 4. 用 use_hand 按 schema 传参执行。
+5. 长时间任务给 use_hand 传 background=true 和 task_timeout_ms；之后用 get_hand_task、read_hand_task_log、cancel_hand_task 管理。
 不要假设 Hand 上存在未查询到的工具。`, mode)
 }
 

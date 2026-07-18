@@ -83,6 +83,21 @@ func (r *Registry) MarkTimedOut(id string) error {
 	return r.transitionLocked(run, protocol.RunTimedOut, time.Now(), AuditTransition{})
 }
 
+// MarkLost 将仍未结束的 run 收敛为 lost。
+func (r *Registry) MarkLost(id, reason string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	run := r.runs[id]
+	if run == nil || protocol.IsTerminalRunStatus(run.Status) {
+		return nil
+	}
+	if err := r.transitionLocked(run, protocol.RunLost, time.Now(), AuditTransition{Error: reason, Message: reason}); err != nil {
+		return err
+	}
+	run.Error = reason
+	return nil
+}
+
 // MarkCancelUnconfirmed 在取消确认超时后按取消原因收敛 run。
 func (r *Registry) MarkCancelUnconfirmed(id string) error {
 	r.mu.Lock()

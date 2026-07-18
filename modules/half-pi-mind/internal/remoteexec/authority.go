@@ -10,12 +10,13 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 )
 
-// AuthenticateFunc 校验 Hand token 并返回用于日志展示的标签。
-type AuthenticateFunc func(token string) (string, error)
+// AuthenticateFunc 校验 Hand token 是否有权使用声明的 Hand ID，并返回日志标签。
+type AuthenticateFunc func(token, handID string) (string, error)
 
 type pendingCall struct {
 	ch           chan protocol.Envelope
 	expectedPeer string
+	expectedConn *hub.Peer
 }
 
 // Authority 是进程级远程执行权威，统一管理 Hub 路由和 run 生命周期。
@@ -43,7 +44,7 @@ func NewAuthority(h *hub.Hub, registry *Registry, bus *events.EventBus, authenti
 		if authenticate == nil {
 			return fmt.Errorf("authentication is not configured")
 		}
-		label, err := authenticate(reg.Token)
+		label, err := authenticate(reg.Token, reg.ClientID)
 		if err != nil {
 			return err
 		}
@@ -64,9 +65,18 @@ func (a *Authority) handleDisconnect(peer *hub.Peer) {
 
 // PendingCall 注册一次普通 Hand 请求的响应等待器。
 func (a *Authority) PendingCall(id string, timeout time.Duration, expectedPeer string) (<-chan protocol.Envelope, func()) {
+	return a.pendingCall(id, timeout, expectedPeer, nil)
+}
+
+// PendingPeerCall 注册绑定具体 Hand 连接的响应等待器。
+func (a *Authority) PendingPeerCall(id string, timeout time.Duration, peer *hub.Peer) (<-chan protocol.Envelope, func()) {
+	return a.pendingCall(id, timeout, peer.ID, peer)
+}
+
+func (a *Authority) pendingCall(id string, timeout time.Duration, expectedPeer string, expectedConn *hub.Peer) (<-chan protocol.Envelope, func()) {
 	ch := make(chan protocol.Envelope, 1)
 	a.pendingMu.Lock()
-	a.pending[id] = &pendingCall{ch: ch, expectedPeer: expectedPeer}
+	a.pending[id] = &pendingCall{ch: ch, expectedPeer: expectedPeer, expectedConn: expectedConn}
 	a.pendingMu.Unlock()
 	var once sync.Once
 	cancel := func() {
@@ -161,7 +171,46 @@ func (a *Authority) handleMessage(peer *hub.Peer, msg protocol.Envelope) {
 	case protocol.TypeHandInfoResp:
 		resp, err := protocol.DecodePayload[protocol.HandInfoResp](&msg)
 		if err == nil {
-			a.deliverPending(peer.ID, resp.ID, msg)
+			a.deliverPending(peer, resp.ID, msg)
+		}
+		a.publishError(err)
+	case protocol.TypeTaskStatusResp:
+		resp, err := protocol.DecodePayload[protocol.TaskStatusResp](&msg)
+		responseID := msg.MsgID
+		if err == nil {
+			responseID = resp.ID
+			err = protocol.ValidateTaskStatusResp(resp)
+		}
+		if responseID != "" {
+			a.deliverPending(peer, responseID, msg)
+		}
+		a.publishError(err)
+	case protocol.TypeTaskLogResp:
+		resp, err := protocol.DecodePayload[protocol.TaskLogResp](&msg)
+		responseID := msg.MsgID
+		if err == nil {
+			responseID = resp.ID
+			err = protocol.ValidateTaskLogResp(resp)
+		}
+		if responseID != "" {
+			a.deliverPending(peer, responseID, msg)
+		}
+		a.publishError(err)
+	case protocol.TypeTaskCancelResult:
+		resp, err := protocol.DecodePayload[protocol.TaskCancelResult](&msg)
+		responseID := msg.MsgID
+		if err == nil {
+			responseID = resp.ID
+			err = protocol.ValidateTaskCancelResult(resp)
+		}
+		if responseID != "" {
+			a.deliverPending(peer, responseID, msg)
+		}
+		a.publishError(err)
+	case protocol.TypeError:
+		errMsg, err := protocol.DecodePayload[protocol.ErrorMsg](&msg)
+		if err == nil && errMsg.MsgID != "" {
+			a.deliverPending(peer, errMsg.MsgID, msg)
 		}
 		a.publishError(err)
 	case protocol.TypeHandEvent:
@@ -197,14 +246,15 @@ func (a *Authority) publishProgress(progress protocol.RPCProgress, gap bool) {
 	))
 }
 
-func (a *Authority) deliverPending(peerID, id string, msg protocol.Envelope) {
+func (a *Authority) deliverPending(peer *hub.Peer, id string, msg protocol.Envelope) {
 	a.pendingMu.Lock()
 	pending, ok := a.pending[id]
-	if ok && pending.expectedPeer == peerID {
+	matches := ok && pending.expectedPeer == peer.ID && (pending.expectedConn == nil || pending.expectedConn == peer)
+	if matches {
 		delete(a.pending, id)
 	}
 	a.pendingMu.Unlock()
-	if ok && pending.expectedPeer == peerID {
+	if matches {
 		select {
 		case pending.ch <- msg:
 		default:

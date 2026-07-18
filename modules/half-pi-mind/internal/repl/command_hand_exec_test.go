@@ -67,6 +67,61 @@ func TestParseHandExecRejectsInvalidOrTrailingJSON(t *testing.T) {
 	}
 }
 
+func TestParseHandTaskStartReusesUseHand(t *testing.T) {
+	tool, payload, err := parseHandTaskStart(`exec_command {"command":"sleep 1"} --timeout-ms 120000`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tool != "use_hand" {
+		t.Fatalf("tool = %q", tool)
+	}
+	var params struct {
+		Background    bool           `json:"background"`
+		TaskTimeoutMs int64          `json:"task_timeout_ms"`
+		Tool          string         `json:"tool"`
+		Args          map[string]any `json:"args"`
+	}
+	if err := json.Unmarshal(payload, &params); err != nil {
+		t.Fatal(err)
+	}
+	if !params.Background || params.TaskTimeoutMs != 120000 || params.Tool != "exec_command" || params.Args["command"] != "sleep 1" {
+		t.Fatalf("params = %+v", params)
+	}
+}
+
+func TestParseHandTaskStartKeepsNumericJSONValue(t *testing.T) {
+	_, payload, err := parseHandTaskStart(`test_tool {"count":120000}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var params struct {
+		TaskTimeoutMs int64          `json:"task_timeout_ms"`
+		Args          map[string]any `json:"args"`
+	}
+	if err := json.Unmarshal(payload, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.TaskTimeoutMs != 30*60*1000 || params.Args["count"] != float64(120000) {
+		t.Fatalf("params = %+v", params)
+	}
+}
+
+func TestParseHandTaskStartKeepsTimeoutTextInsideJSON(t *testing.T) {
+	_, payload, err := parseHandTaskStart(`exec_command {"command":"tool --timeout-ms 5"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var params struct {
+		Args map[string]any `json:"args"`
+	}
+	if err := json.Unmarshal(payload, &params); err != nil {
+		t.Fatal(err)
+	}
+	if params.Args["command"] != "tool --timeout-ms 5" {
+		t.Fatalf("params = %+v", params)
+	}
+}
+
 func TestEmitForSessionPreservesOriginSession(t *testing.T) {
 	bus := events.NewEventBus()
 	writer := &captureWriter{}
@@ -109,7 +164,7 @@ func TestHandExecUsesSharedAuthorityAndEmitsResultForOriginalSession(t *testing.
 	bus.Subscribe(writer)
 	wsHub := hub.New()
 	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus,
-		func(token string) (string, error) { return "test", nil })
+		func(token, handID string) (string, error) { return "test", nil })
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, upgradeErr := (&websocket.Upgrader{}).Upgrade(w, r, nil)

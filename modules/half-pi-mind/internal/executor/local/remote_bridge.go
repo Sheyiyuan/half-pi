@@ -14,6 +14,7 @@ import (
 type RemoteBridge struct {
 	Hub           *hub.Hub
 	Runs          *remoteexec.Registry
+	Tasks         *remoteexec.TaskService
 	ActiveHand    func() string
 	SessionID     func() string
 	Mode          func() string

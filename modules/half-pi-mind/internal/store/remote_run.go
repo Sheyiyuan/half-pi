@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -53,8 +54,33 @@ func (s *Store) CreateRemoteRun(run remoteexec.AuditRun) error {
 		return err
 	}
 	defer tx.Rollback()
+	if err := insertRemoteRun(tx, run); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// CreateRemoteRunTask 原子创建后台 run、created 事件和任务快照。
+func (s *Store) CreateRemoteRunTask(run remoteexec.AuditRun, task remoteexec.Task) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := insertRemoteRun(tx, run); err != nil {
+		return err
+	}
+	if err := insertRemoteTask(tx, task); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func insertRemoteRun(tx interface {
+	Exec(string, ...any) (sql.Result, error)
+}, run remoteexec.AuditRun) error {
 	createdAt := run.CreatedAt.UnixMilli()
-	_, err = tx.Exec(`INSERT INTO remote_runs
+	_, err := tx.Exec(`INSERT INTO remote_runs
 		(id, session_id, hand_id, tool, args_digest, approval_source, approval_mode, approval_reason, status, created_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.ID, run.SessionID, run.HandID, run.Tool, run.Metadata.ArgsDigest,
@@ -69,7 +95,7 @@ func (s *Store) CreateRemoteRun(run remoteexec.AuditRun) error {
 	if err != nil {
 		return fmt.Errorf("insert remote run event: %w", err)
 	}
-	return tx.Commit()
+	return nil
 }
 
 // TransitionRemoteRun 原子更新 run 并追加迁移事件。
@@ -258,4 +284,5 @@ func scanRemoteRun(row scanner) (RemoteRunRecord, error) {
 }
 
 var _ remoteexec.Auditor = (*Store)(nil)
+var _ remoteexec.TaskAuditor = (*Store)(nil)
 var _ remoteexec.ProgressAuditor = (*Store)(nil)

@@ -12,6 +12,7 @@ import (
 type HandToken struct {
 	ID        int64
 	Label     string
+	HandID    string
 	Token     string
 	CreatedAt time.Time
 }
@@ -29,8 +30,8 @@ func GenerateToken() string {
 func (s *Store) AddHandToken(label string) (*HandToken, error) {
 	token := GenerateToken()
 	_, err := s.db.Exec(
-		`INSERT INTO hand_tokens (label, token) VALUES (?, ?)`,
-		label, token,
+		`INSERT INTO hand_tokens (label, hand_id, token) VALUES (?, ?, ?)`,
+		label, label, token,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("add hand token: %w", err)
@@ -41,7 +42,7 @@ func (s *Store) AddHandToken(label string) (*HandToken, error) {
 // ListHandTokens 返回所有 Hand 令牌。
 func (s *Store) ListHandTokens() ([]HandToken, error) {
 	rows, err := s.db.Query(
-		`SELECT id, label, token, created_at FROM hand_tokens ORDER BY id`,
+		`SELECT id, label, hand_id, token, created_at FROM hand_tokens ORDER BY id`,
 	)
 	if err != nil {
 		return nil, fmt.Errorf("list hand tokens: %w", err)
@@ -52,7 +53,7 @@ func (s *Store) ListHandTokens() ([]HandToken, error) {
 	for rows.Next() {
 		var ht HandToken
 		var ca string
-		if err := rows.Scan(&ht.ID, &ht.Label, &ht.Token, &ca); err != nil {
+		if err := rows.Scan(&ht.ID, &ht.Label, &ht.HandID, &ht.Token, &ca); err != nil {
 			return nil, fmt.Errorf("scan hand token: %w", err)
 		}
 		ht.CreatedAt = parseTime(ca)
@@ -80,11 +81,11 @@ func (s *Store) ValidateHandToken(token string) (*HandToken, error) {
 		return nil, fmt.Errorf("empty token")
 	}
 	row := s.db.QueryRow(
-		`SELECT id, label, token, created_at FROM hand_tokens WHERE token = ?`, token,
+		`SELECT id, label, hand_id, token, created_at FROM hand_tokens WHERE token = ?`, token,
 	)
 	var ht HandToken
 	var ca string
-	err := row.Scan(&ht.ID, &ht.Label, &ht.Token, &ca)
+	err := row.Scan(&ht.ID, &ht.Label, &ht.HandID, &ht.Token, &ca)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("invalid token")
 	}
@@ -93,6 +94,24 @@ func (s *Store) ValidateHandToken(token string) (*HandToken, error) {
 	}
 	ht.CreatedAt = parseTime(ca)
 	return &ht, nil
+}
+
+// AuthenticateHandToken 验证 token 是否绑定到声明的 Hand ID。
+func (s *Store) AuthenticateHandToken(token, handID string) (*HandToken, error) {
+	if handID == "" {
+		return nil, fmt.Errorf("empty Hand ID")
+	}
+	ht, err := s.ValidateHandToken(token)
+	if err != nil {
+		return nil, err
+	}
+	if ht.HandID == "" {
+		return nil, fmt.Errorf("legacy token is not bound to a Hand ID; create a new token")
+	}
+	if ht.HandID != handID {
+		return nil, fmt.Errorf("token is not valid for Hand %q", handID)
+	}
+	return ht, nil
 }
 
 // FindHandTokenByToken 按令牌值查找记录（用于注册返回）。

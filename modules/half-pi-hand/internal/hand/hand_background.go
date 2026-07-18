@@ -18,7 +18,7 @@ func (h *Hand) handleTaskStatus(env protocol.Envelope) {
 		h.sendTaskError(env.MsgID, "unknown_task", err)
 		return
 	}
-	h.sendTaskMessage(protocol.TypeTaskStatusResp, protocol.TaskStatusResp{
+	h.sendTaskResponse(req.ID, protocol.TypeTaskStatusResp, protocol.TaskStatusResp{
 		ID: req.ID, TaskID: task.ID, Tool: task.Tool, Status: task.Status,
 		CreatedAt: task.CreatedAt, StartedAt: task.StartedAt, FinishedAt: task.FinishedAt,
 		LogBytes: task.LogBytes, Truncated: task.Truncated, Error: task.Error,
@@ -35,7 +35,7 @@ func (h *Hand) handleTaskLog(env protocol.Envelope) {
 		h.sendTaskError(env.MsgID, "unknown_task", err)
 		return
 	}
-	h.sendTaskMessage(protocol.TypeTaskLogResp, protocol.TaskLogResp{
+	h.sendTaskResponse(req.ID, protocol.TypeTaskLogResp, protocol.TaskLogResp{
 		ID: req.ID, TaskID: req.TaskID, Offset: req.Offset, NextOffset: next,
 		Data: data, EOF: eof, Truncated: truncated,
 	})
@@ -51,13 +51,27 @@ func (h *Hand) handleTaskCancel(env protocol.Envelope) {
 	if cancelErr != nil {
 		errMsg = cancelErr.Error()
 	}
-	h.sendTaskMessage(protocol.TypeTaskCancelResult, protocol.TaskCancelResult{
+	h.sendTaskResponse(req.ID, protocol.TypeTaskCancelResult, protocol.TaskCancelResult{
 		ID: req.ID, TaskID: req.TaskID, Status: status, Error: errMsg,
 	})
 }
 
 func (h *Hand) sendTaskMessage(typ string, payload any) {
 	if err := h.sendRPCMessage(typ, payload); err != nil {
+		fmt.Fprintf(os.Stderr, "send %s failed: %v\n", typ, err)
+	}
+}
+
+func (h *Hand) sendTaskResponse(id, typ string, payload any) {
+	if h.send != nil {
+		h.sendTaskMessage(typ, payload)
+		return
+	}
+	env, err := protocol.NewEnvelope(id, typ, payload)
+	if err == nil {
+		err = h.conn.Send(*env)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "send %s failed: %v\n", typ, err)
 	}
 }

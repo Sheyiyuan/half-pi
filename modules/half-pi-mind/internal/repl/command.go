@@ -69,6 +69,10 @@ func (r *Repl) handleCommand(input string) bool {
 		r.handleHandRun(strings.TrimSpace(strings.TrimPrefix(input, "/hand run ")))
 		return true
 
+	case strings.HasPrefix(input, "/hand task "):
+		r.handleHandTask(strings.TrimSpace(strings.TrimPrefix(input, "/hand task ")))
+		return true
+
 	case strings.HasPrefix(input, "/hand add "):
 		label := strings.TrimSpace(strings.TrimPrefix(input, "/hand add "))
 		r.handleHandAdd(label)
@@ -183,7 +187,7 @@ func (r *Repl) handleHandList() {
 		fmt.Println("No hand tokens. Use /hand add <label> to create one.")
 		return
 	}
-	fmt.Println("id  label          token                              created")
+	fmt.Println("id  hand           token                              created")
 	for _, ht := range tokens {
 		fmt.Printf("%2d  %-14s %s  %s\n", ht.ID, ht.Label, ht.Token, ht.CreatedAt.Format("01-02 15:04"))
 	}

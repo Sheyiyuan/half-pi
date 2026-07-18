@@ -112,6 +112,25 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_remote_runs_hand ON remote_runs(hand_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_remote_runs_status ON remote_runs(status)`,
 		`CREATE INDEX IF NOT EXISTS idx_remote_run_events_run ON remote_run_events(run_id, seq)`,
+		`CREATE TABLE IF NOT EXISTS remote_tasks (
+			task_id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			hand_id TEXT NOT NULL,
+			tool TEXT NOT NULL,
+			args_digest TEXT NOT NULL,
+			status TEXT NOT NULL,
+			created_at INTEGER NOT NULL,
+			started_at INTEGER NOT NULL DEFAULT 0,
+			finished_at INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL,
+			log_bytes INTEGER NOT NULL DEFAULT 0,
+			truncated INTEGER NOT NULL DEFAULT 0,
+			stale INTEGER NOT NULL DEFAULT 1,
+			error TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_remote_tasks_session ON remote_tasks(session_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_remote_tasks_hand ON remote_tasks(hand_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_remote_tasks_status ON remote_tasks(status)`,
 	}
 	for _, stmt := range statements {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -121,6 +140,9 @@ func (s *Store) migrate() error {
 
 	if err := s.addColumnIfNotExists("sessions", "active_hand", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate active_hand: %w", err)
+	}
+	if err := s.addColumnIfNotExists("hand_tokens", "hand_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate Hand token identity: %w", err)
 	}
 	if err := s.addColumnIfNotExists("remote_run_events", "progress_seq", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return fmt.Errorf("migrate remote progress seq: %w", err)
