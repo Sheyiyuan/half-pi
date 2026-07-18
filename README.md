@@ -4,7 +4,7 @@
 
 # Half Pi · 半派
 
-> **当前状态：Alpha 开发中。** Mind 与 Hand 的远程执行闭环及 Face 的加密只读 Gateway 已可用；Face Chat、异步审批和客户端仍在实现。
+> **当前状态：Alpha 开发中。** Mind 与 Hand 的远程执行闭环及 Face 的加密 Gateway、Chat/cancel 生命周期已可用；异步审批和客户端仍在实现。
 
 ---
 

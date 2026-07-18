@@ -2,7 +2,7 @@
 
 ## 状态
 
-本文面向未来的 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密和 P1 Face Gateway 已实现并通过 race 测试。当前可使用 conversation/Hand/run/task 查询、快照和订阅；Chat runtime、审批 broker、取消命令和客户端尚未实现。
+本文面向未来的 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1 Gateway 和 P2 Chat 生命周期已实现并通过 race 测试。当前可使用 conversation/Hand/run/task 查询、快照、订阅和 Chat/cancel；审批 broker、run/task cancel 和客户端尚未实现。
 
 架构和完整生命周期见 [`face-protocol.md`](face-protocol.md)。本文只说明客户端应依赖的正式协议契约。
 
@@ -77,7 +77,7 @@ face.event
 
 ## Command 生命周期
 
-每个 command 必须带非空 `request_id`。未来 Mind 按 `(Face identity, request_id)` 提供幂等语义：
+每个 command 必须带非空 `request_id`。当前 Chat 与 Chat cancel 按 `(Face principal, request_id)` 提供以下幂等语义；其他 command 的通用 registry 仍属于后续增强：
 
 - 相同 ID 和相同 payload 返回已有 accepted 或最终结果，不重复副作用。
 - 相同 ID 和不同 payload 返回 `request_conflict`。
@@ -191,8 +191,8 @@ conversation.changed
 
 ## 未来实现清单
 
-1. Chat accepted/result/cancel、幂等 registry 和 Scripted LLM。
-2. 异步审批 broker、run/task cancel 和 Face identity 审计。
-3. JSONL Headless Agent Face 与确定性进程级 E2E。
+1. 异步审批 broker、run/task cancel 和 Face identity 审计。
+2. JSONL Headless Agent Face 与确定性进程级 E2E。
+3. conversation 写命令等非 Chat command 的通用幂等 registry。
 
 以上运行时能力全部复用当前 wire protocol，不新增 AI 专用消息语义。

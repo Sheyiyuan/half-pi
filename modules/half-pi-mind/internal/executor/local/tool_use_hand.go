@@ -12,6 +12,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 )
 
 func init() {
@@ -116,7 +117,8 @@ func init() {
 				mode = bridge.Mode()
 			}
 			metadata := remoteexec.AuditMetadata{
-				ArgsDigest: digest, ApprovalSource: "mind", ApprovalMode: mode, ApprovalReason: reason,
+				RequestID: requestctx.RequestID(ctx), ArgsDigest: digest,
+				ApprovalSource: "mind", ApprovalMode: mode, ApprovalReason: reason,
 			}
 			var createErr error
 			if params.Background && !blocked {

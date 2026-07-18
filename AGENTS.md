@@ -255,9 +255,18 @@ make test         # 运行全部 4 个模块的测试
 - 每个 Face 连接独立有界队列、单发送循环和单调 `event_seq`；队列满只断开慢 Face
 - conversation、Hand、run、task 变化通过显式 domain hook 投影，不解析 EventBus 展示文本
 
+##### Face P2 Chat 生命周期
+- `(principal_id, request_id)` 进程级 registry 提供 Chat/cancel payload 绑定、终态 replay、冲突检测和有界保留
+- 同一 conversation 只允许一个 active Chat，不同 conversation 的独立 Actor 可并发执行
+- Face 断线不取消已 accepted Chat；重连后同 principal 重发相同请求可取得已有 accepted 或终态 result
+- `face.chat.cancel` 传播到 Core、工具和 `use_hand`，等待远程 run 时复用 `rpc_cancel` 链路
+- Chat/tool 生命周期使用结构化事件；工具参数只投影 SHA-256，不进入普通事件流
+- `remote_runs.request_id` 持久化 Face request/run 关联，旧库迁移后 legacy run 保持空关联并兼容读取
+- `llm.ScriptedProvider` 支持不依赖真实模型的确定性多轮工具 fixture
+
 ##### 设计文档
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
-- `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（P1 查询可用，Chat/客户端待实现）
+- `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（P2 Chat 可用，审批/客户端待实现）
 - `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
 - `docs/remote-execution-implementation-plan.md` — 远程执行闭环实施与验收记录
 - `docs/next-development-plan.md` — 当前 Face Alpha 主线与远程执行收尾计划
@@ -371,10 +380,17 @@ make test         # 运行全部 4 个模块的测试
 - Face 投影不包含 token、application key、原始工具参数、Hand 工作路径或原始内部错误
 - Face 凭据删除后即使复用同一 label 创建新凭据，旧连接也不能继承新 principal 的 scopes
 
+### 2026-07-18：Face P2 Chat 生命周期
+- Chat 在 accepted 后异步运行，并恰好保存一个 succeeded/failed/cancelled/timed_out 终态
+- registry 先处理相同请求 replay/conflict，再执行 conversation busy 仲裁；终态保留 10 分钟且最多 256 条
+- Chat context 独立于 Face 连接生命周期，但显式 cancel 会贯穿 LLM、本地工具和远程 run
+- terminal Chat event 在 result 前投递；断线或慢连接丢失终态时通过相同 request replay 恢复
+- Core 的 tool hook 不依赖 debug，事件仅包含 tool、success 和规范参数摘要
+
 ---
 
 ## 下一步
 
 1. 原生 Windows 运行取消验收脚本（外部环境）
-2. **Face Alpha Runtime** — P2 Chat 生命周期、P3 异步审批/取消、P4 Headless Face 与进程级 E2E
+2. **Face Alpha Runtime** — P3 异步审批/run-task 取消、P4 Headless Face 与进程级 E2E
 3. `/compact` 上下文压缩与 Skill 工作区集成

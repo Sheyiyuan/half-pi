@@ -44,6 +44,7 @@ type Gateway struct {
 
 	mu          sync.Mutex
 	connections map[*hub.Peer]*connection
+	chats       *chatRegistry
 	domainMu    sync.Mutex
 	version     atomic.Int64
 	cursorKey   [32]byte
@@ -84,6 +85,7 @@ func New(config Config) (*Gateway, error) {
 		hub: config.Hub, store: config.Store, conversations: config.Conversations,
 		authority: config.Authority, tasks: config.Tasks, queueSize: config.QueueSize,
 		connections: make(map[*hub.Peer]*connection),
+		chats:       newChatRegistry(),
 	}
 	if _, err := rand.Read(gateway.cursorKey[:]); err != nil {
 		return nil, fmt.Errorf("generate Face task cursor key: %w", err)
@@ -206,7 +208,7 @@ func (g *Gateway) enqueueLocked(state *connection, env protocol.Envelope) bool {
 
 func (g *Gateway) sendPayload(state *connection, typ string, payload any) bool {
 	env, err := protocol.NewEnvelope("", typ, payload)
-	if err != nil {
+	if err != nil || protocol.ValidateFacePayload(typ, env.Payload) != nil {
 		return false
 	}
 	return g.enqueue(state, *env)

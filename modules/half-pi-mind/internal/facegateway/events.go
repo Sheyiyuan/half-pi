@@ -64,7 +64,8 @@ func (g *Gateway) PublishRemoteRunChanged(run remoteexec.Run) {
 		duration = 0
 	}
 	g.publish(domainEvent{
-		conversationID: run.SessionID, typ: protocol.FaceEventRemoteRunChanged,
+		conversationID: run.SessionID, requestID: run.Metadata.RequestID,
+		typ:    protocol.FaceEventRemoteRunChanged,
 		source: "remoteexec", message: "Remote run changed",
 		data: protocol.RemoteRunChangedEventData{
 			RunID: run.ID, HandID: run.HandID, Tool: run.Tool, Status: run.Status, DurationMs: duration,

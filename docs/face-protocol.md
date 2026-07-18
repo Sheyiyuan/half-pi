@@ -4,9 +4,9 @@
 
 ## 状态
 
-核心协议与 P1 只读运行时已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、有序队列及 conversation/Hand/run/task 事件。Chat、异步审批和客户端仍待实现。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。本文不包含具体 UI 设计。
+核心协议、P1 Gateway 和 P2 Chat 生命周期已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、有序队列、Chat/cancel 以及 conversation/Hand/run/task/chat 事件。异步审批、run/task cancel 和客户端仍待实现。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。本文不包含具体 UI 设计。
 
-当前正式 command runtime 支持 conversation list/create/rename/snapshot、subscribe、Hand list/get、run get 和 task list/get/log；Chat、run/task cancel 与 approval resolve 会在后续阶段实现。
+当前正式 command runtime 支持 Chat/cancel、conversation list/create/rename/snapshot、subscribe、Hand list/get、run get 和 task list/get/log；run/task cancel 与 approval resolve 会在后续阶段实现。
 
 ## 目标
 
@@ -694,6 +694,8 @@ Face 重复发送相同 request_id 和 payload
 验收：两个 Headless Face 可读取同一 conversation，重连后通过快照恢复。
 
 ### F2：Chat 闭环
+
+2026-07-18 已完成。
 
 - 实现 chat、accepted、result 和 cancel。
 - 管理 `request_id -> context/status/result`。

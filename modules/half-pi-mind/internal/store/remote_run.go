@@ -12,7 +12,7 @@ import (
 
 // RemoteRunRecord 是持久化的远程执行审计记录。
 type RemoteRunRecord struct {
-	ID, SessionID, HandID, Tool               string
+	ID, SessionID, RequestID, HandID, Tool    string
 	ArgsDigest, ApprovalSource, ApprovalMode  string
 	ApprovalReason, RejectCode, Error         string
 	Status                                    protocol.RunStatus
@@ -81,9 +81,9 @@ func insertRemoteRun(tx interface {
 }, run remoteexec.AuditRun) error {
 	createdAt := run.CreatedAt.UnixMilli()
 	_, err := tx.Exec(`INSERT INTO remote_runs
-		(id, session_id, hand_id, tool, args_digest, approval_source, approval_mode, approval_reason, status, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.ID, run.SessionID, run.HandID, run.Tool, run.Metadata.ArgsDigest,
+		(id, session_id, request_id, hand_id, tool, args_digest, approval_source, approval_mode, approval_reason, status, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.ID, run.SessionID, run.Metadata.RequestID, run.HandID, run.Tool, run.Metadata.ArgsDigest,
 		run.Metadata.ApprovalSource, run.Metadata.ApprovalMode, run.Metadata.ApprovalReason,
 		run.Status, createdAt)
 	if err != nil {
@@ -238,7 +238,7 @@ func (s *Store) RecoverRemoteRuns() (int, error) {
 	return len(runs), nil
 }
 
-const remoteRunSelect = `SELECT id, session_id, hand_id, tool, args_digest,
+const remoteRunSelect = `SELECT id, session_id, request_id, hand_id, tool, args_digest,
 	approval_source, approval_mode, approval_reason, status, reject_code, error,
 	created_at, sent_at, accepted_at, finished_at, duration_ms FROM remote_runs`
 
@@ -264,7 +264,7 @@ type scanner interface{ Scan(...any) error }
 func scanRemoteRun(row scanner) (RemoteRunRecord, error) {
 	var run RemoteRunRecord
 	var createdAt, sentAt, acceptedAt, finishedAt int64
-	err := row.Scan(&run.ID, &run.SessionID, &run.HandID, &run.Tool, &run.ArgsDigest,
+	err := row.Scan(&run.ID, &run.SessionID, &run.RequestID, &run.HandID, &run.Tool, &run.ArgsDigest,
 		&run.ApprovalSource, &run.ApprovalMode, &run.ApprovalReason, &run.Status,
 		&run.RejectCode, &run.Error, &createdAt, &sentAt, &acceptedAt, &finishedAt, &run.DurationMs)
 	if err != nil {

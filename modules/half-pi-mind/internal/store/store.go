@@ -147,6 +147,7 @@ func (s *Store) migrate() error {
 		`CREATE TABLE IF NOT EXISTS remote_runs (
 			id TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL DEFAULT '',
+			request_id TEXT NOT NULL DEFAULT '',
 			hand_id TEXT NOT NULL,
 			tool TEXT NOT NULL,
 			args_digest TEXT NOT NULL DEFAULT '',
@@ -218,6 +219,9 @@ func (s *Store) migrate() error {
 	}
 	if err := s.addColumnIfNotExists("hand_tokens", "hand_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate Hand token identity: %w", err)
+	}
+	if err := s.addColumnIfNotExists("remote_runs", "request_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate remote run request ID: %w", err)
 	}
 	if err := s.addColumnIfNotExists("remote_run_events", "progress_seq", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return fmt.Errorf("migrate remote progress seq: %w", err)

@@ -32,6 +32,10 @@ type gatewayFixture struct {
 }
 
 func newGatewayFixture(t *testing.T, queueSize int) *gatewayFixture {
+	return newGatewayFixtureWithProvider(t, queueSize, gatewayTestLLM{})
+}
+
+func newGatewayFixtureWithProvider(t *testing.T, queueSize int, provider llm.Provider) *gatewayFixture {
 	t.Helper()
 	db, err := store.New(filepath.Join(t.TempDir(), "gateway.db"))
 	if err != nil {
@@ -45,7 +49,7 @@ func newGatewayFixture(t *testing.T, queueSize int) *gatewayFixture {
 	authority := remoteexec.NewAuthority(h, remoteexec.NewRegistry(db), nil)
 	tasks := remoteexec.NewTaskService(authority, db)
 	manager, err := conversation.NewManager(conversation.Config{
-		GroupID: group.ID, Provider: gatewayTestLLM{}, Store: db,
+		GroupID: group.ID, Provider: provider, Store: db,
 		Authority: authority, Tasks: tasks,
 	})
 	if err != nil {
@@ -324,8 +328,25 @@ func TestRunGetFallsBackToStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	data, err := protocol.StrictDecode[protocol.RunGetResult](result.Data)
-	if err != nil || data.Run.RunID != request.RunID || data.Run.Status != protocol.RunLost || data.Run.FinishedAt == nil {
+	if err != nil || data.Run.RunID != request.RunID || data.Run.RequestID != request.RunID ||
+		data.Run.Status != protocol.RunLost || data.Run.FinishedAt == nil {
 		t.Fatalf("run result = %+v, %v", data, err)
+	}
+}
+
+func TestRunProjectionUsesFaceRequestAssociation(t *testing.T) {
+	now := time.Now().UTC()
+	memory := projectMemoryRun(remoteexec.Run{
+		ID: "memory-run", SessionID: "conv-run", HandID: "hand-1", Tool: "read_file",
+		Status: protocol.RunRunning, CreatedAt: now,
+		Metadata: remoteexec.AuditMetadata{RequestID: "face-memory-request"},
+	})
+	stored := projectStoredRun(store.RemoteRunRecord{
+		ID: "stored-run", SessionID: "conv-run", RequestID: "face-stored-request",
+		HandID: "hand-1", Tool: "read_file", Status: protocol.RunSucceeded, CreatedAt: now,
+	})
+	if memory.summary.RequestID != "face-memory-request" || stored.summary.RequestID != "face-stored-request" {
+		t.Fatalf("run request projections = memory %q, stored %q", memory.summary.RequestID, stored.summary.RequestID)
 	}
 }
 
@@ -490,12 +511,16 @@ func TestDomainObserversProjectRunAndTaskChanges(t *testing.T) {
 	}))
 	_ = nextPayload[protocol.FaceAccepted](t, state, protocol.TypeFaceAccepted)
 
-	if err := fixture.authority.Registry.Create("run-domain", conversationID, "hand-1", "read_file"); err != nil {
+	if err := fixture.authority.Registry.CreateWithMetadata(
+		"run-domain", conversationID, "hand-1", "read_file",
+		remoteexec.AuditMetadata{RequestID: "face-domain-request"},
+	); err != nil {
 		t.Fatal(err)
 	}
 	runEvent := nextPayload[protocol.FaceEvent](t, state, protocol.TypeFaceEvent)
 	conversationEvent := nextPayload[protocol.FaceEvent](t, state, protocol.TypeFaceEvent)
-	if runEvent.EventSeq != 1 || runEvent.Type != protocol.FaceEventRemoteRunChanged || conversationEvent.EventSeq != 2 || conversationEvent.Type != protocol.FaceEventConversationChanged {
+	if runEvent.EventSeq != 1 || runEvent.Type != protocol.FaceEventRemoteRunChanged || runEvent.RequestID != "face-domain-request" ||
+		conversationEvent.EventSeq != 2 || conversationEvent.Type != protocol.FaceEventConversationChanged {
 		t.Fatalf("run observer events = %+v then %+v", runEvent, conversationEvent)
 	}
 

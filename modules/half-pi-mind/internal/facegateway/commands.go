@@ -15,6 +15,10 @@ import (
 
 func (g *Gateway) handleCommand(state *connection, identity protocol.FaceIdentity, env protocol.Envelope) {
 	switch env.Type {
+	case protocol.TypeFaceChat:
+		g.handleChat(state, identity, env)
+	case protocol.TypeFaceChatCancel:
+		g.handleChatCancel(state, identity, env)
 	case protocol.TypeFaceConversationList:
 		g.handleConversationList(state, identity, env)
 	case protocol.TypeFaceConversationCreate:

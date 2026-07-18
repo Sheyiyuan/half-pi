@@ -17,6 +17,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 )
 
 type toggledAuditor struct {
@@ -222,7 +223,8 @@ func TestUseHandTimeoutSendsCancel(t *testing.T) {
 		args, _ := json.Marshal(map[string]any{
 			"tool": "exec_command", "args": map[string]any{"command": "sleep 5"}, "timeout_ms": 50,
 		})
-		resultCh <- tool.Execute(WithRemoteBridge(context.Background(), bridge), args)
+		ctx := requestctx.WithRequestID(context.Background(), "face-request-1")
+		resultCh <- tool.Execute(WithRemoteBridge(ctx, bridge), args)
 	}()
 
 	rpcEnv, err := session.Read()
@@ -232,6 +234,10 @@ func TestUseHandTimeoutSendsCancel(t *testing.T) {
 	rpc, err := protocol.DecodePayload[protocol.RPC](&rpcEnv)
 	if err != nil {
 		t.Fatal(err)
+	}
+	run, ok := runs.Snapshot(rpc.RunID)
+	if !ok || run.Metadata.RequestID != "face-request-1" {
+		t.Fatalf("run request association = %+v, %t", run.Metadata, ok)
 	}
 	accepted, _ := protocol.NewEnvelope("", protocol.TypeRPCAccepted, protocol.RPCAccepted{RunID: rpc.RunID, StartedAt: time.Now().UnixMilli()})
 	if err := session.Send(*accepted); err != nil {

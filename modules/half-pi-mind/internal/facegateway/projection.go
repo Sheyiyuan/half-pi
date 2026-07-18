@@ -60,6 +60,9 @@ func (g *Gateway) snapshot(identity protocol.FaceIdentity, conversationID string
 		ActiveRuns: activeRuns, Tasks: []protocol.TaskSummary{},
 		SnapshotVersion: g.version.Load(),
 	}
+	if hasScope(identity, protocol.FaceScopeChat) {
+		snapshot.PendingChats = g.chats.activeChats(conversationID)
+	}
 	for _, message := range messages {
 		snapshot.Messages = append(snapshot.Messages, protocol.FaceMessage{
 			ID: message.ID, Role: message.Role, Content: message.Content,
@@ -133,16 +136,24 @@ func projectMemoryRun(run remoteexec.Run) runProjection {
 	if duration < 0 {
 		duration = 0
 	}
+	requestID := run.Metadata.RequestID
+	if requestID == "" {
+		requestID = run.ID
+	}
 	return runProjection{conversationID: run.SessionID, summary: protocol.RemoteRunSummary{
-		RunID: run.ID, RequestID: run.ID, HandID: run.HandID, Tool: run.Tool,
+		RunID: run.ID, RequestID: requestID, HandID: run.HandID, Tool: run.Tool,
 		Status: run.Status, DurationMs: duration, CreatedAt: run.CreatedAt, FinishedAt: finishedAt,
 	}}
 }
 
 func projectStoredRun(run store.RemoteRunRecord) runProjection {
 	finishedAt := timePointer(run.FinishedAt)
+	requestID := run.RequestID
+	if requestID == "" {
+		requestID = run.ID
+	}
 	return runProjection{conversationID: run.SessionID, summary: protocol.RemoteRunSummary{
-		RunID: run.ID, RequestID: run.ID, HandID: run.HandID, Tool: run.Tool,
+		RunID: run.ID, RequestID: requestID, HandID: run.HandID, Tool: run.Tool,
 		Status: run.Status, DurationMs: max(run.DurationMs, 0), CreatedAt: run.CreatedAt, FinishedAt: finishedAt,
 	}}
 }

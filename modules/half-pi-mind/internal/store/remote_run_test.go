@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -10,11 +11,58 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
 
+func TestRemoteRunRequestIDMigrationPreservesLegacyRows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-run.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE remote_runs (
+		id TEXT PRIMARY KEY,
+		session_id TEXT NOT NULL DEFAULT '',
+		hand_id TEXT NOT NULL,
+		tool TEXT NOT NULL,
+		args_digest TEXT NOT NULL DEFAULT '',
+		approval_source TEXT NOT NULL DEFAULT '',
+		approval_mode TEXT NOT NULL DEFAULT '',
+		approval_reason TEXT NOT NULL DEFAULT '',
+		status TEXT NOT NULL,
+		reject_code TEXT NOT NULL DEFAULT '',
+		error TEXT NOT NULL DEFAULT '',
+		created_at INTEGER NOT NULL,
+		sent_at INTEGER NOT NULL DEFAULT 0,
+		accepted_at INTEGER NOT NULL DEFAULT 0,
+		finished_at INTEGER NOT NULL DEFAULT 0,
+		duration_ms INTEGER NOT NULL DEFAULT 0
+	)`)
+	if err == nil {
+		_, err = db.Exec(`INSERT INTO remote_runs (id, session_id, hand_id, tool, status, created_at)
+			VALUES ('legacy-run', 'legacy-session', 'legacy-hand', 'read_file', 'created', ?)`, time.Now().UnixMilli())
+	}
+	if closeErr := db.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	run, err := store.GetRemoteRun("legacy-run")
+	if err != nil || run.RequestID != "" || run.SessionID != "legacy-session" {
+		t.Fatalf("migrated legacy run = %+v, %v", run, err)
+	}
+}
+
 func TestRemoteRunAuditLifecycle(t *testing.T) {
 	store := newTestStore(t)
 	registry := remoteexec.NewRegistry(store)
 	metadata := remoteexec.AuditMetadata{
-		ArgsDigest: "approval:abc123", ApprovalSource: "mind", ApprovalMode: "normal", ApprovalReason: "confirmed",
+		RequestID: "face-request-1", ArgsDigest: "approval:abc123",
+		ApprovalSource: "mind", ApprovalMode: "normal", ApprovalReason: "confirmed",
 	}
 	if err := registry.CreateWithMetadata("run-1", "session-1", "hand-1", "exec_command", metadata); err != nil {
 		t.Fatal(err)
@@ -36,7 +84,7 @@ func TestRemoteRunAuditLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != protocol.RunSucceeded || run.ArgsDigest != metadata.ArgsDigest || run.ApprovalSource != "mind" {
+	if run.Status != protocol.RunSucceeded || run.RequestID != metadata.RequestID || run.ArgsDigest != metadata.ArgsDigest || run.ApprovalSource != "mind" {
 		t.Fatalf("unexpected run: %+v", run)
 	}
 	if run.SentAt.IsZero() || run.AcceptedAt.IsZero() || run.FinishedAt.IsZero() {

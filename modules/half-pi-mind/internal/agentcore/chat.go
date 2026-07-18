@@ -68,6 +68,7 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 		Role:    llm.RoleUser,
 		Content: input,
 	})
+	hooks := chatHooksFromContext(ctx)
 
 	for step := 0; step < maxToolCallSteps; step++ {
 		c.stateMu.RLock()
@@ -116,6 +117,9 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 			llmConfirm, _ := rawArgs["confirm"].(bool)
 			delete(rawArgs, "confirm")
 			cleanArgs, _ := json.Marshal(rawArgs)
+			if hooks.ToolCalled != nil {
+				hooks.ToolCalled(ChatToolCall{Tool: tc.Name, ArgsDigest: toolArgsDigest(cleanArgs)})
+			}
 
 			shouldBlock, blockReason := c.CheckAndConfirm(tc.Name, cleanArgs, llmConfirm)
 
@@ -128,6 +132,9 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 				}
 			} else {
 				result = c.exec.ExecuteTool(ctx, tc.Name, cleanArgs)
+			}
+			if hooks.ToolCompleted != nil {
+				hooks.ToolCompleted(ChatToolResult{Tool: tc.Name, Success: !shouldBlock && result.Success})
 			}
 
 			output := result.Output

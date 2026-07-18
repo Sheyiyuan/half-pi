@@ -9,6 +9,7 @@ import (
 
 // AuditMetadata 是创建远程执行审计记录所需的脱敏元数据。
 type AuditMetadata struct {
+	RequestID      string
 	ArgsDigest     string
 	ApprovalSource string
 	ApprovalMode   string
