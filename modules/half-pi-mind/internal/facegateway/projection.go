@@ -63,6 +63,13 @@ func (g *Gateway) snapshot(identity protocol.FaceIdentity, conversationID string
 	if hasScope(identity, protocol.FaceScopeChat) {
 		snapshot.PendingChats = g.chats.activeChats(conversationID)
 	}
+	if hasScope(identity, protocol.FaceScopeApprove) {
+		pending, err := g.approvals.Pending(conversationID)
+		if err != nil {
+			return protocol.ConversationSnapshot{}, err
+		}
+		snapshot.PendingApprovals = pending
+	}
 	for _, message := range messages {
 		snapshot.Messages = append(snapshot.Messages, protocol.FaceMessage{
 			ID: message.ID, Role: message.Role, Content: message.Content,

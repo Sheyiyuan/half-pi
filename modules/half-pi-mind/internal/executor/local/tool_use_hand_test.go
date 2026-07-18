@@ -15,6 +15,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
 
@@ -39,6 +40,7 @@ func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 	defer session.Conn.Close()
 
 	runs := remoteexec.NewRegistry()
+	authority := remoteexec.NewAuthority(h, runs, nil)
 	h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
 		switch msg.Type {
 		case protocol.TypeRPCAccepted:
@@ -56,13 +58,15 @@ func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 
 	bridge := &RemoteBridge{
 		Hub:        h,
+		Authority:  authority,
 		Runs:       runs,
 		ActiveHand: func() string { return "remote-hand" },
-		CheckAndConfirm: func(toolName string, args json.RawMessage, llmConfirm bool) (bool, string) {
+		SessionID:  func() string { return "session-1" },
+		CheckAndConfirm: func(_ context.Context, _, toolName string, _ json.RawMessage, _ string, llmConfirm bool) approval.CheckResult {
 			if !llmConfirm {
 				t.Error("remote-only tool did not force Mind approval")
 			}
-			return false, ""
+			return approval.CheckResult{}
 		},
 	}
 

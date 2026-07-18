@@ -1,6 +1,7 @@
 package repl
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +18,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
@@ -135,12 +137,6 @@ func TestEmitForSessionPreservesOriginSession(t *testing.T) {
 	}
 }
 
-type allowApprover struct{}
-
-func (allowApprover) Confirm(string, string) agentcore.ConfirmResult {
-	return agentcore.ConfirmAllow
-}
-
 func TestHandExecUsesSharedAuthorityAndEmitsResultForOriginalSession(t *testing.T) {
 	const (
 		handID    = "simulated-hand"
@@ -214,7 +210,18 @@ func TestHandExecUsesSharedAuthorityAndEmitsResultForOriginalSession(t *testing.
 		handDone <- client.Send(*result)
 	}()
 
-	bridge := &local.RemoteBridge{Hub: authority.Hub, Runs: authority.Registry, PendingCall: authority.PendingCall}
+	broker, err := approval.New(approval.Config{Auditor: db})
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker.SetFallbackResolver(func(context.Context, protocol.ApprovalRequest) (approval.Actor, protocol.FaceApprovalDecision, string, bool) {
+		return approval.Actor{ID: "repl", Label: "REPL", Source: "repl"}, protocol.FaceApprovalAllowOnce, "approved in test", true
+	})
+	t.Cleanup(func() { _ = broker.Close() })
+	bridge := &local.RemoteBridge{
+		Hub: authority.Hub, Authority: authority, Runs: authority.Registry,
+		PendingCall: authority.PendingCall,
+	}
 	core, err := agentcore.New(nil, local.New(bridge))
 	if err != nil {
 		t.Fatal(err)
@@ -226,12 +233,12 @@ func TestHandExecUsesSharedAuthorityAndEmitsResultForOriginalSession(t *testing.
 	if err := core.SetActiveHand(handID); err != nil {
 		t.Fatal(err)
 	}
-	core.SetApprover(allowApprover{})
+	core.SetApprover(broker)
 	bridge.ActiveHand = core.ActiveHand
 	bridge.SessionID = core.SessionID
 	bridge.Mode = core.SecurityMode
 	bridge.SetActiveHand = core.SetActiveHand
-	bridge.CheckAndConfirm = core.CheckAndConfirm
+	bridge.CheckAndConfirm = core.CheckAndConfirmRun
 	r := &Repl{core: core, bridge: bridge, bus: bus, store: db}
 
 	if !r.handleCommand(`/hand exec simulated_remote_tool {"value":1}`) {

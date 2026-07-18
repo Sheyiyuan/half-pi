@@ -7,12 +7,14 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
 
 // RemoteBridge 提供远程 Hand 工具所需的核心依赖。
 type RemoteBridge struct {
 	Hub           *hub.Hub
+	Authority     *remoteexec.Authority
 	Runs          *remoteexec.Registry
 	Tasks         *remoteexec.TaskService
 	ActiveHand    func() string
@@ -22,7 +24,7 @@ type RemoteBridge struct {
 	// PendingCall 注册一次等待远程 Hand 响应的调用，并返回清理函数。
 	PendingCall func(id string, timeout time.Duration, expectedPeer string) (<-chan protocol.Envelope, func())
 	// CheckAndConfirm 复用 Mind 本地安全检查和审批流程。
-	CheckAndConfirm func(toolName string, args json.RawMessage, llmConfirm bool) (bool, string)
+	CheckAndConfirm func(context.Context, string, string, json.RawMessage, string, bool) approval.CheckResult
 }
 
 type remoteBridgeKey struct{}

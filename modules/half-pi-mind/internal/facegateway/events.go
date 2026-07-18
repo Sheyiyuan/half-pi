@@ -6,6 +6,7 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
 
@@ -46,6 +47,42 @@ func (g *Gateway) PublishConversationChanged(conversationID string) {
 		source: "conversation", message: "Conversation changed",
 		data: protocol.ConversationChangedEventData{ConversationID: conversationID, SnapshotVersion: version},
 	})
+}
+
+// PublishApprovalRequested 发布可由具备审批 scope 的 Face 裁决的请求。
+func (g *Gateway) PublishApprovalRequested(request protocol.ApprovalRequest) {
+	if request.ApprovalID == "" || request.ConversationID == "" {
+		return
+	}
+	g.domainMu.Lock()
+	defer g.domainMu.Unlock()
+	version := g.version.Add(1)
+	g.publish(domainEvent{
+		conversationID: request.ConversationID, requestID: request.RequestID,
+		typ: protocol.FaceEventApprovalRequested, source: "approval", message: "Approval requested",
+		data: request,
+	})
+	g.publishConversationVersion(request.ConversationID, version)
+}
+
+// PublishApprovalFinished 发布审批终态，并在无裁决终态时仅推进快照版本。
+func (g *Gateway) PublishApprovalFinished(request protocol.ApprovalRequest, status approval.Status, resolution approval.Resolution) {
+	if request.ApprovalID == "" || request.ConversationID == "" {
+		return
+	}
+	g.domainMu.Lock()
+	defer g.domainMu.Unlock()
+	version := g.version.Add(1)
+	if status == approval.StatusResolved && resolution.Decision != "" {
+		g.publish(domainEvent{
+			conversationID: request.ConversationID, requestID: request.RequestID,
+			typ: protocol.FaceEventApprovalResolved, source: "approval", message: "Approval resolved",
+			data: protocol.ApprovalResolvedEventData{
+				ApprovalID: request.ApprovalID, Decision: resolution.Decision, Actor: resolution.Actor.ID,
+			},
+		})
+	}
+	g.publishConversationVersion(request.ConversationID, version)
 }
 
 // PublishRemoteRunChanged 发布 run 状态变化。

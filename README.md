@@ -4,7 +4,7 @@
 
 # Half Pi · 半派
 
-> **当前状态：Alpha 开发中。** Mind 与 Hand 的远程执行闭环及 Face 的加密 Gateway、Chat/cancel 生命周期已可用；异步审批和客户端仍在实现。
+> **当前状态：Alpha 开发中。** Mind 与 Hand 的远程执行闭环及 Face 的加密 Gateway、Chat、异步审批和 run/task cancel runtime 已可用；首个 Face 客户端仍在实现。
 
 ---
 
@@ -46,6 +46,7 @@ Half Pi 不是远程桌面，也不是远程控制台加一个聊天框。远程
 - 通过审批摘要、双层安全检查和令牌绑定控制远程执行边界。
 - 启动可持久化的远程后台任务，跨 WebSocket 重连继续运行。
 - 查询任务状态、读取有界日志、取消远程任务，并保留状态迁移审计。
+- 通过加密 Face 协议恢复 conversation、发起 Chat、异步审批敏感操作并订阅 run/task 状态；当前需自行实现协议客户端。
 
 ## 使用场景
 
@@ -83,7 +84,7 @@ flowchart LR
 | 角色 | 职责 | 当前状态 |
 | --- | --- | --- |
 | **Mind** | 常驻的智能与状态中心，负责会话、LLM 决策、技能、审批、设备调度和审计 | 服务模式和 REPL 可用 |
-| **Face** | 无状态交互入口，负责输入、展示、审批交互和事件投影；人类客户端与无头 Agent Face 共用统一协议 | 仅占位程序，Alpha 开发重点 |
+| **Face** | 无状态交互入口，负责输入、展示、审批交互和事件投影；人类客户端与无头 Agent Face 共用统一协议 | Mind 侧 runtime 可用，客户端仍为占位程序 |
 | **Hand** | 部署在用户设备上的轻量执行节点，执行工具并实施本地安全策略 | 远程执行链路可用 |
 
 共享组件位于独立 Go 模块中：
@@ -109,7 +110,8 @@ modules/
 | 通信 | WebSocket Hub、四步挑战握手、连接序号防重放、注册后 AES-128-GCM 强制加密 |
 | Hand | 独立 token/application key 注册、工具发现、远程调用、取消、超时、自动重连 |
 | 后台任务 | Hand 本地 SQLite 与受限日志文件，Mind 保存脱敏快照 |
-| 审计 | 远程执行状态迁移、审批摘要、结果来源校验 |
+| Face runtime | conversation/Hand/run/task 查询、Chat/cancel、异步审批、run/task cancel、快照与订阅 |
+| 审计 | 远程执行状态迁移、Face/REPL 审批 identity 与脱敏摘要、结果来源校验 |
 
 ### Mind
 
@@ -243,6 +245,7 @@ Half Pi 会让 AI 接触真实设备，因此安全能力不是附属功能。
 - Mind 校验远程执行结果是否来自预期 Hand。
 - Mind 负责用户审批和全局策略，Hand 负责本机工具权限和最终安全检查。
 - Approval 摘要使用 SHA-256 绑定 `run_id`、`hand_id`、工具和参数，并带有效期。
+- Face 和 REPL 通过同一个进程级 Approval Broker 裁决，并按 conversation 隔离 session 决策；首个合法结果生效，过期与重复裁决 fail closed，SQLite 不保存原始工具参数。
 - 工具输出有大小上限，远程任务支持截止时间和取消。
 - Hand 凭据绑定创建时的 label，不能冒用其他身份；旧 `hand_tokens` 和旧三步握手不再认证，升级后必须重新执行 `/hand add <label>`。
 
@@ -250,7 +253,6 @@ Half Pi 会让 AI 接触真实设备，因此安全能力不是附属功能。
 
 - 当前默认连接是 `ws://`。应用层加密可以证明对端持有 application key，但不能证明主机身份；非 loopback 生产部署仍应使用 TLS/WSS。
 - Hand/Face 长期凭据以明文保存在受限本地 SQLite 中；数据库泄露等同凭据泄露。Unix 路径会收紧到目录 `0700`、文件 `0600`，Windows 原生 ACL 仍需发布环境验收。
-- 审计目前聚焦远程执行状态和脱敏审批元数据，尚未覆盖完整的多端用户身份与审批交互链路。
 - 当前安全规则是基础实现，不等同于 OS 沙箱。
 
 ## Alpha 路线图
@@ -260,8 +262,9 @@ Half Pi 会让 AI 接触真实设备，因此安全能力不是附属功能。
 - [x] Mind/Hand 双层检查、Approval 绑定和远程执行状态机。
 - [x] 持久化远程执行、审批元数据和状态迁移审计记录。
 - [x] 完成统一 Face 协议、无头 Agent Face 和跨设备同步的 Alpha 设计。
+- [x] 实现 Mind 侧 Face Gateway、Chat、异步审批、run/task cancel 和多 Face 状态投影。
 - [ ] 实现首个可用 Face，支持从其他设备连接 Mind。
-- [ ] 在多个 Face 间恢复并同步会话、任务状态和审批请求。
+- [ ] 用 Headless Face 真实进程 E2E 验证跨 Face 恢复、同步和审批闭环。
 - [ ] 默认启用安全传输，并完成密钥管理方案。
 - [ ] 实现工作区级长期记忆和可控的跨组访问。
 

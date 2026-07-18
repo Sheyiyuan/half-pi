@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
@@ -31,14 +32,19 @@ func newTestManager(t *testing.T) (*Manager, *store.Store) {
 	h := hub.New()
 	authority := remoteexec.NewAuthority(h, remoteexec.NewRegistry(db), nil)
 	tasks := remoteexec.NewTaskService(authority, db)
+	approvals, err := approval.New(approval.Config{Auditor: db})
+	if err != nil {
+		t.Fatal(err)
+	}
 	manager, err := NewManager(Config{
 		GroupID: group.ID, Provider: testProvider{}, Store: db,
-		Authority: authority, Tasks: tasks,
+		Approvals: approvals, Authority: authority, Tasks: tasks,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		_ = approvals.Close()
 		_ = authority.Close()
 		_ = db.Close()
 	})
@@ -65,14 +71,21 @@ func TestManagerCreateAndRestoreConversationState(t *testing.T) {
 	secondHub := hub.New()
 	secondAuthority := remoteexec.NewAuthority(secondHub, remoteexec.NewRegistry(db), nil)
 	secondTasks := remoteexec.NewTaskService(secondAuthority, db)
+	secondApprovals, err := approval.New(approval.Config{Auditor: db})
+	if err != nil {
+		t.Fatal(err)
+	}
 	second, err := NewManager(Config{
 		GroupID: manager.GroupID(), Provider: testProvider{}, Store: db,
-		Authority: secondAuthority, Tasks: secondTasks,
+		Approvals: secondApprovals, Authority: secondAuthority, Tasks: secondTasks,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = secondAuthority.Close() })
+	t.Cleanup(func() {
+		_ = secondApprovals.Close()
+		_ = secondAuthority.Close()
+	})
 	restored, err := second.Get(id)
 	if err != nil {
 		t.Fatal(err)

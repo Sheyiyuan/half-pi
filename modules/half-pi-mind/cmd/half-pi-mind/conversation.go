@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/conversation"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
@@ -15,7 +16,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 
-func newConversationManager(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.EventBus, authority *remoteexec.Authority, tasks *remoteexec.TaskService) (*conversation.Manager, error) {
+func newConversationManager(env *setup.Env, cfg *config.Config, db *store.Store, bus *events.EventBus, approvals *approval.Broker, authority *remoteexec.Authority, tasks *remoteexec.TaskService) (*conversation.Manager, error) {
 	modelID := cfg.LLM.DefaultModel
 	if modelID == "" && len(cfg.LLM.Models) > 0 {
 		modelID = cfg.LLM.Models[0].ID
@@ -43,6 +44,6 @@ func newConversationManager(env *setup.Env, cfg *config.Config, db *store.Store,
 	}
 	return conversation.NewManager(conversation.Config{
 		GroupID: group.ID, Provider: provider, Store: db, Bus: bus,
-		Skills: skills, Authority: authority, Tasks: tasks,
+		Skills: skills, Approvals: approvals, Authority: authority, Tasks: tasks,
 	})
 }

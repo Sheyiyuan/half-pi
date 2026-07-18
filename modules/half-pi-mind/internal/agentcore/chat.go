@@ -121,7 +121,7 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 				hooks.ToolCalled(ChatToolCall{Tool: tc.Name, ArgsDigest: toolArgsDigest(cleanArgs)})
 			}
 
-			shouldBlock, blockReason := c.CheckAndConfirm(tc.Name, cleanArgs, llmConfirm)
+			shouldBlock, blockReason := c.CheckAndConfirm(ctx, tc.Name, cleanArgs, llmConfirm)
 
 			var result *executor.ToolResult
 			if shouldBlock {

@@ -105,6 +105,9 @@ const (
 type FaceApprovalDecision string
 
 const (
+	// MaxFaceApprovalReasonBytes 限制审批请求和裁决原因的 UTF-8 字节数。
+	MaxFaceApprovalReasonBytes = 1024
+
 	FaceApprovalAllowOnce    FaceApprovalDecision = "allow_once"
 	FaceApprovalDenyOnce     FaceApprovalDecision = "deny_once"
 	FaceApprovalAllowSession FaceApprovalDecision = "allow_session"

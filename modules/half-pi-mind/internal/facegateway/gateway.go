@@ -12,6 +12,7 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/conversation"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
@@ -28,6 +29,7 @@ type Config struct {
 	Hub           *hub.Hub
 	Store         *store.Store
 	Conversations *conversation.Manager
+	Approvals     *approval.Broker
 	Authority     *remoteexec.Authority
 	Tasks         *remoteexec.TaskService
 	QueueSize     int
@@ -38,6 +40,7 @@ type Gateway struct {
 	hub           *hub.Hub
 	store         *store.Store
 	conversations *conversation.Manager
+	approvals     *approval.Broker
 	authority     *remoteexec.Authority
 	tasks         *remoteexec.TaskService
 	queueSize     int
@@ -72,7 +75,7 @@ type subscription struct {
 
 // New 创建 Face Gateway 并连接结构化 domain 变化源。
 func New(config Config) (*Gateway, error) {
-	if config.Hub == nil || config.Store == nil || config.Conversations == nil || config.Authority == nil || config.Tasks == nil {
+	if config.Hub == nil || config.Store == nil || config.Conversations == nil || config.Approvals == nil || config.Authority == nil || config.Tasks == nil {
 		return nil, fmt.Errorf("Face Gateway dependencies are required")
 	}
 	if config.QueueSize < 0 {
@@ -82,7 +85,7 @@ func New(config Config) (*Gateway, error) {
 		config.QueueSize = defaultOutboundQueueSize
 	}
 	gateway := &Gateway{
-		hub: config.Hub, store: config.Store, conversations: config.Conversations,
+		hub: config.Hub, store: config.Store, conversations: config.Conversations, approvals: config.Approvals,
 		authority: config.Authority, tasks: config.Tasks, queueSize: config.QueueSize,
 		connections: make(map[*hub.Peer]*connection),
 		chats:       newChatRegistry(),
@@ -92,6 +95,7 @@ func New(config Config) (*Gateway, error) {
 	}
 	gateway.version.Store(1)
 	config.Conversations.OnChange(gateway.PublishConversationChanged)
+	config.Approvals.OnChange(gateway.PublishApprovalRequested, gateway.PublishApprovalFinished)
 	config.Authority.Registry.OnChange(gateway.PublishRemoteRunChanged)
 	config.Tasks.OnChange(gateway.PublishTaskChanged)
 	return gateway, nil
@@ -237,6 +241,13 @@ func (g *Gateway) sendResult(state *connection, meta protocol.FaceCommandMeta, o
 	g.sendPayload(state, protocol.TypeFaceResult, protocol.FaceResult{
 		RequestID: meta.RequestID, ConversationID: meta.ConversationID,
 		Status: protocol.FaceResultSucceeded, Data: raw,
+	})
+}
+
+func (g *Gateway) sendSuccessResult(state *connection, meta protocol.FaceCommandMeta, content string) {
+	g.sendPayload(state, protocol.TypeFaceResult, protocol.FaceResult{
+		RequestID: meta.RequestID, ConversationID: meta.ConversationID,
+		Status: protocol.FaceResultSucceeded, Content: content,
 	})
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/dispatcher"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/facegateway"
@@ -71,6 +72,12 @@ func main() {
 	} else if recovered > 0 {
 		fmt.Fprintf(os.Stderr, "marked %d unfinished remote tasks stale\n", recovered)
 	}
+	if recovered, err := db.RecoverApprovals(time.Now().UTC()); err != nil {
+		fmt.Fprintf(os.Stderr, "approval recovery failed: %v\n", err)
+		os.Exit(1)
+	} else if recovered > 0 {
+		fmt.Fprintf(os.Stderr, "cancelled %d unfinished approvals\n", recovered)
+	}
 
 	bus := events.NewEventBus()
 	defer bus.Close()
@@ -91,13 +98,19 @@ func main() {
 	wsHub := hub.New()
 	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus)
 	taskService := remoteexec.NewTaskService(authority, db)
-	conversations, err := newConversationManager(env, cfg, db, bus, authority, taskService)
+	approvalBroker, err := approval.New(approval.Config{Auditor: db})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "approval broker init failed: %v\n", err)
+		os.Exit(1)
+	}
+	conversations, err := newConversationManager(env, cfg, db, bus, approvalBroker, authority, taskService)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "conversation runtime init failed: %v\n", err)
 		os.Exit(1)
 	}
 	faceGateway, err := facegateway.New(facegateway.Config{
-		Hub: wsHub, Store: db, Conversations: conversations, Authority: authority, Tasks: taskService,
+		Hub: wsHub, Store: db, Conversations: conversations, Approvals: approvalBroker,
+		Authority: authority, Tasks: taskService,
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Face Gateway init failed: %v\n", err)
@@ -127,7 +140,7 @@ func main() {
 	}
 
 	if replMode {
-		runREPL(conversations, bus, db, cfg.Server.Enabled, authority.Hub)
+		runREPL(conversations, approvalBroker, bus, db, cfg.Server.Enabled, authority.Hub)
 	} else {
 		runService(env, bus)
 	}
@@ -135,6 +148,9 @@ func main() {
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		_ = httpServer.Shutdown(shutdownCtx)
 		cancel()
+	}
+	if err := approvalBroker.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "approval shutdown: %v\n", err)
 	}
 	if err := authority.Close(); err != nil {
 		fmt.Fprintf(os.Stderr, "remote execution shutdown: %v\n", err)

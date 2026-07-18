@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
@@ -51,23 +50,14 @@ func RemoteRunSnapshot(bridge *RemoteBridge, runID string) (RemoteRunView, error
 
 // CancelRemoteRun 通过原执行连接取消当前会话所属 run。
 func CancelRemoteRun(ctx context.Context, bridge *RemoteBridge, runID string) (RemoteRunView, error) {
-	run, ok := bridge.Runs.Snapshot(runID)
-	if !ok {
-		return RemoteRunView{}, fmt.Errorf("远程执行记录 %q 不存在", runID)
+	if bridge == nil || bridge.Authority == nil || bridge.SessionID == nil {
+		return RemoteRunView{}, fmt.Errorf("远程执行取消服务未初始化")
 	}
-	if bridge.SessionID != nil && run.SessionID != bridge.SessionID() {
-		return RemoteRunView{}, fmt.Errorf("run %q 不属于当前会话", runID)
-	}
-	peer := bridge.Hub.PeerByType(hub.PeerHand, run.HandID)
-	if peer == nil || peer.SessionID() != run.ConnectionID {
-		return RemoteRunView{}, fmt.Errorf("run %q 的原 Hand 连接已断开", runID)
-	}
-	reason := "user"
-	if err := ctx.Err(); err != nil {
+	run, err := bridge.Authority.CancelRun(ctx, bridge.SessionID(), runID, "user")
+	if err != nil {
 		return RemoteRunView{}, err
 	}
-	requestRemoteCancel(bridge, peer, runID, run.HandID, reason)
-	return RemoteRunSnapshot(bridge, runID)
+	return remoteRunView(run), nil
 }
 
 func remoteRunView(run remoteexec.Run) RemoteRunView {

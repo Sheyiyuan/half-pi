@@ -4,9 +4,9 @@
 
 ## 状态
 
-核心协议、P1 Gateway 和 P2 Chat 生命周期已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、有序队列、Chat/cancel 以及 conversation/Hand/run/task/chat 事件。异步审批、run/task cancel 和客户端仍待实现。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。本文不包含具体 UI 设计。
+核心协议与 P1-P3 runtime 已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、有序队列、Chat/cancel、异步审批、run/task cancel 以及结构化事件。Headless Agent Face 和真实进程级 E2E 仍待 P4 实现。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。本文不包含具体 UI 设计。
 
-当前正式 command runtime 支持 Chat/cancel、conversation list/create/rename/snapshot、subscribe、Hand list/get、run get 和 task list/get/log；run/task cancel 与 approval resolve 会在后续阶段实现。
+当前正式 command runtime 支持 Chat/cancel、conversation list/create/rename/snapshot、subscribe、approval resolve、Hand list/get、run get/cancel 和 task list/get/log/cancel。
 
 ## 目标
 
@@ -444,7 +444,7 @@ Alpha 必须结构化的事件：
 
 ## 审批生命周期
 
-审批不能继续只依赖 REPL 的阻塞 stdin。Mind 应将审批表示为可异步裁决的对象：
+审批由进程级 Broker 表示为可异步裁决的 conversation 对象；REPL 和 Face 共用同一个 Broker：
 
 ```go
 type ApprovalRequest struct {
@@ -485,6 +485,7 @@ deny_session
 - 首个合法裁决生效，后续裁决返回 `request_conflict`。
 - 过期审批返回 `approval_expired`。
 - 结果写入审计并包含 Face identity。
+- 审计只保存 tool、reason、参数摘要、identity、decision 和时间；不保存原始工具参数。reason 最多 1024 UTF-8 字节。
 - session 级决定只能影响所属 conversation。
 - Hand 仍验证 Approval 摘要并保留最终守门权。
 
@@ -506,6 +507,8 @@ type FaceRunCancel struct {
 ```
 
 Face Gateway 必须验证 run 属于该 identity 可访问的 conversation。取消只能通过 RemoteRun Authority 发起。
+
+后台任务取消通过 `face.task.cancel` 发起，同时要求 `face:tasks:read` 与 `face:tasks:cancel`。Gateway 校验 task 的 conversation 归属后复用 TaskService，Hand 确认取消后再次查询状态，最终 `face.result.data` 返回取消 outcome 与脱敏 task 快照。
 
 ## 顺序、背压与断线
 

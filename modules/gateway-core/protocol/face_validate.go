@@ -79,6 +79,9 @@ func ValidateFacePayload(typ string, payload json.RawMessage) error {
 		if err == nil && !validFaceApprovalDecision(v.Decision) {
 			err = fmt.Errorf("unknown approval decision %q", v.Decision)
 		}
+		if err == nil && len(v.Reason) > MaxFaceApprovalReasonBytes {
+			err = fmt.Errorf("approval reason exceeds %d bytes", MaxFaceApprovalReasonBytes)
+		}
 	case TypeFaceRunGet:
 		var v FaceRunGet
 		err = decodeFacePayload(payload, &v)
@@ -785,6 +788,9 @@ func validateApprovalRequest(v ApprovalRequest) error {
 	}
 	if v.ExpiresAt.IsZero() {
 		return fmt.Errorf("expires_at is required")
+	}
+	if len(v.Reason) > MaxFaceApprovalReasonBytes {
+		return fmt.Errorf("approval reason exceeds %d bytes", MaxFaceApprovalReasonBytes)
 	}
 	return nil
 }

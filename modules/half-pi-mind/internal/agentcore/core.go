@@ -10,6 +10,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/skill"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
@@ -43,19 +44,10 @@ func (c *Core) SetSessionChangeObserver(observer func()) {
 	c.stateMu.Unlock()
 }
 
-// Approver 由 REPL 实现，处理用户确认交互。
+// Approver 通过 conversation 级审批对象处理用户确认。
 type Approver interface {
-	Confirm(toolName, reason string) ConfirmResult
+	Confirm(context.Context, approval.Request) approval.Resolution
 }
-
-type ConfirmResult int
-
-const (
-	ConfirmDeny ConfirmResult = iota
-	ConfirmAllow
-	ConfirmAllowAlways
-	ConfirmDenyAlways
-)
 
 const maxToolCallSteps = 10
 
@@ -202,7 +194,7 @@ func (c *Core) ToggleDebug() bool {
 
 // ExecuteTool 通过当前会话执行器调用工具，供非 LLM 入口复用。
 func (c *Core) ExecuteTool(ctx context.Context, name string, args json.RawMessage) *executor.ToolResult {
-	if blocked, reason := c.CheckAndConfirm(name, args, false); blocked {
+	if blocked, reason := c.CheckAndConfirm(ctx, name, args, false); blocked {
 		return &executor.ToolResult{Error: fmt.Sprintf("操作被拒绝: %s", reason)}
 	}
 	return c.exec.ExecuteTool(ctx, name, args)

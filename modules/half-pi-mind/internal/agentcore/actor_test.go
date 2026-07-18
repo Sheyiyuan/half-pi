@@ -9,8 +9,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
@@ -35,15 +37,17 @@ func (s *serializedLLM) Chat(context.Context, *llm.LLMRequest) (*llm.LLMResponse
 
 type allowAlwaysApprover struct{}
 
-func (allowAlwaysApprover) Confirm(string, string) ConfirmResult { return ConfirmAllowAlways }
+func (allowAlwaysApprover) Confirm(context.Context, approval.Request) approval.Resolution {
+	return approval.Resolution{Decision: protocol.FaceApprovalAllowSession}
+}
 
 type reentrantApprover struct{ core *Core }
 
-func (a reentrantApprover) Confirm(string, string) ConfirmResult {
+func (a reentrantApprover) Confirm(context.Context, approval.Request) approval.Resolution {
 	_ = a.core.SessionID()
 	_ = a.core.SecurityMode()
 	_ = a.core.ActiveHand()
-	return ConfirmAllow
+	return approval.Resolution{Decision: protocol.FaceApprovalAllowOnce}
 }
 
 func TestCoreSerializesConcurrentChat(t *testing.T) {
@@ -77,19 +81,19 @@ func TestCoreActorsIsolateModeHandAndApprovalCache(t *testing.T) {
 	_ = first.SetActiveHand("hand-a")
 	_ = second.SetActiveHand("hand-b")
 	first.SetApprover(allowAlwaysApprover{})
-	if blocked, _ := first.CheckAndConfirm(toolName, json.RawMessage(`{}`), false); blocked {
+	if blocked, _ := first.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false); blocked {
 		t.Fatal("first actor should cache approval")
 	}
 	first.SetApprover(nil)
-	if blocked, _ := first.CheckAndConfirm(toolName, json.RawMessage(`{}`), false); blocked {
+	if blocked, _ := first.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false); blocked {
 		t.Fatal("first actor cached approval was not reused")
 	}
-	if blocked, _ := first.CheckAndConfirm(toolName, json.RawMessage(`{}`), true); !blocked {
+	if blocked, _ := first.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), true); !blocked {
 		t.Fatal("explicit one-shot confirmation was bypassed by autoAllow")
 	}
 	first.SetMode("strict")
 	second.SetMode("trust")
-	if blocked, _ := second.CheckAndConfirm(toolName, json.RawMessage(`{}`), true); !blocked {
+	if blocked, _ := second.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), true); !blocked {
 		t.Fatal("approval cache leaked to second actor")
 	}
 	if first.SecurityMode() != "strict" || second.SecurityMode() != "trust" {
@@ -157,7 +161,7 @@ func TestApproverCanReadCoreStateWithoutDeadlock(t *testing.T) {
 	core.SetApprover(reentrantApprover{core: core})
 	done := make(chan struct{})
 	go func() {
-		blocked, _ := core.CheckAndConfirm(toolName, json.RawMessage(`{}`), false)
+		blocked, _ := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false)
 		if blocked {
 			t.Error("reentrant approver unexpectedly blocked")
 		}
@@ -178,15 +182,15 @@ func TestDefaultConfirmRequiresApprovalInTrustAndYolo(t *testing.T) {
 	for _, mode := range []string{"trust", "yolo"} {
 		core, _ := New(&stubLLM{}, &stubExecutor{})
 		core.SetMode(mode)
-		if blocked, _ := core.CheckAndConfirm(toolName, json.RawMessage(`{}`), false); !blocked {
+		if blocked, _ := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false); !blocked {
 			t.Fatalf("DefaultConfirm was bypassed in %s mode", mode)
 		}
 		core.SetApprover(allowAlwaysApprover{})
-		if blocked, _ := core.CheckAndConfirm(toolName, json.RawMessage(`{}`), false); blocked {
+		if blocked, _ := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false); blocked {
 			t.Fatalf("DefaultConfirm approval failed in %s mode", mode)
 		}
 		core.SetApprover(nil)
-		if blocked, _ := core.CheckAndConfirm(toolName, json.RawMessage(`{}`), false); !blocked {
+		if blocked, _ := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false); !blocked {
 			t.Fatalf("DefaultConfirm autoAllow bypassed confirmation in %s mode", mode)
 		}
 	}
@@ -214,15 +218,15 @@ func TestExecuteToolCannotBypassSecurity(t *testing.T) {
 
 func TestRemoteOnlyToolRequiresExplicitApproval(t *testing.T) {
 	core, _ := New(&stubLLM{}, &stubExecutor{})
-	if blocked, _ := core.CheckAndConfirm("remote_only_tool", json.RawMessage(`{}`), false); !blocked {
+	if blocked, _ := core.CheckAndConfirm(context.Background(), "remote_only_tool", json.RawMessage(`{}`), false); !blocked {
 		t.Fatal("unknown local tool was allowed without remote confirmation")
 	}
 	core.SetApprover(allowAlwaysApprover{})
-	if blocked, _ := core.CheckAndConfirm("remote_only_tool", json.RawMessage(`{}`), true); blocked {
+	if blocked, _ := core.CheckAndConfirm(context.Background(), "remote_only_tool", json.RawMessage(`{}`), true); blocked {
 		t.Fatal("approved remote-only tool was blocked")
 	}
 	core.SetApprover(nil)
-	if blocked, _ := core.CheckAndConfirm("remote_only_tool", json.RawMessage(`{}`), true); !blocked {
+	if blocked, _ := core.CheckAndConfirm(context.Background(), "remote_only_tool", json.RawMessage(`{}`), true); !blocked {
 		t.Fatal("remote-only approval was incorrectly cached")
 	}
 }

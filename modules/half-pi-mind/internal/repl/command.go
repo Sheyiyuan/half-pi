@@ -174,7 +174,6 @@ func (r *Repl) handleSessionSwitch(targetPrefix string) {
 		fmt.Printf("session not found: %s\n", targetID)
 		return
 	}
-	actor.Core().SetApprover(r.approver)
 	r.actor, r.core, r.bridge = actor, actor.Core(), actor.Bridge()
 	fmt.Printf("switched to session %s\n", shortID(targetID))
 }

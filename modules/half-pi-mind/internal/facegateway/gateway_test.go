@@ -10,6 +10,7 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/conversation"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
@@ -28,6 +29,7 @@ type gatewayFixture struct {
 	hub           *hub.Hub
 	authority     *remoteexec.Authority
 	tasks         *remoteexec.TaskService
+	approvals     *approval.Broker
 	conversations *conversation.Manager
 }
 
@@ -48,26 +50,32 @@ func newGatewayFixtureWithProvider(t *testing.T, queueSize int, provider llm.Pro
 	h := hub.New()
 	authority := remoteexec.NewAuthority(h, remoteexec.NewRegistry(db), nil)
 	tasks := remoteexec.NewTaskService(authority, db)
+	approvals, err := approval.New(approval.Config{Auditor: db})
+	if err != nil {
+		t.Fatal(err)
+	}
 	manager, err := conversation.NewManager(conversation.Config{
 		GroupID: group.ID, Provider: provider, Store: db,
-		Authority: authority, Tasks: tasks,
+		Approvals: approvals, Authority: authority, Tasks: tasks,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	gateway, err := New(Config{
-		Hub: h, Store: db, Conversations: manager, Authority: authority, Tasks: tasks, QueueSize: queueSize,
+		Hub: h, Store: db, Conversations: manager, Approvals: approvals,
+		Authority: authority, Tasks: tasks, QueueSize: queueSize,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		_ = approvals.Close()
 		_ = authority.Close()
 		_ = db.Close()
 	})
 	return &gatewayFixture{
 		gateway: gateway, store: db, hub: h, authority: authority,
-		tasks: tasks, conversations: manager,
+		tasks: tasks, approvals: approvals, conversations: manager,
 	}
 }
 

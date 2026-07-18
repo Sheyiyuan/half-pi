@@ -3,12 +3,15 @@ package agentcore
 import (
 	"context"
 	"encoding/json"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 	"strings"
 	"testing"
+
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 
 // stubLLM is a no-op LLM provider for testing.
@@ -23,7 +26,9 @@ type stubExecutor struct{}
 
 type allowApprover struct{}
 
-func (allowApprover) Confirm(string, string) ConfirmResult { return ConfirmAllow }
+func (allowApprover) Confirm(context.Context, approval.Request) approval.Resolution {
+	return approval.Resolution{Decision: protocol.FaceApprovalAllowOnce}
+}
 
 func (s *stubExecutor) ExecuteTool(ctx context.Context, name string, args json.RawMessage) *executor.ToolResult {
 	return &executor.ToolResult{Success: true, Output: "ok"}
@@ -50,7 +55,7 @@ func TestCheckAndConfirmCannotOverrideDeny(t *testing.T) {
 		t.Fatal(err)
 	}
 	core.SetApprover(allowApprover{})
-	blocked, reason := core.CheckAndConfirm(toolName, json.RawMessage(`{}`), true)
+	blocked, reason := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), true)
 	if !blocked {
 		t.Fatal("DecisionDeny must not be overridden by approval")
 	}
@@ -72,7 +77,7 @@ func TestCheckAndConfirmRequiresApprover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blocked, _ := core.CheckAndConfirm(toolName, json.RawMessage(`{}`), false)
+	blocked, _ := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false)
 	if !blocked {
 		t.Fatal("confirmation-required tool must be blocked without an approver")
 	}

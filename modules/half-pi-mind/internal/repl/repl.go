@@ -11,6 +11,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/conversation"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
@@ -26,11 +27,12 @@ type Repl struct {
 	bridge      *local.RemoteBridge
 	switchActor func(string) (*conversation.Actor, error)
 	approver    *approver
-	scanner     *bufio.Scanner
+	approvals   *approval.Broker
+	input       *inputReader
 }
 
 // Run 启动交互式 REPL 循环。
-func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Actor, error), bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub) {
+func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Actor, error), approvals *approval.Broker, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub) {
 	r := &Repl{
 		core:        actor.Core(),
 		bus:         bus,
@@ -40,10 +42,12 @@ func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Acto
 		actor:       actor,
 		bridge:      actor.Bridge(),
 		switchActor: switchActor,
-		scanner:     bufio.NewScanner(os.Stdin),
+		approvals:   approvals,
+		input:       newInputReader(bufio.NewScanner(os.Stdin)),
 	}
-	r.approver = &approver{scanner: r.scanner}
-	actor.Core().SetApprover(r.approver)
+	r.approver = &approver{input: r.input}
+	approvals.SetFallbackResolver(r.approver.Resolve)
+	defer approvals.SetFallbackResolver(nil)
 
 	r.printBanner(serverEnabled)
 	for r.loop() {
@@ -84,10 +88,11 @@ func (r *Repl) printBanner(serverEnabled bool) {
 
 func (r *Repl) loop() bool {
 	fmt.Print("> ")
-	if !r.scanner.Scan() {
+	line, ok := r.input.read(context.Background())
+	if !ok {
 		return false
 	}
-	input := strings.TrimSpace(r.scanner.Text())
+	input := strings.TrimSpace(line)
 	if input == "" {
 		return true
 	}

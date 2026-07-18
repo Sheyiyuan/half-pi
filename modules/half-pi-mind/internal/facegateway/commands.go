@@ -29,18 +29,24 @@ func (g *Gateway) handleCommand(state *connection, identity protocol.FaceIdentit
 		g.handleConversationRename(state, identity, env)
 	case protocol.TypeFaceSubscribe:
 		g.handleSubscribe(state, identity, env)
+	case protocol.TypeFaceApprovalResolve:
+		g.handleApprovalResolve(state, identity, env)
 	case protocol.TypeFaceHandList:
 		g.handleHandList(state, identity, env)
 	case protocol.TypeFaceHandGet:
 		g.handleHandGet(state, identity, env)
 	case protocol.TypeFaceRunGet:
 		g.handleRunGet(state, identity, env)
+	case protocol.TypeFaceRunCancel:
+		g.handleRunCancel(state, identity, env)
 	case protocol.TypeFaceTaskList:
 		g.handleTaskList(state, identity, env)
 	case protocol.TypeFaceTaskGet:
 		g.handleTaskGet(state, identity, env)
 	case protocol.TypeFaceTaskLog:
 		g.handleTaskLog(state, identity, env)
+	case protocol.TypeFaceTaskCancel:
+		g.handleTaskCancel(state, identity, env)
 	default:
 		meta := decodeMeta(env.Payload)
 		if scope := commandScope(env.Type); scope != "" && !g.requireScope(state, identity, meta, scope) {

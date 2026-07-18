@@ -186,6 +186,7 @@ func TestValidateFacePayloadRejectsMalformedJSON(t *testing.T) {
 		{"empty subscription conversation", TypeFaceSubscribe, `{"request_id":"req-1","conversation_ids":[""]}`},
 		{"unknown subscription event", TypeFaceSubscribe, `{"request_id":"req-1","event_types":["debug"]}`},
 		{"unknown approval decision", TypeFaceApprovalResolve, `{"request_id":"req-1","approval_id":"approval-1","decision":"always"}`},
+		{"oversized approval reason", TypeFaceApprovalResolve, `{"request_id":"req-1","approval_id":"approval-1","decision":"allow_once","reason":"` + strings.Repeat("x", MaxFaceApprovalReasonBytes+1) + `"}`},
 		{"unknown accepted operation", TypeFaceAccepted, `{"request_id":"req-1","operation":"other"}`},
 		{"negative accepted version", TypeFaceAccepted, `{"request_id":"req-1","operation":"subscribe","snapshot_version":-1}`},
 		{"unknown result status", TypeFaceResult, `{"request_id":"req-1","status":"running"}`},

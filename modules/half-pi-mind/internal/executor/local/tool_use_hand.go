@@ -33,7 +33,7 @@ func init() {
 		},
 		Execute: func(ctx context.Context, args json.RawMessage) *executor.ToolResult {
 			bridge := remoteBridgeFromContext(ctx)
-			if bridge == nil || bridge.Runs == nil || bridge.Hub == nil || bridge.ActiveHand == nil || bridge.CheckAndConfirm == nil {
+			if bridge == nil || bridge.Authority == nil || bridge.Runs == nil || bridge.Hub == nil || bridge.ActiveHand == nil || bridge.CheckAndConfirm == nil {
 				return &executor.ToolResult{Error: "远程执行系统未初始化"}
 			}
 
@@ -75,22 +75,15 @@ func init() {
 				return &executor.ToolResult{Error: fmt.Sprintf("Hand %q 不在线或不存在", handID)}
 			}
 
-			// 2. 生成 run 并完成 Mind 侧安全检查
+			// 2. 生成完整执行摘要，再进入 conversation 级审批。
 			runID := protocol.MustNewMsgID()
 			cleanArgs, _ := json.Marshal(params.Args)
-			_, knownLocally := executor.FindTool(params.Tool)
-			blocked, reason := bridge.CheckAndConfirm(params.Tool, cleanArgs, remoteNeedsConfirmation(params.Confirm, params.Background, knownLocally))
-			// 3. 超时
 			timeoutMs := params.TimeoutMs
 			if timeoutMs <= 0 {
 				timeoutMs = 30000
 			}
 			timeout := time.Duration(timeoutMs) * time.Millisecond
-			now := time.Now()
-			deadline := now.Add(timeout + cancelAckTimeout)
-			rpc := protocol.RPC{
-				RunID: runID, Tool: params.Tool, Args: params.Args, DeadlineAt: deadline.UnixMilli(),
-			}
+			rpc := protocol.RPC{RunID: runID, Tool: params.Tool, Args: params.Args}
 			if params.Background {
 				if bridge.Tasks == nil {
 					return &executor.ToolResult{Error: "后台任务系统未初始化"}
@@ -107,7 +100,20 @@ func init() {
 			if err != nil {
 				return &executor.ToolResult{Error: fmt.Sprintf("创建审批摘要失败: %v", err)}
 			}
-			// 4. 创建 run 并发送 RPC
+			_, knownLocally := executor.FindTool(params.Tool)
+			confirmation := bridge.CheckAndConfirm(
+				ctx, runID, params.Tool, cleanArgs, digest,
+				remoteNeedsConfirmation(params.Confirm, params.Background, knownLocally),
+			)
+			blocked, reason := confirmation.Blocked, confirmation.Reason
+			if current := bridge.Hub.PeerByType(hub.PeerHand, handID); current != peer || current.SessionID() != peer.SessionID() {
+				return &executor.ToolResult{Error: fmt.Sprintf("Hand %q 在审批期间已断开", handID)}
+			}
+			now := time.Now()
+			deadline := now.Add(timeout + cancelAckTimeout)
+			rpc.DeadlineAt = deadline.UnixMilli()
+
+			// 3. 创建 run 并发送 RPC
 			sessionID := ""
 			mode := ""
 			if bridge.SessionID != nil {
@@ -116,9 +122,15 @@ func init() {
 			if bridge.Mode != nil {
 				mode = bridge.Mode()
 			}
+			approvalSource := "mind"
+			approvalActor := ""
+			if confirmation.Resolution.Decision != "" {
+				approvalSource = confirmation.Resolution.Actor.Source
+				approvalActor = confirmation.Resolution.Actor.ID
+			}
 			metadata := remoteexec.AuditMetadata{
 				RequestID: requestctx.RequestID(ctx), ArgsDigest: digest,
-				ApprovalSource: "mind", ApprovalMode: mode, ApprovalReason: reason,
+				ApprovalSource: approvalSource, ApprovalMode: mode, ApprovalReason: reason,
 			}
 			var createErr error
 			if params.Background && !blocked {
@@ -141,7 +153,8 @@ func init() {
 				}
 			}
 			approval := &protocol.Approval{
-				Approved: true, Source: "mind", Mode: mode, Reason: reason, OneShot: true,
+				Approved: true, Source: approvalSource, Mode: mode, Approver: approvalActor,
+				Reason: reason, OneShot: true,
 				ArgsDigest: digest, ApprovedAt: now.UnixMilli(), ExpiresAt: deadline.UnixMilli(),
 			}
 			rpc.Approval = approval
@@ -202,7 +215,7 @@ func init() {
 				if ctx.Err() != nil {
 					reason = "user"
 				}
-				requestRemoteCancel(bridge, peer, runID, handID, reason)
+				requestRemoteCancel(bridge, runID, reason)
 			}
 			result := remoteRunResult(bridge, runID, handID, timeout)
 			if params.Background {
@@ -288,30 +301,11 @@ func remoteRunFailure(bridge *RemoteBridge, runID, message string) *executor.Too
 
 const cancelAckTimeout = 3 * time.Second
 
-func requestRemoteCancel(bridge *RemoteBridge, peer *hub.Peer, runID, handID, reason string) {
-	requested, err := bridge.Runs.RequestCancel(runID, reason)
-	if err == nil && !requested {
+func requestRemoteCancel(bridge *RemoteBridge, runID, reason string) {
+	if bridge == nil || bridge.Authority == nil || bridge.SessionID == nil {
 		return
 	}
-	env, err := protocol.NewEnvelope("", protocol.TypeRPCCancel, protocol.RPCCancel{RunID: runID, Reason: reason})
-	if err != nil || bridge.Hub.SendPeerContext(context.Background(), peer, *env) != nil {
-		if transitionErr := bridge.Runs.Transition(runID, protocol.RunLost); transitionErr != nil {
-			bridge.Runs.FailClosed(runID, fmt.Sprintf("记录取消发送失败: %v", transitionErr))
-		}
-		return
-	}
-	done, _ := bridge.Runs.Done(runID)
-	select {
-	case <-done:
-	case <-time.After(cancelAckTimeout):
-		if err != nil {
-			bridge.Runs.FailClosed(runID, fmt.Sprintf("记录取消请求失败: %v", err))
-			return
-		}
-		if err := bridge.Runs.MarkCancelUnconfirmed(runID); err != nil {
-			bridge.Runs.FailClosed(runID, fmt.Sprintf("记录取消超时失败: %v", err))
-		}
-	}
+	_, _ = bridge.Authority.CancelRun(context.Background(), bridge.SessionID(), runID, reason)
 }
 
 func remoteRunResult(bridge *RemoteBridge, runID, handID string, timeout time.Duration) *executor.ToolResult {

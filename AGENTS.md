@@ -128,7 +128,7 @@ make test         # 运行全部 4 个模块的测试
 
 ## 开发进度
 
-### Phase 1 — Mind 核心 + Gateway 通信（完成度 ~95%）
+### Phase 1 — Mind 核心 + Gateway 通信（完成度 ~97%）
 
 #### ✅ 已完成
 
@@ -159,7 +159,8 @@ make test         # 运行全部 4 个模块的测试
 - 全局 `security.Check()` 函数
 
 ##### 审批流程 (`agentcore`)
-- `Approver` 接口 + REPL 实现（y/n/Y/N）
+- 进程级 conversation Approval Broker，Face 与 REPL 共用同一首裁决和审计路径
+- REPL 输入适配支持 y/n/Y/N，并可在远程 Face 先裁决时取消等待
 - 自动放行/拒绝列表（autoAllow / autoDeny）
 - LLM 通过 `confirm: true` 参数主动请求确认（覆盖 trust/yolo）
 
@@ -201,6 +202,7 @@ make test         # 运行全部 4 个模块的测试
 - `session_groups` 表：工作区管理（work_dir、soul_path）
 - `sessions` 表：会话管理（关联 group、soul_path 覆盖）
 - `messages` 表：消息持久化（role、tool_id、tool_calls、seq）
+- `approval_audits` 表：审批绑定、Face/REPL identity、decision、时间与参数摘要，不保存原始参数
 - `hand_credentials` / `face_tokens`：分类型 token + application key、scope 与认证管理；旧 `hand_tokens` 不再认证
 - 完整 CRUD + 事务批量写入 + 级联删除
 - 20 个单元测试 + race 覆盖
@@ -264,9 +266,17 @@ make test         # 运行全部 4 个模块的测试
 - `remote_runs.request_id` 持久化 Face request/run 关联，旧库迁移后 legacy run 保持空关联并兼容读取
 - `llm.ScriptedProvider` 支持不依赖真实模型的确定性多轮工具 fixture
 
+##### Face P3 异步审批与取消
+- conversation Approval 对象绑定 approval/request/run/tool/args digest/expiry，首个合法裁决生效
+- `approval.requested` / `approval.resolved`、pending snapshot、过期/重复/scope/归属检查均走结构化协议
+- session allow/deny 保留在各 conversation Core，不跨 Actor；Broker 重启恢复将 pending 标记 cancelled
+- `face.run.cancel` 只调用 `remoteexec.Authority`；`face.task.cancel` 同时要求 task read/cancel scope 并经 TaskService 对账
+- Registry 每次 run 状态迁移投影 `remote_run.changed`；result/cancel 竞争保持唯一终态
+- 加密集成测试覆盖 Face 审批 → `use_hand`、Approval actor/digest、参数篡改拒绝及 run/task cancel 落库
+
 ##### 设计文档
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
-- `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（P2 Chat 可用，审批/客户端待实现）
+- `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（P3 Mind runtime 可用，客户端待实现）
 - `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
 - `docs/remote-execution-implementation-plan.md` — 远程执行闭环实施与验收记录
 - `docs/next-development-plan.md` — 当前 Face Alpha 主线与远程执行收尾计划
@@ -279,7 +289,7 @@ make test         # 运行全部 4 个模块的测试
 - `docs/archived/skill-session-memory-design.md` — 技能/会话/记忆组织设计
 
 #### ⏳ 待完成
-- [ ] **Face** 远程交互终端（TUI / IM Bot）——占位 stub 已创建（`modules/half-pi-face/`，仅打印一行字），go.work 已注册，可编译
+- [ ] **Face P4** Headless JSONL 客户端与真实进程级 E2E——`modules/half-pi-face/` 当前仍为占位 stub
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
 - [ ] Mind → Hand 外部验收 — 原生 Windows 运行 `scripts/test-windows.ps1`
@@ -387,10 +397,17 @@ make test         # 运行全部 4 个模块的测试
 - terminal Chat event 在 result 前投递；断线或慢连接丢失终态时通过相同 request replay 恢复
 - Core 的 tool hook 不依赖 debug，事件仅包含 tool、success 和规范参数摘要
 
+### 2026-07-19：Face P3 异步审批与取消
+- 唯一进程级 Approval Broker 统一 Face 与 REPL；每个 conversation Core 保留独立 session allow/deny
+- 裁决在 SQLite 审计成功后进入 Face accepted 队列，再发布 resolved 事件并唤醒工具；首裁决、过期和重复状态原子化
+- Approval 审计仅保存绑定摘要、identity、decision、reason 和时间，启动恢复将 pending 标记 cancelled
+- 所有 `rpc_cancel` 只由 `remoteexec.Authority.CancelRun` 发送；Face/REPL/Chat 取消复用同一路径
+- `face.task.cancel` 复用 TaskService，并在 Hand 确认后查询状态再投影结构化终态
+
 ---
 
 ## 下一步
 
 1. 原生 Windows 运行取消验收脚本（外部环境）
-2. **Face Alpha Runtime** — P3 异步审批/run-task 取消、P4 Headless Face 与进程级 E2E
+2. **Face Alpha Runtime P4** — Headless Face 与进程级 E2E
 3. `/compact` 上下文压缩与 Skill 工作区集成

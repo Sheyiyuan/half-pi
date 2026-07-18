@@ -10,6 +10,7 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
@@ -27,6 +28,7 @@ type Config struct {
 	Store     *store.Store
 	Bus       *events.EventBus
 	Skills    *skill.Store
+	Approvals *approval.Broker
 	Authority *remoteexec.Authority
 	Tasks     *remoteexec.TaskService
 }
@@ -71,7 +73,7 @@ func NewManager(config Config) (*Manager, error) {
 	if config.Store == nil {
 		return nil, fmt.Errorf("conversation store is required")
 	}
-	if config.Authority == nil || config.Tasks == nil {
+	if config.Approvals == nil || config.Authority == nil || config.Tasks == nil {
 		return nil, fmt.Errorf("remote execution services are required")
 	}
 	return &Manager{config: config, actors: make(map[string]*Actor)}, nil
@@ -142,6 +144,7 @@ func (m *Manager) Get(id string) (*Actor, error) {
 func (m *Manager) newActor(id string) (*Actor, error) {
 	bridge := &local.RemoteBridge{
 		Hub:         m.config.Authority.Hub,
+		Authority:   m.config.Authority,
 		Runs:        m.config.Authority.Registry,
 		Tasks:       m.config.Tasks,
 		PendingCall: m.config.Authority.PendingCall,
@@ -152,6 +155,7 @@ func (m *Manager) newActor(id string) (*Actor, error) {
 	}
 	core.Bus = m.config.Bus
 	core.SetSkills(m.config.Skills)
+	core.SetApprover(m.config.Approvals)
 	core.SetSessionChangeObserver(func() { m.notify(id) })
 	if err := core.SetStore(m.config.Store, id); err != nil {
 		return nil, err
@@ -160,7 +164,7 @@ func (m *Manager) newActor(id string) (*Actor, error) {
 	bridge.SessionID = core.SessionID
 	bridge.Mode = core.SecurityMode
 	bridge.SetActiveHand = core.SetActiveHand
-	bridge.CheckAndConfirm = core.CheckAndConfirm
+	bridge.CheckAndConfirm = core.CheckAndConfirmRun
 	return &Actor{core: core, bridge: bridge}, nil
 }
 

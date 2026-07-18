@@ -16,6 +16,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 )
@@ -58,6 +59,7 @@ func TestRequestRemoteCancelSendsRPCAndMarksTimeout(t *testing.T) {
 	defer session.Conn.Close()
 
 	runs := remoteexec.NewRegistry()
+	authority := remoteexec.NewAuthority(h, runs, nil)
 	if err := runs.Create("cancel-run", "session-1", "cancel-hand", "exec_command"); err != nil {
 		t.Fatal(err)
 	}
@@ -76,11 +78,12 @@ func TestRequestRemoteCancelSendsRPCAndMarksTimeout(t *testing.T) {
 		}
 	})
 
-	bridge := &RemoteBridge{Hub: h, Runs: runs}
-	peer := h.PeerByType(hub.PeerHand, "cancel-hand")
+	bridge := &RemoteBridge{
+		Hub: h, Authority: authority, Runs: runs, SessionID: func() string { return "session-1" },
+	}
 	finished := make(chan struct{})
 	go func() {
-		requestRemoteCancel(bridge, peer, "cancel-run", "cancel-hand", "timeout")
+		requestRemoteCancel(bridge, "cancel-run", "timeout")
 		close(finished)
 	}()
 
@@ -131,6 +134,7 @@ func TestRequestRemoteCancelStillSendsWhenAuditFails(t *testing.T) {
 
 	auditor := &toggledAuditor{fail: make(chan bool, 1)}
 	runs := remoteexec.NewRegistry(auditor)
+	authority := remoteexec.NewAuthority(h, runs, nil)
 	if err := runs.Create("audit-cancel-run", "session-1", "audit-hand", "exec_command"); err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +155,9 @@ func TestRequestRemoteCancelStillSendsWhenAuditFails(t *testing.T) {
 	auditor.fail <- true
 	finished := make(chan struct{})
 	go func() {
-		requestRemoteCancel(&RemoteBridge{Hub: h, Runs: runs}, h.PeerByType(hub.PeerHand, "audit-hand"), "audit-cancel-run", "audit-hand", "timeout")
+		requestRemoteCancel(&RemoteBridge{
+			Hub: h, Authority: authority, Runs: runs, SessionID: func() string { return "session-1" },
+		}, "audit-cancel-run", "timeout")
 		close(finished)
 	}()
 
@@ -198,6 +204,7 @@ func TestUseHandTimeoutSendsCancel(t *testing.T) {
 	defer session.Conn.Close()
 
 	runs := remoteexec.NewRegistry()
+	authority := remoteexec.NewAuthority(h, runs, nil)
 	h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
 		switch msg.Type {
 		case protocol.TypeRPCAccepted:
@@ -214,8 +221,11 @@ func TestUseHandTimeoutSendsCancel(t *testing.T) {
 	})
 
 	bridge := &RemoteBridge{
-		Hub: h, Runs: runs, ActiveHand: func() string { return "timeout-hand" },
-		CheckAndConfirm: func(string, json.RawMessage, bool) (bool, string) { return false, "" },
+		Hub: h, Authority: authority, Runs: runs,
+		ActiveHand: func() string { return "timeout-hand" }, SessionID: func() string { return "session-1" },
+		CheckAndConfirm: func(context.Context, string, string, json.RawMessage, string, bool) approval.CheckResult {
+			return approval.CheckResult{}
+		},
 	}
 	tool, _ := executor.FindTool("use_hand")
 	resultCh := make(chan *executor.ToolResult, 1)

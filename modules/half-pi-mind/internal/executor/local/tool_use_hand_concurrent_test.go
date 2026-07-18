@@ -16,6 +16,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
 
@@ -38,6 +39,7 @@ func TestUseHandConcurrentRunsDoNotCrossDeliver(t *testing.T) {
 	}
 	defer session.Conn.Close()
 	runs := remoteexec.NewRegistry()
+	authority := remoteexec.NewAuthority(h, runs, nil)
 	h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {
 		switch msg.Type {
 		case protocol.TypeRPCAccepted:
@@ -54,8 +56,11 @@ func TestUseHandConcurrentRunsDoNotCrossDeliver(t *testing.T) {
 	})
 
 	bridge := &RemoteBridge{
-		Hub: h, Runs: runs, ActiveHand: func() string { return "parallel-hand" },
-		CheckAndConfirm: func(string, json.RawMessage, bool) (bool, string) { return false, "" },
+		Hub: h, Authority: authority, Runs: runs,
+		ActiveHand: func() string { return "parallel-hand" }, SessionID: func() string { return "session-1" },
+		CheckAndConfirm: func(context.Context, string, string, json.RawMessage, string, bool) approval.CheckResult {
+			return approval.CheckResult{}
+		},
 	}
 
 	const runCount = 20

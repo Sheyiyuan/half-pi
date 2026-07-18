@@ -198,6 +198,26 @@ func (s *Store) migrate() error {
 		`CREATE INDEX IF NOT EXISTS idx_remote_tasks_session ON remote_tasks(session_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_remote_tasks_hand ON remote_tasks(hand_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_remote_tasks_status ON remote_tasks(status)`,
+		`CREATE TABLE IF NOT EXISTS approval_audits (
+			approval_id TEXT PRIMARY KEY,
+			conversation_id TEXT NOT NULL,
+			request_id TEXT NOT NULL DEFAULT '',
+			run_id TEXT NOT NULL DEFAULT '',
+			tool TEXT NOT NULL,
+			reason TEXT NOT NULL,
+			args_digest TEXT NOT NULL,
+			status TEXT NOT NULL,
+			decision TEXT NOT NULL DEFAULT '',
+			actor_id TEXT NOT NULL DEFAULT '',
+			actor_label TEXT NOT NULL DEFAULT '',
+			source TEXT NOT NULL DEFAULT '',
+			resolution_reason TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL,
+			expires_at INTEGER NOT NULL,
+			resolved_at INTEGER NOT NULL DEFAULT 0
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_approval_audits_conversation ON approval_audits(conversation_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_approval_audits_status ON approval_audits(status, expires_at)`,
 	}
 	for _, stmt := range statements {
 		if _, err := s.db.Exec(stmt); err != nil {
