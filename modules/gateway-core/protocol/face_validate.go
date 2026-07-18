@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"unicode/utf8"
 )
 
 // IsFaceCommandType 判断消息类型是否为 Face 发往 Mind 的 command。
 func IsFaceCommandType(typ string) bool {
 	switch typ {
 	case TypeFaceChat, TypeFaceChatCancel,
+		TypeFaceChatStreamGet, TypeFaceCapabilitiesGet,
 		TypeFaceConversationList, TypeFaceConversationCreate,
-		TypeFaceConversationSnapshot, TypeFaceConversationRename,
+		TypeFaceConversationSnapshot, TypeFaceConversationRename, TypeFaceConversationMessages,
 		TypeFaceSubscribe, TypeFaceApprovalResolve,
 		TypeFaceRunGet, TypeFaceRunCancel, TypeFaceHandList, TypeFaceHandGet,
 		TypeFaceTaskList, TypeFaceTaskGet, TypeFaceTaskLog, TypeFaceTaskCancel:
@@ -26,7 +28,8 @@ func IsFaceCommandType(typ string) bool {
 // IsFaceServerMessageType 判断消息类型是否为 Mind 发往 Face 的正式消息。
 func IsFaceServerMessageType(typ string) bool {
 	switch typ {
-	case TypeFaceAccepted, TypeFaceResult, TypeFaceError, TypeFaceSnapshot, TypeFaceEvent:
+	case TypeFaceAccepted, TypeFaceResult, TypeFaceError, TypeFaceSnapshot, TypeFaceEvent,
+		TypeFaceChatDelta, TypeFaceChatStreamEnd, TypeFaceRunProgress:
 		return true
 	default:
 		return false
@@ -48,11 +51,26 @@ func ValidateFacePayload(typ string, payload json.RawMessage) error {
 		if err == nil {
 			err = requireFields(v.RequestID, "request_id", v.ConversationID, "conversation_id", v.Content, "content")
 		}
+		if err == nil && len(v.Content) > MaxFaceChatContentBytes {
+			err = fmt.Errorf("content exceeds %d bytes", MaxFaceChatContentBytes)
+		}
 	case TypeFaceChatCancel:
 		var v FaceChatCancel
 		err = decodeFacePayload(payload, &v)
 		if err == nil {
 			err = requireFields(v.RequestID, "request_id", v.TargetRequestID, "target_request_id", v.ConversationID, "conversation_id")
+		}
+	case TypeFaceChatStreamGet:
+		var v FaceChatStreamGet
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = requireFields(v.RequestID, "request_id", v.ConversationID, "conversation_id", v.TargetRequestID, "target_request_id")
+		}
+	case TypeFaceCapabilitiesGet:
+		var v FaceCapabilitiesGet
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = requireFields(v.RequestID, "request_id")
 		}
 	case TypeFaceConversationList:
 		var v FaceConversationList
@@ -77,6 +95,12 @@ func ValidateFacePayload(typ string, payload json.RawMessage) error {
 		err = decodeFacePayload(payload, &v)
 		if err == nil {
 			err = requireFields(v.RequestID, "request_id", v.ConversationID, "conversation_id", v.Name, "name")
+		}
+	case TypeFaceConversationMessages:
+		var v FaceConversationMessages
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = validateFaceConversationMessages(v)
 		}
 	case TypeFaceSubscribe:
 		var v FaceSubscribe
@@ -198,6 +222,24 @@ func ValidateFacePayload(typ string, payload json.RawMessage) error {
 		if err == nil {
 			err = validateFaceEvent(v)
 		}
+	case TypeFaceChatDelta:
+		var v FaceChatDelta
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = validateFaceChatDelta(v)
+		}
+	case TypeFaceChatStreamEnd:
+		var v FaceChatStreamEnd
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = validateFaceChatStreamEnd(v)
+		}
+	case TypeFaceRunProgress:
+		var v FaceRunProgress
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = validateFaceRunProgress(v)
+		}
 	default:
 		return fmt.Errorf("unknown Face message type %q", typ)
 	}
@@ -285,6 +327,29 @@ func validateSubscribe(v FaceSubscribe) error {
 		}
 		eventTypes[typ] = struct{}{}
 	}
+	transientTypes := make(map[FaceTransientType]struct{}, len(v.TransientTypes))
+	for _, typ := range v.TransientTypes {
+		if !validFaceTransientType(typ) {
+			return fmt.Errorf("unknown transient type %q", typ)
+		}
+		if _, ok := transientTypes[typ]; ok {
+			return fmt.Errorf("transient_types must not contain duplicate values")
+		}
+		transientTypes[typ] = struct{}{}
+	}
+	return nil
+}
+
+func validateFaceConversationMessages(v FaceConversationMessages) error {
+	if err := requireFields(v.RequestID, "request_id", v.ConversationID, "conversation_id"); err != nil {
+		return err
+	}
+	if v.BeforeSeq < 0 {
+		return fmt.Errorf("before_seq must not be negative")
+	}
+	if v.Limit < 0 || v.Limit > MaxFaceMessageListLimit {
+		return fmt.Errorf("limit must be zero or between 1 and %d", MaxFaceMessageListLimit)
+	}
 	return nil
 }
 
@@ -364,6 +429,24 @@ func ValidateFaceResultData(operation FaceOperation, data json.RawMessage) error
 		err = decodeFacePayload(data, &v)
 		if err == nil {
 			err = validateConversationSummary(v.Conversation)
+		}
+	case FaceOperationCapabilitiesGet:
+		var v FaceCapabilitiesResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			err = validateFaceCapabilities(v)
+		}
+	case FaceOperationChatStreamGet:
+		var v ChatStreamGetResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			err = validateChatStreamGetResult(v)
+		}
+	case FaceOperationConversationMessages:
+		var v ConversationMessagesResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			err = validateConversationMessagesResult(v)
 		}
 	case FaceOperationHandList:
 		var v HandListResult
@@ -453,6 +536,114 @@ func validateConversationSummary(v ConversationSummary) error {
 	return nil
 }
 
+func validateFaceCapabilities(v FaceCapabilitiesResult) error {
+	if v.Revision != FaceProtocolRevision {
+		return fmt.Errorf("revision must be %d", FaceProtocolRevision)
+	}
+	if err := requireFields(v.Identity.ID, "identity.id", v.Identity.Label, "identity.label"); err != nil {
+		return err
+	}
+	if err := ValidateFaceScopes(v.Identity.Scopes); err != nil {
+		return fmt.Errorf("identity.scopes: %w", err)
+	}
+	if v.Features == nil {
+		return fmt.Errorf("features is required")
+	}
+	seen := make(map[FaceFeature]struct{}, len(v.Features))
+	for _, feature := range v.Features {
+		if !validFaceFeature(feature) {
+			return fmt.Errorf("unknown feature %q", feature)
+		}
+		if _, ok := seen[feature]; ok {
+			return fmt.Errorf("features must not contain duplicate values")
+		}
+		seen[feature] = struct{}{}
+	}
+	limits := v.Limits
+	if limits.MaxChatContentBytes != MaxFaceChatContentBytes || limits.MaxChatDeltaBytes != MaxFaceChatDeltaBytes ||
+		limits.MaxChatStreamBytes != MaxFaceChatStreamBytes || limits.MaxChatStreamChunks != MaxFaceChatStreamChunks ||
+		limits.MaxMessageListLimit != MaxFaceMessageListLimit {
+		return fmt.Errorf("limits do not match protocol constants")
+	}
+	return nil
+}
+
+func validateChatStreamGetResult(v ChatStreamGetResult) error {
+	if err := requireFields(v.TargetRequestID, "target_request_id"); err != nil {
+		return err
+	}
+	if v.LastSeq < 0 || v.LastSeq > MaxFaceChatStreamChunks {
+		return fmt.Errorf("last_seq is outside the stream limit")
+	}
+	if v.Responses == nil {
+		return fmt.Errorf("responses is required")
+	}
+	totalBytes := 0
+	for i, response := range v.Responses {
+		if response.ResponseIndex != i+1 {
+			return fmt.Errorf("responses must have contiguous response_index values")
+		}
+		if !utf8.ValidString(response.Content) {
+			return fmt.Errorf("response content must be valid UTF-8")
+		}
+		totalBytes += len(response.Content)
+		if totalBytes > MaxFaceChatStreamBytes {
+			return fmt.Errorf("responses exceed %d bytes", MaxFaceChatStreamBytes)
+		}
+	}
+	if v.Terminal {
+		if !validFaceResultStatus(v.Status) {
+			return fmt.Errorf("terminal stream requires status")
+		}
+	} else if v.Status != "" {
+		return fmt.Errorf("active stream must not contain status")
+	}
+	return nil
+}
+
+func validateConversationMessagesResult(v ConversationMessagesResult) error {
+	if v.Messages == nil {
+		return fmt.Errorf("messages is required")
+	}
+	if len(v.Messages) > MaxFaceMessageListLimit {
+		return fmt.Errorf("messages exceeds %d items", MaxFaceMessageListLimit)
+	}
+	for i, message := range v.Messages {
+		if err := validateFaceMessage(message); err != nil {
+			return err
+		}
+		if i > 0 && v.Messages[i-1].Seq >= message.Seq {
+			return fmt.Errorf("messages must be sorted by seq ascending")
+		}
+	}
+	if v.NextBeforeSeq < 0 {
+		return fmt.Errorf("next_before_seq must not be negative")
+	}
+	if v.HasMore {
+		if len(v.Messages) == 0 || v.NextBeforeSeq != v.Messages[0].Seq {
+			return fmt.Errorf("has_more requires next_before_seq at the oldest returned message")
+		}
+	} else if v.NextBeforeSeq != 0 {
+		return fmt.Errorf("next_before_seq requires has_more")
+	}
+	return nil
+}
+
+func validateFaceMessage(v FaceMessage) error {
+	if v.ID <= 0 || v.Seq <= 0 || v.CreatedAt.IsZero() {
+		return fmt.Errorf("message id, seq and created_at are required")
+	}
+	switch v.Role {
+	case "system", "user", "assistant", "tool":
+	default:
+		return fmt.Errorf("unknown message role %q", v.Role)
+	}
+	if !utf8.ValidString(v.Content) {
+		return fmt.Errorf("message content must be valid UTF-8")
+	}
+	return nil
+}
+
 func validateHandSummary(v HandSummary) error {
 	if err := requireFields(v.HandID, "hand_id", v.Hostname, "hostname", v.OS, "os", v.Arch, "arch"); err != nil {
 		return err
@@ -497,6 +688,14 @@ func validateConversationSnapshot(v ConversationSnapshot) error {
 	}
 	if v.TaskHistoryLimit < 0 || v.TaskHistoryLimit > MaxFaceTaskHistoryLimit {
 		return fmt.Errorf("snapshot.task_history_limit must be between 0 and %d", MaxFaceTaskHistoryLimit)
+	}
+	for i, message := range v.Messages {
+		if err := validateFaceMessage(message); err != nil {
+			return err
+		}
+		if i > 0 && v.Messages[i-1].Seq >= message.Seq {
+			return fmt.Errorf("snapshot messages must be sorted by seq ascending")
+		}
 	}
 	for _, chat := range v.PendingChats {
 		if err := requireFields(chat.RequestID, "pending_chats.request_id"); err != nil || chat.StartedAt.IsZero() {
@@ -769,6 +968,45 @@ func validateFaceEvent(v FaceEvent) error {
 	return nil
 }
 
+func validateFaceChatDelta(v FaceChatDelta) error {
+	if err := requireFields(v.ConversationID, "conversation_id", v.RequestID, "request_id", v.Delta, "delta"); err != nil {
+		return err
+	}
+	if v.ResponseIndex <= 0 || v.Seq <= 0 || v.Seq > MaxFaceChatStreamChunks || v.Offset < 0 {
+		return fmt.Errorf("response_index, seq or offset is invalid")
+	}
+	if !utf8.ValidString(v.Delta) || len(v.Delta) > MaxFaceChatDeltaBytes {
+		return fmt.Errorf("delta must be valid UTF-8 and at most %d bytes", MaxFaceChatDeltaBytes)
+	}
+	if v.Offset > MaxFaceChatStreamBytes-int64(len(v.Delta)) {
+		return fmt.Errorf("delta exceeds stream byte limit")
+	}
+	return nil
+}
+
+func validateFaceChatStreamEnd(v FaceChatStreamEnd) error {
+	if err := requireFields(v.ConversationID, "conversation_id", v.RequestID, "request_id"); err != nil {
+		return err
+	}
+	if v.LastSeq < 0 || v.LastSeq > MaxFaceChatStreamChunks || v.ResponseCount < 0 {
+		return fmt.Errorf("last_seq or response_count is invalid")
+	}
+	if !validFaceResultStatus(v.Status) {
+		return fmt.Errorf("unknown result status %q", v.Status)
+	}
+	if v.Complete != (v.Status == FaceResultSucceeded) {
+		return fmt.Errorf("complete must match succeeded status")
+	}
+	return nil
+}
+
+func validateFaceRunProgress(v FaceRunProgress) error {
+	if err := requireFields(v.ConversationID, "conversation_id", v.RunID, "run_id"); err != nil {
+		return err
+	}
+	return ValidateRPCProgress(RPCProgress{RunID: v.RunID, Seq: v.Seq, Kind: v.Kind, Data: v.Data})
+}
+
 func validateEventRequestID(v FaceEvent, requestID string) error {
 	if err := requireFields(requestID, "data.request_id"); err != nil {
 		return err
@@ -826,8 +1064,26 @@ func validFaceErrorCode(code FaceErrorCode) bool {
 func validFaceScope(scope FaceScope) bool {
 	switch scope {
 	case FaceScopeChat, FaceScopeSessionsRead, FaceScopeSessionsWrite, FaceScopeRunsRead,
-		FaceScopeRunsCancel, FaceScopeApprove, FaceScopeHandsRead, FaceScopeTasksRead,
+		FaceScopeRunsCancel, FaceScopeRunsOutput, FaceScopeApprove, FaceScopeHandsRead, FaceScopeTasksRead,
 		FaceScopeTasksCancel:
+		return true
+	default:
+		return false
+	}
+}
+
+func validFaceFeature(feature FaceFeature) bool {
+	switch feature {
+	case FaceFeatureChatStream, FaceFeatureChatStreamResume, FaceFeatureRunProgress, FaceFeatureMessagePaging:
+		return true
+	default:
+		return false
+	}
+}
+
+func validFaceTransientType(typ FaceTransientType) bool {
+	switch typ {
+	case FaceTransientChatDelta, FaceTransientRunProgress:
 		return true
 	default:
 		return false
@@ -877,8 +1133,9 @@ func validFaceEventLevel(level FaceEventLevel) bool {
 func validFaceOperation(operation FaceOperation) bool {
 	switch operation {
 	case FaceOperationChat, FaceOperationChatCancel, FaceOperationConversationList,
+		FaceOperationChatStreamGet, FaceOperationCapabilitiesGet,
 		FaceOperationConversationCreate, FaceOperationConversationSnapshot,
-		FaceOperationConversationRename, FaceOperationSubscribe, FaceOperationApprovalResolve,
+		FaceOperationConversationRename, FaceOperationConversationMessages, FaceOperationSubscribe, FaceOperationApprovalResolve,
 		FaceOperationRunGet, FaceOperationRunCancel, FaceOperationHandList, FaceOperationHandGet,
 		FaceOperationTaskList, FaceOperationTaskGet, FaceOperationTaskLog, FaceOperationTaskCancel:
 		return true

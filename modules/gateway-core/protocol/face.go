@@ -6,6 +6,20 @@ import (
 )
 
 const (
+	// FaceProtocolRevision 是注册后 Face 应用协议的当前修订号。
+	FaceProtocolRevision = 2
+	// DefaultFaceMessageListLimit 是会话消息分页的默认大小。
+	DefaultFaceMessageListLimit = 100
+	// MaxFaceMessageListLimit 是会话消息分页的最大大小。
+	MaxFaceMessageListLimit = 500
+	// MaxFaceChatContentBytes 限制单次 Face Chat 输入的 UTF-8 字节数。
+	MaxFaceChatContentBytes = 256 << 10
+	// MaxFaceChatDeltaBytes 限制单条 Chat 增量的 UTF-8 字节数。
+	MaxFaceChatDeltaBytes = 4 << 10
+	// MaxFaceChatStreamBytes 限制单个 Chat 可恢复文本的总字节数。
+	MaxFaceChatStreamBytes = 2 << 20
+	// MaxFaceChatStreamChunks 限制单个 Chat 的聚合增量数量。
+	MaxFaceChatStreamChunks = 2048
 	// DefaultFaceTaskListLimit 是 Face 任务列表的默认分页大小。
 	DefaultFaceTaskListLimit = 50
 	// MaxFaceTaskListLimit 是 Face 任务列表的最大分页大小。
@@ -19,10 +33,13 @@ const (
 const (
 	TypeFaceChat                 = "face.chat"
 	TypeFaceChatCancel           = "face.chat.cancel"
+	TypeFaceChatStreamGet        = "face.chat.stream.get"
+	TypeFaceCapabilitiesGet      = "face.capabilities.get"
 	TypeFaceConversationList     = "face.conversation.list"
 	TypeFaceConversationCreate   = "face.conversation.create"
 	TypeFaceConversationSnapshot = "face.conversation.snapshot"
 	TypeFaceConversationRename   = "face.conversation.rename"
+	TypeFaceConversationMessages = "face.conversation.messages"
 	TypeFaceSubscribe            = "face.subscribe"
 	TypeFaceApprovalResolve      = "face.approval.resolve"
 	TypeFaceRunGet               = "face.run.get"
@@ -39,6 +56,10 @@ const (
 	TypeFaceError    = "face.error"
 	TypeFaceSnapshot = "face.snapshot"
 	TypeFaceEvent    = "face.event"
+
+	TypeFaceChatDelta     = "face.chat.delta"
+	TypeFaceChatStreamEnd = "face.chat.stream.end"
+	TypeFaceRunProgress   = "face.run.progress"
 )
 
 // FaceScope 是 Face 身份可被授予的权限。
@@ -50,10 +71,29 @@ const (
 	FaceScopeSessionsWrite FaceScope = "face:sessions:write"
 	FaceScopeRunsRead      FaceScope = "face:runs:read"
 	FaceScopeRunsCancel    FaceScope = "face:runs:cancel"
+	FaceScopeRunsOutput    FaceScope = "face:runs:output"
 	FaceScopeApprove       FaceScope = "face:approve"
 	FaceScopeHandsRead     FaceScope = "face:hands:read"
 	FaceScopeTasksRead     FaceScope = "face:tasks:read"
 	FaceScopeTasksCancel   FaceScope = "face:tasks:cancel"
+)
+
+// FaceFeature 是 Mind 声明支持的可选 Face 应用能力。
+type FaceFeature string
+
+const (
+	FaceFeatureChatStream       FaceFeature = "chat_stream.v1"
+	FaceFeatureChatStreamResume FaceFeature = "chat_stream_resume.v1"
+	FaceFeatureRunProgress      FaceFeature = "run_progress.v1"
+	FaceFeatureMessagePaging    FaceFeature = "message_pagination.v1"
+)
+
+// FaceTransientType 是必须显式订阅的非权威增量类型。
+type FaceTransientType string
+
+const (
+	FaceTransientChatDelta   FaceTransientType = "chat.delta"
+	FaceTransientRunProgress FaceTransientType = "run.progress"
 )
 
 // FaceIdentity 是通过鉴权的 Face 身份及其权限集合。
@@ -148,10 +188,13 @@ type FaceOperation string
 const (
 	FaceOperationChat                 FaceOperation = "chat"
 	FaceOperationChatCancel           FaceOperation = "chat.cancel"
+	FaceOperationChatStreamGet        FaceOperation = "chat.stream.get"
+	FaceOperationCapabilitiesGet      FaceOperation = "capabilities.get"
 	FaceOperationConversationList     FaceOperation = "conversation.list"
 	FaceOperationConversationCreate   FaceOperation = "conversation.create"
 	FaceOperationConversationSnapshot FaceOperation = "conversation.snapshot"
 	FaceOperationConversationRename   FaceOperation = "conversation.rename"
+	FaceOperationConversationMessages FaceOperation = "conversation.messages"
 	FaceOperationSubscribe            FaceOperation = "subscribe"
 	FaceOperationApprovalResolve      FaceOperation = "approval.resolve"
 	FaceOperationRunGet               FaceOperation = "run.get"
@@ -185,6 +228,18 @@ type FaceChatCancel struct {
 	Reason          string `json:"reason,omitempty"`
 }
 
+// FaceChatStreamGet 请求读取活动或短期保留 Chat 的可恢复文本前缀。
+type FaceChatStreamGet struct {
+	RequestID       string `json:"request_id"`
+	ConversationID  string `json:"conversation_id"`
+	TargetRequestID string `json:"target_request_id"`
+}
+
+// FaceCapabilitiesGet 请求当前 Face 身份、应用能力和协议限额。
+type FaceCapabilitiesGet struct {
+	RequestID string `json:"request_id"`
+}
+
 // FaceConversationList 请求列出可访问的对话。
 type FaceConversationList struct {
 	RequestID string `json:"request_id"`
@@ -209,11 +264,20 @@ type FaceConversationRename struct {
 	Name           string `json:"name"`
 }
 
+// FaceConversationMessages 请求按稳定 seq 向前分页读取会话消息。
+type FaceConversationMessages struct {
+	RequestID      string `json:"request_id"`
+	ConversationID string `json:"conversation_id"`
+	BeforeSeq      int    `json:"before_seq,omitempty"`
+	Limit          int    `json:"limit,omitempty"`
+}
+
 // FaceSubscribe 设置连接的增量事件订阅。
 type FaceSubscribe struct {
-	RequestID       string          `json:"request_id"`
-	ConversationIDs []string        `json:"conversation_ids,omitempty"`
-	EventTypes      []FaceEventType `json:"event_types,omitempty"`
+	RequestID       string              `json:"request_id"`
+	ConversationIDs []string            `json:"conversation_ids,omitempty"`
+	EventTypes      []FaceEventType     `json:"event_types,omitempty"`
+	TransientTypes  []FaceTransientType `json:"transient_types,omitempty"`
 }
 
 // FaceApprovalResolve 裁决一个待处理审批。
@@ -331,6 +395,37 @@ type FaceEvent struct {
 	Timestamp      time.Time       `json:"timestamp"`
 }
 
+// FaceChatDelta 是一次 Chat 中用户可见文本的有界增量。
+type FaceChatDelta struct {
+	ConversationID string `json:"conversation_id"`
+	RequestID      string `json:"request_id"`
+	ResponseIndex  int    `json:"response_index"`
+	Seq            int64  `json:"seq"`
+	Offset         int64  `json:"offset"`
+	Delta          string `json:"delta"`
+}
+
+// FaceChatStreamEnd 是 Chat 瞬时流的可靠终止屏障。
+type FaceChatStreamEnd struct {
+	ConversationID string           `json:"conversation_id"`
+	RequestID      string           `json:"request_id"`
+	LastSeq        int64            `json:"last_seq"`
+	ResponseCount  int              `json:"response_count"`
+	Complete       bool             `json:"complete"`
+	Status         FaceResultStatus `json:"status"`
+}
+
+// FaceRunProgress 是 foreground run 的有界 stdout/stderr 增量。
+type FaceRunProgress struct {
+	ConversationID string       `json:"conversation_id"`
+	RequestID      string       `json:"request_id,omitempty"`
+	RunID          string       `json:"run_id"`
+	Seq            int64        `json:"seq"`
+	Kind           ProgressKind `json:"kind"`
+	Data           string       `json:"data"`
+	Gap            bool         `json:"gap"`
+}
+
 // ConversationSummary 是对话列表中的稳定摘要。
 type ConversationSummary struct {
 	ConversationID string    `json:"conversation_id"`
@@ -444,6 +539,46 @@ type ConversationCreateResult struct {
 // ConversationRenameResult 是 conversation.rename 的结构化结果。
 type ConversationRenameResult struct {
 	Conversation ConversationSummary `json:"conversation"`
+}
+
+// FaceProtocolLimits 是客户端可依赖的 Face 应用协议硬限额。
+type FaceProtocolLimits struct {
+	MaxChatContentBytes int `json:"max_chat_content_bytes"`
+	MaxChatDeltaBytes   int `json:"max_chat_delta_bytes"`
+	MaxChatStreamBytes  int `json:"max_chat_stream_bytes"`
+	MaxChatStreamChunks int `json:"max_chat_stream_chunks"`
+	MaxMessageListLimit int `json:"max_message_list_limit"`
+}
+
+// FaceCapabilitiesResult 返回当前身份、可选能力和协议限额。
+type FaceCapabilitiesResult struct {
+	Revision int                `json:"revision"`
+	Identity FaceIdentity       `json:"identity"`
+	Features []FaceFeature      `json:"features"`
+	Limits   FaceProtocolLimits `json:"limits"`
+}
+
+// ChatStreamResponse 是一次 provider response 的可恢复可见文本。
+type ChatStreamResponse struct {
+	ResponseIndex int    `json:"response_index"`
+	Content       string `json:"content"`
+	Complete      bool   `json:"complete"`
+}
+
+// ChatStreamGetResult 是活动或短期保留 Chat 的流快照。
+type ChatStreamGetResult struct {
+	TargetRequestID string               `json:"target_request_id"`
+	LastSeq         int64                `json:"last_seq"`
+	Responses       []ChatStreamResponse `json:"responses"`
+	Terminal        bool                 `json:"terminal"`
+	Status          FaceResultStatus     `json:"status,omitempty"`
+}
+
+// ConversationMessagesResult 是稳定 seq 消息分页结果。
+type ConversationMessagesResult struct {
+	Messages      []FaceMessage `json:"messages"`
+	NextBeforeSeq int           `json:"next_before_seq,omitempty"`
+	HasMore       bool          `json:"has_more"`
 }
 
 // HandListResult 是 hand.list 的结构化结果。

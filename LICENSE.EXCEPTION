@@ -1,0 +1,36 @@
+Half Pi Plugin Exception to AGPL-3.0
+======================================
+
+Copyright (c) 2026 Sheyiyuan
+
+This file clarifies the licensing of plugins, extensions, and modules that
+interoperate with Half Pi but are not part of the Half Pi core repository.
+
+1. Definitions
+
+   "Plugins" means any software module, skill package, tool, or extension
+   that communicates with Half Pi through its documented interfaces
+   (including but not limited to: tool registration, skill loading, the
+   Face protocol, the Hand protocol, or event hooks) and is distributed
+   separately from the Half Pi core repository.
+
+2. Exception
+
+   Notwithstanding the terms of Section 5 and Section 13 of the
+   GNU Affero General Public License version 3 (AGPL-3.0), Plugins as
+   defined above are NOT considered derivative works of Half Pi and are
+   NOT required to be licensed under AGPL-3.0 or any GPL-compatible
+   license.
+
+   Plugin authors may license their work under any terms of their choosing.
+
+3. Intent
+
+   The purpose of this exception is to foster a healthy plugin ecosystem
+   around Half Pi — allowing community members to write and share tools,
+   skills, and extensions without legal uncertainty or forced copyleft
+   contamination.
+
+   The Half Pi core itself (the contents of this repository) remains
+   under the full terms of AGPL-3.0, ensuring that the project is and
+   always will be free software.

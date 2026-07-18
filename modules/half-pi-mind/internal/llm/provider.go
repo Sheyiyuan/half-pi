@@ -66,3 +66,30 @@ type Usage struct {
 type Provider interface {
 	Chat(ctx context.Context, req *LLMRequest) (*LLMResponse, error)
 }
+
+// TextDeltaFunc 接收一段按 provider 顺序产生的用户可见文本。
+// 返回错误会立即终止流式请求。
+type TextDeltaFunc func(delta string) error
+
+// StreamingProvider 是支持原生增量响应的可选 Provider 能力。
+type StreamingProvider interface {
+	Provider
+	ChatStream(ctx context.Context, req *LLMRequest, onDelta TextDeltaFunc) (*LLMResponse, error)
+}
+
+// ChatWithStreaming 优先使用原生流；同步 Provider 成功后产生一个完整文本增量。
+func ChatWithStreaming(ctx context.Context, provider Provider, req *LLMRequest, onDelta TextDeltaFunc) (*LLMResponse, error) {
+	if streaming, ok := provider.(StreamingProvider); ok {
+		return streaming.ChatStream(ctx, req, onDelta)
+	}
+	response, err := provider.Chat(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	if response.Content != "" && onDelta != nil {
+		if err := onDelta(response.Content); err != nil {
+			return nil, err
+		}
+	}
+	return response, nil
+}

@@ -131,6 +131,100 @@ func (p *geminiProvider) Chat(ctx context.Context, req *LLMRequest) (*LLMRespons
 	return p.parseResponse(respBytes)
 }
 
+// ChatStream 使用 Gemini streamGenerateContent SSE 接口返回文本和函数调用。
+func (p *geminiProvider) ChatStream(ctx context.Context, req *LLMRequest, onDelta TextDeltaFunc) (*LLMResponse, error) {
+	body := p.buildRequestBody(req)
+	jsonBytes, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to serialize request: %w", err)
+	}
+	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", p.BaseURL, p.Model)
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(jsonBytes))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create HTTP request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+	httpReq.Header.Set("x-goog-api-key", p.APIKey)
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, readProviderError(resp.Body))
+	}
+
+	result := &LLMResponse{}
+	seenTools := make(map[string]ToolCall)
+	gotCandidate := false
+	err = decodeSSE(resp.Body, func(event sseEvent) error {
+		if event.Data == "[DONE]" {
+			return nil
+		}
+		var chunk geminiResponse
+		if err := json.Unmarshal([]byte(event.Data), &chunk); err != nil {
+			return fmt.Errorf("failed to parse stream JSON: %w", err)
+		}
+		if chunk.UsageMetadata != nil {
+			result.Usage = Usage{
+				InputTokens:  chunk.UsageMetadata.PromptTokenCount,
+				OutputTokens: chunk.UsageMetadata.CandidatesTokenCount,
+			}
+		}
+		if len(chunk.Candidates) == 0 {
+			return nil
+		}
+		gotCandidate = true
+		for _, part := range chunk.Candidates[0].Content.Parts {
+			if part.Text != "" {
+				if onDelta != nil {
+					if err := onDelta(part.Text); err != nil {
+						return err
+					}
+				}
+				result.Content += part.Text
+			}
+			if part.FunctionCall == nil {
+				continue
+			}
+			args := "{}"
+			if part.FunctionCall.Args != nil {
+				encoded, err := json.Marshal(part.FunctionCall.Args)
+				if err != nil {
+					return fmt.Errorf("encode Gemini function args: %w", err)
+				}
+				if len(encoded) > maxStreamToolArgs {
+					return fmt.Errorf("Gemini function args exceed %d bytes", maxStreamToolArgs)
+				}
+				args = string(encoded)
+			}
+			key := part.FunctionCall.ID
+			if key == "" {
+				key = part.FunctionCall.Name + "\x00" + args
+			}
+			call := ToolCall{ID: part.FunctionCall.ID, Name: part.FunctionCall.Name, Args: args}
+			if previous, ok := seenTools[key]; ok {
+				if previous.Name != call.Name || previous.Args != call.Args {
+					return fmt.Errorf("Gemini function call %q changed during stream", key)
+				}
+				continue
+			}
+			call.ID = p.toolCallID(part.FunctionCall, len(result.ToolCalls))
+			seenTools[key] = call
+			result.ToolCalls = append(result.ToolCalls, call)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	if !gotCandidate {
+		return nil, fmt.Errorf("Gemini stream contains no candidates")
+	}
+	return result, nil
+}
+
 func (p *geminiProvider) buildRequestBody(req *LLMRequest) *geminiRequestBody {
 	body := &geminiRequestBody{}
 

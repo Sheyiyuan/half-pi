@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 )
 
 const (
@@ -32,6 +33,7 @@ type scriptedExpectation struct {
 
 type scriptedResponse struct {
 	Content   string             `json:"content,omitempty"`
+	Deltas    []string           `json:"deltas,omitempty"`
 	ToolCalls []scriptedToolCall `json:"tool_calls,omitempty"`
 }
 
@@ -108,6 +110,16 @@ func (s scriptedFileStep) runtimeStep() (ScriptedStep, error) {
 		return ScriptedStep{}, fmt.Errorf("response content or tool_calls is required")
 	}
 	response := LLMResponse{Content: s.Response.Content}
+	if s.Response.Deltas != nil {
+		for _, delta := range s.Response.Deltas {
+			if delta == "" {
+				return ScriptedStep{}, fmt.Errorf("response deltas must not contain empty values")
+			}
+		}
+		if strings.Join(s.Response.Deltas, "") != s.Response.Content {
+			return ScriptedStep{}, fmt.Errorf("response deltas must reconstruct content")
+		}
+	}
 	seen := make(map[string]struct{}, len(s.Response.ToolCalls))
 	for _, call := range s.Response.ToolCalls {
 		if call.ID == "" || call.Name == "" || len(call.Args) == 0 {
@@ -128,6 +140,7 @@ func (s scriptedFileStep) runtimeStep() (ScriptedStep, error) {
 	expectation := s.Expect
 	return ScriptedStep{
 		Response: response,
+		Deltas:   append([]string(nil), s.Response.Deltas...),
 		Check: func(request *LLMRequest) error {
 			return expectation.check(request)
 		},

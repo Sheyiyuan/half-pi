@@ -11,14 +11,15 @@ import (
 
 func TestIsFaceMessageType(t *testing.T) {
 	commands := []string{
-		TypeFaceChat, TypeFaceChatCancel, TypeFaceConversationList,
+		TypeFaceChat, TypeFaceChatCancel, TypeFaceChatStreamGet, TypeFaceCapabilitiesGet, TypeFaceConversationList,
 		TypeFaceConversationCreate, TypeFaceConversationSnapshot,
-		TypeFaceConversationRename, TypeFaceSubscribe, TypeFaceApprovalResolve,
+		TypeFaceConversationRename, TypeFaceConversationMessages, TypeFaceSubscribe, TypeFaceApprovalResolve,
 		TypeFaceRunGet, TypeFaceRunCancel, TypeFaceHandList, TypeFaceHandGet,
 		TypeFaceTaskList, TypeFaceTaskGet, TypeFaceTaskLog, TypeFaceTaskCancel,
 	}
 	serverMessages := []string{
 		TypeFaceAccepted, TypeFaceResult, TypeFaceError, TypeFaceSnapshot, TypeFaceEvent,
+		TypeFaceChatDelta, TypeFaceChatStreamEnd, TypeFaceRunProgress,
 	}
 	for _, typ := range commands {
 		if !IsFaceCommandType(typ) || IsFaceServerMessageType(typ) || !IsFaceMessageType(typ) {
@@ -40,10 +41,10 @@ func TestIsFaceMessageType(t *testing.T) {
 func TestFaceProtocolEnumValues(t *testing.T) {
 	scopes := []FaceScope{
 		FaceScopeChat, FaceScopeSessionsRead, FaceScopeSessionsWrite, FaceScopeRunsRead,
-		FaceScopeRunsCancel, FaceScopeApprove, FaceScopeHandsRead,
+		FaceScopeRunsCancel, FaceScopeRunsOutput, FaceScopeApprove, FaceScopeHandsRead,
 		FaceScopeTasksRead, FaceScopeTasksCancel,
 	}
-	if got, want := strings.Join(faceScopeStrings(scopes), ","), "face:chat,face:sessions:read,face:sessions:write,face:runs:read,face:runs:cancel,face:approve,face:hands:read,face:tasks:read,face:tasks:cancel"; got != want {
+	if got, want := strings.Join(faceScopeStrings(scopes), ","), "face:chat,face:sessions:read,face:sessions:write,face:runs:read,face:runs:cancel,face:runs:output,face:approve,face:hands:read,face:tasks:read,face:tasks:cancel"; got != want {
 		t.Fatalf("scope values = %q, want %q", got, want)
 	}
 
@@ -99,11 +100,14 @@ func TestFacePayloadsRoundTripAndValidate(t *testing.T) {
 	}{
 		{TypeFaceChat, FaceChat{RequestID: "req-1", ConversationID: "conv-1", Content: "hello"}},
 		{TypeFaceChatCancel, FaceChatCancel{RequestID: "req-2", TargetRequestID: "req-1", ConversationID: "conv-1", Reason: "user"}},
+		{TypeFaceChatStreamGet, FaceChatStreamGet{RequestID: "req-stream", ConversationID: "conv-1", TargetRequestID: "req-1"}},
+		{TypeFaceCapabilitiesGet, FaceCapabilitiesGet{RequestID: "req-capabilities"}},
 		{TypeFaceConversationList, FaceConversationList{RequestID: "req-3"}},
 		{TypeFaceConversationCreate, FaceConversationCreate{RequestID: "req-4", Name: "Work"}},
 		{TypeFaceConversationSnapshot, FaceConversationSnapshot{RequestID: "req-5", ConversationID: "conv-1"}},
 		{TypeFaceConversationRename, FaceConversationRename{RequestID: "req-6", ConversationID: "conv-1", Name: "New name"}},
-		{TypeFaceSubscribe, FaceSubscribe{RequestID: "req-7", ConversationIDs: []string{"conv-1"}, EventTypes: []FaceEventType{FaceEventChatStarted}}},
+		{TypeFaceConversationMessages, FaceConversationMessages{RequestID: "req-messages", ConversationID: "conv-1", BeforeSeq: 8, Limit: 4}},
+		{TypeFaceSubscribe, FaceSubscribe{RequestID: "req-7", ConversationIDs: []string{"conv-1"}, EventTypes: []FaceEventType{FaceEventChatStarted}, TransientTypes: []FaceTransientType{FaceTransientChatDelta, FaceTransientRunProgress}}},
 		{TypeFaceApprovalResolve, FaceApprovalResolve{RequestID: "req-8", ApprovalID: "approval-1", Decision: FaceApprovalAllowOnce}},
 		{TypeFaceRunGet, FaceRunGet{RequestID: "req-9", ConversationID: "conv-1", RunID: "run-1"}},
 		{TypeFaceRunCancel, FaceRunCancel{RequestID: "req-10", ConversationID: "conv-1", RunID: "run-1", Reason: "user"}},
@@ -115,6 +119,9 @@ func TestFacePayloadsRoundTripAndValidate(t *testing.T) {
 		{TypeFaceError, FaceError{RequestID: "req-1", ConversationID: "conv-1", Code: FaceErrorBusy, Message: "busy", Retryable: true}},
 		{TypeFaceSnapshot, FaceSnapshot{RequestID: "req-5", Snapshot: snapshot}},
 		{TypeFaceEvent, validFaceEvent(t, FaceEventRemoteRunChanged, RemoteRunChangedEventData{RunID: "run-1", HandID: "hand-1", Tool: "exec_command", Status: RunRunning, DurationMs: 25}, now)},
+		{TypeFaceChatDelta, FaceChatDelta{ConversationID: "conv-1", RequestID: "req-1", ResponseIndex: 1, Seq: 1, Offset: 0, Delta: "hello"}},
+		{TypeFaceChatStreamEnd, FaceChatStreamEnd{ConversationID: "conv-1", RequestID: "req-1", LastSeq: 1, ResponseCount: 1, Complete: true, Status: FaceResultSucceeded}},
+		{TypeFaceRunProgress, FaceRunProgress{ConversationID: "conv-1", RequestID: "req-1", RunID: "run-1", Seq: 1, Kind: ProgressStdout, Data: "output", Gap: false}},
 	}
 
 	for _, tt := range tests {
@@ -192,6 +199,15 @@ func TestValidateFacePayloadRejectsMalformedJSON(t *testing.T) {
 		{"missing conversation id", TypeFaceRunGet, `{"request_id":"req-1","run_id":"run-1"}`},
 		{"empty subscription conversation", TypeFaceSubscribe, `{"request_id":"req-1","conversation_ids":[""]}`},
 		{"unknown subscription event", TypeFaceSubscribe, `{"request_id":"req-1","event_types":["debug"]}`},
+		{"duplicate transient subscription", TypeFaceSubscribe, `{"request_id":"req-1","transient_types":["chat.delta","chat.delta"]}`},
+		{"unknown transient subscription", TypeFaceSubscribe, `{"request_id":"req-1","transient_types":["other"]}`},
+		{"negative messages cursor", TypeFaceConversationMessages, `{"request_id":"req-1","conversation_id":"conv-1","before_seq":-1}`},
+		{"oversized messages page", TypeFaceConversationMessages, `{"request_id":"req-1","conversation_id":"conv-1","limit":501}`},
+		{"empty delta", TypeFaceChatDelta, `{"conversation_id":"conv-1","request_id":"req-1","response_index":1,"seq":1,"offset":0,"delta":""}`},
+		{"oversized delta", TypeFaceChatDelta, `{"conversation_id":"conv-1","request_id":"req-1","response_index":1,"seq":1,"offset":0,"delta":"` + strings.Repeat("x", MaxFaceChatDeltaBytes+1) + `"}`},
+		{"delta outside stream", TypeFaceChatDelta, `{"conversation_id":"conv-1","request_id":"req-1","response_index":1,"seq":1,"offset":2097151,"delta":"xx"}`},
+		{"invalid stream end", TypeFaceChatStreamEnd, `{"conversation_id":"conv-1","request_id":"req-1","last_seq":0,"response_count":1,"complete":true,"status":"failed"}`},
+		{"invalid run progress", TypeFaceRunProgress, `{"conversation_id":"conv-1","run_id":"run-1","seq":0,"kind":"stdout","data":"x","gap":false}`},
 		{"unknown approval decision", TypeFaceApprovalResolve, `{"request_id":"req-1","approval_id":"approval-1","decision":"always"}`},
 		{"oversized approval reason", TypeFaceApprovalResolve, `{"request_id":"req-1","approval_id":"approval-1","decision":"allow_once","reason":"` + strings.Repeat("x", MaxFaceApprovalReasonBytes+1) + `"}`},
 		{"unknown accepted operation", TypeFaceAccepted, `{"request_id":"req-1","operation":"other"}`},
@@ -289,9 +305,28 @@ func TestValidateFaceResultDataForGatewayQueries(t *testing.T) {
 		operation FaceOperation
 		data      any
 	}{
+		{FaceOperationCapabilitiesGet, FaceCapabilitiesResult{
+			Revision: FaceProtocolRevision,
+			Identity: FaceIdentity{ID: "face-1", Label: "terminal", Scopes: []FaceScope{FaceScopeChat, FaceScopeSessionsRead}},
+			Features: []FaceFeature{FaceFeatureChatStream, FaceFeatureChatStreamResume, FaceFeatureRunProgress, FaceFeatureMessagePaging},
+			Limits: FaceProtocolLimits{
+				MaxChatContentBytes: MaxFaceChatContentBytes, MaxChatDeltaBytes: MaxFaceChatDeltaBytes,
+				MaxChatStreamBytes: MaxFaceChatStreamBytes, MaxChatStreamChunks: MaxFaceChatStreamChunks,
+				MaxMessageListLimit: MaxFaceMessageListLimit,
+			},
+		}},
+		{FaceOperationChatStreamGet, ChatStreamGetResult{
+			TargetRequestID: "req-chat", LastSeq: 2,
+			Responses: []ChatStreamResponse{{ResponseIndex: 1, Content: "working", Complete: true}, {ResponseIndex: 2, Content: "done", Complete: true}},
+			Terminal:  true, Status: FaceResultSucceeded,
+		}},
 		{FaceOperationConversationList, ConversationListResult{Conversations: []ConversationSummary{conversation}}},
 		{FaceOperationConversationCreate, ConversationCreateResult{Conversation: conversation}},
 		{FaceOperationConversationRename, ConversationRenameResult{Conversation: conversation}},
+		{FaceOperationConversationMessages, ConversationMessagesResult{
+			Messages:      []FaceMessage{{ID: 1, Role: "user", Content: "hello", RequestID: "req-chat", Seq: 1, CreatedAt: now}},
+			NextBeforeSeq: 1, HasMore: true,
+		}},
 		{FaceOperationHandList, HandListResult{Hands: []HandSummary{hand}}},
 		{FaceOperationHandGet, HandGetResult{Hand: hand}},
 		{FaceOperationRunGet, RunGetResult{Run: run}},
@@ -311,23 +346,42 @@ func TestValidateFaceResultDataForGatewayQueries(t *testing.T) {
 	if err := ValidateFaceResultData(FaceOperationConversationList, json.RawMessage(`{"conversations":null}`)); err == nil {
 		t.Fatal("nil conversation collection accepted")
 	}
+
+	invalid := []struct {
+		operation FaceOperation
+		data      string
+	}{
+		{FaceOperationCapabilitiesGet, `{"revision":2,"identity":{"id":"face-1","label":"terminal","scopes":["face:chat"]},"features":["chat_stream.v1","chat_stream.v1"],"limits":{"max_chat_content_bytes":262144,"max_chat_delta_bytes":4096,"max_chat_stream_bytes":2097152,"max_chat_stream_chunks":2048,"max_message_list_limit":500}}`},
+		{FaceOperationChatStreamGet, `{"target_request_id":"req-1","last_seq":1,"responses":[{"response_index":2,"content":"bad","complete":false}],"terminal":false}`},
+		{FaceOperationConversationMessages, `{"messages":[{"id":1,"role":"user","content":"a","seq":2,"created_at":"2026-07-18T12:00:00Z"},{"id":2,"role":"assistant","content":"b","seq":1,"created_at":"2026-07-18T12:00:01Z"}],"has_more":false}`},
+	}
+	for _, tt := range invalid {
+		if err := ValidateFaceResultData(tt.operation, json.RawMessage(tt.data)); err == nil {
+			t.Errorf("malformed %s result accepted: %s", tt.operation, tt.data)
+		}
+	}
 }
 
 func TestFaceDTOsDoNotDeclareSessionID(t *testing.T) {
 	types := []reflect.Type{
 		reflect.TypeOf(FaceIdentity{}), reflect.TypeOf(FaceCommandMeta{}), reflect.TypeOf(FaceChat{}), reflect.TypeOf(FaceChatCancel{}),
+		reflect.TypeOf(FaceChatStreamGet{}), reflect.TypeOf(FaceCapabilitiesGet{}),
 		reflect.TypeOf(FaceConversationList{}), reflect.TypeOf(FaceConversationCreate{}),
 		reflect.TypeOf(FaceConversationSnapshot{}), reflect.TypeOf(FaceConversationRename{}),
+		reflect.TypeOf(FaceConversationMessages{}),
 		reflect.TypeOf(FaceSubscribe{}), reflect.TypeOf(FaceApprovalResolve{}),
 		reflect.TypeOf(FaceRunGet{}), reflect.TypeOf(FaceRunCancel{}),
 		reflect.TypeOf(FaceHandList{}), reflect.TypeOf(FaceHandGet{}),
 		reflect.TypeOf(FaceAccepted{}), reflect.TypeOf(FaceResult{}), reflect.TypeOf(FaceError{}),
 		reflect.TypeOf(FaceSnapshot{}), reflect.TypeOf(FaceEvent{}),
+		reflect.TypeOf(FaceChatDelta{}), reflect.TypeOf(FaceChatStreamEnd{}), reflect.TypeOf(FaceRunProgress{}),
 		reflect.TypeOf(ConversationSummary{}), reflect.TypeOf(FaceMessage{}),
 		reflect.TypeOf(ChatSummary{}), reflect.TypeOf(ApprovalRequest{}),
 		reflect.TypeOf(RemoteRunSummary{}), reflect.TypeOf(HandSummary{}),
 		reflect.TypeOf(ConversationSnapshot{}), reflect.TypeOf(ConversationListResult{}),
 		reflect.TypeOf(ConversationCreateResult{}), reflect.TypeOf(ConversationRenameResult{}),
+		reflect.TypeOf(FaceCapabilitiesResult{}), reflect.TypeOf(ChatStreamGetResult{}),
+		reflect.TypeOf(ConversationMessagesResult{}),
 		reflect.TypeOf(HandListResult{}), reflect.TypeOf(HandGetResult{}), reflect.TypeOf(RunGetResult{}),
 		reflect.TypeOf(ChatStartedEventData{}),
 		reflect.TypeOf(ChatToolCalledEventData{}), reflect.TypeOf(ChatToolCompletedEventData{}),
