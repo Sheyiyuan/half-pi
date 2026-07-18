@@ -41,6 +41,10 @@
 
 Face 独立 token、Mind peer dispatcher、Gateway、Conversation Actor、Chat runtime、异步审批、Headless/TUI/Web 客户端和进程级 E2E 均推迟到后续阶段。本阶段只保留正式协议和 [`ai-face-protocol.md`](ai-face-protocol.md) 接入文档，不落地 Face runtime。
 
+## 已冻结：Face 核心收口方案
+
+Face wire protocol 的最终收口将补齐持久化后台 task 协议，并把身份边界推进到独立 Face credentials、Hand/Face 四步挑战握手和注册后业务 payload 强制加密。冻结 schema、消息结构、迁移、五阶段提交和验收矩阵见 [`face-core-closure-plan.md`](face-core-closure-plan.md)。该范围不包含 Face Gateway command routing、Conversation Actor、Chat runtime 或客户端。
+
 ## 后续阶段：Face Alpha Runtime
 
 ### P0：协议与身份边界

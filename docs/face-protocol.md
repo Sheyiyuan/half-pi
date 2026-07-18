@@ -1,5 +1,7 @@
 # Face 接入与统一协议设计
 
+> Face 核心 wire contract、身份凭据、四步挑战握手、应用层加密和后台 task 协议的最终冻结实施规格见 [`face-core-closure-plan.md`](face-core-closure-plan.md)。本文保留完整 Face Alpha runtime 设计。
+
 ## 状态
 
 协议已冻结，运行时待实现。`gateway-core/protocol` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、稳定枚举和严格结构验证；Face 独立鉴权、Gateway、Session Actor、Chat/审批运行时和客户端按当前阶段决策暂缓。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。本文不包含具体 UI 设计。
