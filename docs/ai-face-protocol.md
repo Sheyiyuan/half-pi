@@ -190,7 +190,7 @@ conversation.changed
 ## 未来实现清单
 
 1. Face Gateway 的 scope 校验、幂等 registry、有界出站队列和慢连接策略。
-2. Conversation Actor、快照聚合和结构化事件投影。
+2. 快照聚合和结构化事件投影。
 3. Chat accepted/result/cancel 和异步审批 broker。
 4. JSONL Headless Agent Face 与确定性 Scripted LLM E2E。
 

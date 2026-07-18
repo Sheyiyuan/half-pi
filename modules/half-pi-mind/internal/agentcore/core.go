@@ -62,10 +62,21 @@ func New(llmProvider llm.Provider, exec executor.ToolExecutor) (*Core, error) {
 	}, nil
 }
 
-// SetMode 切换安全模式，同时在对话历史中记录。
-func (c *Core) SetMode(mode string) {
+// SetMode 切换并持久化安全模式，同时在对话历史中记录。
+func (c *Core) SetMode(mode string) error {
+	if !validSecurityMode(mode) {
+		return fmt.Errorf("invalid security mode %q", mode)
+	}
 	c.chatMu.Lock()
 	defer c.chatMu.Unlock()
+	c.stateMu.RLock()
+	store, sessionID := c.store, c.sessionID
+	c.stateMu.RUnlock()
+	if store != nil && sessionID != "" {
+		if err := store.SetSessionMode(sessionID, mode); err != nil {
+			return err
+		}
+	}
 	c.stateMu.Lock()
 	c.Mode = mode
 	c.policy.Mode = modeToSecurityMode(mode)
@@ -74,6 +85,7 @@ func (c *Core) SetMode(mode string) {
 		Role:    llm.RoleSystem,
 		Content: fmt.Sprintf("安全模式已切换为: %s", mode),
 	})
+	return nil
 }
 
 func modeToSecurityMode(mode string) security.Mode {
@@ -86,6 +98,15 @@ func modeToSecurityMode(mode string) security.Mode {
 		return security.ModeYOLO
 	default:
 		return security.ModeNormal
+	}
+}
+
+func validSecurityMode(mode string) bool {
+	switch mode {
+	case "strict", "normal", "trust", "yolo":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -115,22 +136,28 @@ func (c *Core) SetSkills(s *skill.Store) {
 func (c *Core) SetStore(s *store.Store, sessionID string) error {
 	c.chatMu.Lock()
 	defer c.chatMu.Unlock()
-	c.stateMu.Lock()
-	defer c.stateMu.Unlock()
-	c.store = s
-	c.sessionID = sessionID
-	c.activeHand = "" // 先重置，避免串到上一条会话的 Hand
-
+	session, err := s.GetSession(sessionID)
+	if err != nil {
+		return fmt.Errorf("load session metadata: %w", err)
+	}
+	if session == nil {
+		return fmt.Errorf("session %q not found", sessionID)
+	}
+	if !validSecurityMode(session.Mode) {
+		return fmt.Errorf("session %q has invalid mode %q", sessionID, session.Mode)
+	}
 	msgs, err := s.GetMessages(sessionID)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
 	}
+	c.stateMu.Lock()
+	defer c.stateMu.Unlock()
+	c.store = s
+	c.sessionID = sessionID
+	c.Mode = session.Mode
+	c.policy.Mode = modeToSecurityMode(session.Mode)
+	c.activeHand = session.ActiveHand
 	c.history = storeMsgToLLM(msgs)
-
-	if ah, err := s.GetActiveHand(sessionID); err == nil && ah != "" {
-		c.activeHand = ah
-	}
-
 	return nil
 }
 

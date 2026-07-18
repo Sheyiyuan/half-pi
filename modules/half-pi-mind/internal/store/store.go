@@ -86,7 +86,10 @@ func (s *Store) migrate() error {
 			name        TEXT NOT NULL DEFAULT '',
 			description TEXT NOT NULL DEFAULT '',
 			soul_path   TEXT NOT NULL DEFAULT '',
+			mode        TEXT NOT NULL DEFAULT 'normal',
+			active_hand TEXT NOT NULL DEFAULT '',
 			created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+			updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
 			FOREIGN KEY (group_id) REFERENCES session_groups(id)
 		)`,
 		`CREATE TABLE IF NOT EXISTS messages (
@@ -184,6 +187,15 @@ func (s *Store) migrate() error {
 
 	if err := s.addColumnIfNotExists("sessions", "active_hand", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate active_hand: %w", err)
+	}
+	if err := s.addColumnIfNotExists("sessions", "mode", "TEXT NOT NULL DEFAULT 'normal'"); err != nil {
+		return fmt.Errorf("migrate session mode: %w", err)
+	}
+	if err := s.addColumnIfNotExists("sessions", "updated_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate session updated_at: %w", err)
+	}
+	if _, err := s.db.Exec(`UPDATE sessions SET updated_at = created_at WHERE updated_at = ''`); err != nil {
+		return fmt.Errorf("backfill session updated_at: %w", err)
 	}
 	if err := s.addColumnIfNotExists("hand_tokens", "hand_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate Hand token identity: %w", err)

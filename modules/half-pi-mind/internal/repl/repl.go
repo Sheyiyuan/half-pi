@@ -11,6 +11,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/conversation"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
@@ -21,26 +22,28 @@ type Repl struct {
 	store       *store.Store
 	groupID     string
 	hub         *hub.Hub
+	actor       *conversation.Actor
 	bridge      *local.RemoteBridge
-	switchActor func(string) (*agentcore.Core, *local.RemoteBridge, error)
+	switchActor func(string) (*conversation.Actor, error)
 	approver    *approver
 	scanner     *bufio.Scanner
 }
 
 // Run 启动交互式 REPL 循环。
-func Run(core *agentcore.Core, bridge *local.RemoteBridge, switchActor func(string) (*agentcore.Core, *local.RemoteBridge, error), bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub) {
+func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Actor, error), bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub) {
 	r := &Repl{
-		core:        core,
+		core:        actor.Core(),
 		bus:         bus,
 		store:       s,
 		groupID:     groupID,
 		hub:         wsHub,
-		bridge:      bridge,
+		actor:       actor,
+		bridge:      actor.Bridge(),
 		switchActor: switchActor,
 		scanner:     bufio.NewScanner(os.Stdin),
 	}
 	r.approver = &approver{scanner: r.scanner}
-	core.SetApprover(r.approver)
+	actor.Core().SetApprover(r.approver)
 
 	r.printBanner(serverEnabled)
 	for r.loop() {

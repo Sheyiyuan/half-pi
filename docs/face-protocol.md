@@ -4,7 +4,7 @@
 
 ## 状态
 
-核心协议已收口，业务运行时待实现。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立 Face/Hand 凭据、四步挑战握手、注册后强制加密、复合 peer identity 和严格结构验证；Face Gateway、Session Actor、Chat/审批运行时和客户端按当前阶段决策暂缓。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。本文不包含具体 UI 设计。
+核心协议已收口，业务运行时正在实现。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立 Face/Hand 凭据、四步挑战握手、注册后强制加密、复合 peer identity 和严格结构验证；Mind 服务模式与 REPL 已共用 Conversation Manager 并恢复持久化运行时状态，Face Gateway、Chat/审批运行时和客户端仍待实现。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。本文不包含具体 UI 设计。
 
 当前仓库已有 WebSocket Hub、`Envelope`、连接级防重放与强制加密、Face wire protocol、独立鉴权入口、会话持久化、远程执行状态机和 EventBus，但尚未实现正式 Face command runtime。
 

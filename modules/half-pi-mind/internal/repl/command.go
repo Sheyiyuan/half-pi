@@ -25,8 +25,11 @@ func (r *Repl) handleCommand(input string) bool {
 		mode := strings.TrimSpace(strings.TrimPrefix(input, "/mode "))
 		switch mode {
 		case "strict", "normal", "trust", "yolo":
-			r.core.SetMode(mode)
-			r.emit(events.LevelInfo, events.TypeModeChange, fmt.Sprintf("mode switched to: %s", mode))
+			if err := r.core.SetMode(mode); err != nil {
+				r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("switch mode: %v", err))
+			} else {
+				r.emit(events.LevelInfo, events.TypeModeChange, fmt.Sprintf("mode switched to: %s", mode))
+			}
 		default:
 			r.emit(events.LevelWarn, events.TypeSystem, fmt.Sprintf("unknown mode: %s (strict/normal/trust/yolo)", mode))
 		}
@@ -166,13 +169,13 @@ func (r *Repl) handleSessionSwitch(targetPrefix string) {
 	if err := r.core.SaveSession(); err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("save session: %v", err))
 	}
-	core, bridge, err := r.switchActor(targetID)
+	actor, err := r.switchActor(targetID)
 	if err != nil {
 		fmt.Printf("session not found: %s\n", targetID)
 		return
 	}
-	core.SetApprover(r.approver)
-	r.core, r.bridge = core, bridge
+	actor.Core().SetApprover(r.approver)
+	r.actor, r.core, r.bridge = actor, actor.Core(), actor.Bridge()
 	fmt.Printf("switched to session %s\n", shortID(targetID))
 }
 

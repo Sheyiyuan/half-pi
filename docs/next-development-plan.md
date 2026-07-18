@@ -11,6 +11,7 @@
 - Mind → Hand 的 Approval、accepted/rejected、显式取消、唯一终态和来源校验。
 - 服务级 `remoteexec.Authority`、SQLite run 审计与启动恢复。
 - 每个已加载 conversation 独立 Core/RemoteBridge，手动入口与 LLM 入口复用同一执行链路。
+- 服务模式与 REPL 共用 Conversation Manager，并恢复持久化 mode、active Hand 和 history。
 - Hand 工具 schema、allow/deny、本地最终检查、输出截断和 Unix 进程组取消。
 - R0 回归证据、R1 Windows 多架构交叉编译入口、R2 有界进度流和 R3 持久化后台任务闭环。
 
@@ -19,7 +20,7 @@
 ### 尚未落地
 
 - Face scope 和 conversation 的业务授权执行（凭据、identity 和 scope 存储已落地）。
-- 可供服务模式复用的 Conversation Actor 管理器和 Face Gateway。
+- Face Gateway 及其 conversation scope 授权入口。
 - Face 快照、订阅、有序出站队列、背压和结构化事件投影。
 - Chat `request_id`、幂等、busy、取消和唯一终态响应。
 - 异步审批对象及 Face 审批审计。
@@ -70,6 +71,8 @@ Face Gateway、Conversation Actor、Chat runtime、异步审批、Headless/TUI/W
 - `gateway-core` 和 `half-pi-mind` 测试在 `-race -count=1` 下通过。
 
 ### P1：Conversation Actor 与只读 Gateway
+
+2026-07-18 已完成 Conversation Manager、服务模式/REPL 共用工厂，以及 mode、active Hand、history、updated_at 的持久化和旧库迁移。只读 Gateway、快照、订阅、结构化事件和出站背压仍待完成。
 
 **目标**
 

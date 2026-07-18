@@ -91,6 +91,11 @@ func main() {
 	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus)
 	dispatcher.Install(wsHub, db, authority)
 	taskService := remoteexec.NewTaskService(authority, db)
+	conversations, err := newConversationManager(env, cfg, db, bus, authority, taskService)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "conversation runtime init failed: %v\n", err)
+		os.Exit(1)
+	}
 
 	var httpServer *http.Server
 	if cfg.Server.Enabled {
@@ -114,7 +119,7 @@ func main() {
 	}
 
 	if replMode {
-		runREPL(env, cfg, db, bus, authority, taskService)
+		runREPL(conversations, bus, db, cfg.Server.Enabled, authority.Hub)
 	} else {
 		runService(env, bus)
 	}

@@ -100,7 +100,9 @@ func TestNewDefaults(t *testing.T) {
 func TestSetMode(t *testing.T) {
 	core, _ := New(&stubLLM{}, &stubExecutor{})
 
-	core.SetMode("trust")
+	if err := core.SetMode("trust"); err != nil {
+		t.Fatal(err)
+	}
 	if core.Mode != "trust" {
 		t.Errorf("Mode = %q, want trust", core.Mode)
 	}
@@ -116,9 +118,21 @@ func TestSetMode(t *testing.T) {
 	}
 
 	// Second SetMode should append another message
-	core.SetMode("yolo")
+	if err := core.SetMode("yolo"); err != nil {
+		t.Fatal(err)
+	}
 	if len(core.history) != 2 {
 		t.Errorf("second SetMode should append, got %d messages", len(core.history))
+	}
+}
+
+func TestSetModeRejectsInvalidMode(t *testing.T) {
+	core, _ := New(&stubLLM{}, &stubExecutor{})
+	if err := core.SetMode("unsafe"); err == nil {
+		t.Fatal("invalid mode was accepted")
+	}
+	if core.SecurityMode() != "normal" || len(core.history) != 0 {
+		t.Fatal("invalid mode mutated Core state")
 	}
 }
 
