@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="430" viewBox="0 0 1200 430" role="img" aria-labelledby="title desc">
+  <title id="title">Half Pi 半派</title>
+  <desc id="desc">Half Pi 半派，自托管、跨设备、始终在线的个人 AI 助理。</desc>
+  <defs>
+    <linearGradient id="line" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#66ccff" stop-opacity="0"/>
+      <stop offset="0.45" stop-color="#66ccff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#66ccff" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1200" height="430" rx="30" fill="#101114"/>
+  <path d="M0 72H1200M0 160H1200M0 248H1200M0 336H1200M150 0V430M300 0V430M450 0V430M600 0V430M750 0V430M900 0V430M1050 0V430" stroke="#ffffff" stroke-opacity="0.04"/>
+
+  <g transform="translate(92 66)">
+    <text x="0" y="0" fill="#9fb0bf" font-family="'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'Source Han Sans SC', 'Noto Sans', sans-serif" font-size="22">自托管、跨设备、始终在线的个人 AI 助理</text>
+    <text x="0" y="92" fill="#f8fafc" font-family="'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'Source Han Sans SC', 'Noto Sans', sans-serif" font-size="88" font-weight="800" letter-spacing="0"><tspan fill="#66ccff">Half</tspan> <tspan fill="#f8fafc" opacity="0.44">Pi</tspan></text>
+    <text x="350" y="92" fill="#f8fafc" font-family="'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'Source Han Sans SC', 'Noto Sans', sans-serif" font-size="88" font-weight="800" letter-spacing="0"><tspan fill="#66ccff">半</tspan><tspan fill="#f8fafc" opacity="0.44">派</tspan></text>
+    <text x="4" y="151" fill="#dbe4ee" font-family="'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'Source Han Sans SC', 'Noto Sans', sans-serif" font-size="36" font-weight="650">你在哪，她就在哪。</text>
+
+    <line x1="4" y1="205" x2="492" y2="205" stroke="url(#line)" stroke-width="2"/>
+
+    <g transform="translate(4 244)">
+      <rect x="0" y="0" width="112" height="42" rx="0" fill="#14303c" stroke="none"/>
+      <text x="56" y="27" fill="#7dd3fc" font-family="'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'Source Han Sans SC', 'Noto Sans', sans-serif" font-size="18" text-anchor="middle">Face</text>
+
+      <rect x="132" y="0" width="112" height="42" rx="0" fill="#66ccff" stroke="none"/>
+      <text x="188" y="27" fill="#101114" font-family="'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'Source Han Sans SC', 'Noto Sans', sans-serif" font-size="18" text-anchor="middle">Mind</text>
+
+      <rect x="264" y="0" width="112" height="42" rx="0" fill="#14303c" stroke="none"/>
+      <text x="320" y="27" fill="#7dd3fc" font-family="'Noto Sans CJK SC', 'WenQuanYi Micro Hei', 'Source Han Sans SC', 'Noto Sans', sans-serif" font-size="18" text-anchor="middle">Hand</text>
+    </g>
+  </g>
+
+  <g transform="translate(752 44)">
+    <circle cx="302" cy="66" r="7" fill="#66ccff" opacity="0.86"/>
+    <circle cx="86" cy="284" r="5" fill="#66ccff" opacity="0.64"/>
+    <circle cx="358" cy="186" r="4" fill="#66ccff" opacity="0.52"/>
+    <circle cx="140" cy="108" r="3" fill="#66ccff" opacity="0.44"/>
+
+    <g fill="none" stroke="#66ccff" stroke-linecap="round">
+      <path d="M38 104L164 34" stroke-opacity="0.3" stroke-width="2"/>
+      <path d="M238 316L390 232" stroke-opacity="0.24" stroke-width="2"/>
+      <path d="M62 308H318" stroke-opacity="0.16" stroke-width="1.5"/>
+      <path d="M252 78H390" stroke-opacity="0.16" stroke-width="1.5"/>
+    </g>
+
+    <g transform="translate(132 94) scale(142)">
+      <path style="fill:none;stroke:#66ccff;stroke-width:0.0237425;stroke-dasharray:none;stroke-opacity:0.153144" d="M 0.1151884,1.0086553 A 0.30285823,0.31001002 0 0 1 -0.18665203,1.3173442 0.30285823,0.31001002 0 0 1 -0.49050713,1.0107333" transform="matrix(0.58665367,-0.80983793,0.84304364,0.53784516,0,0)"/>
+      <path style="fill:#66ccff;fill-opacity:0.399851" d="M 0.99804688,0.27539063 0.44335938,1.046875 c -0.0180755,0.026917 0.0171035,0.037816 0.0292969,0.021484 L 1.0273437,0.296875 c 0.014653,-0.0202007 -0.00926,-0.0437283 -0.0292968,-0.0214844 z"/>
+      <path style="fill:#66ccff" d="m 0.6015625,-0.84375 c 0,0.24737354 -0.19633615,0.446193 -0.4375,0.44726562 -0.24116385,0.001073 -0.43735046,-0.19599523 -0.43945313,-0.44335937 h -0.0351563 c 0.002263,0.2661855 0.21374853,0.47967585 0.47460938,0.47851562 C 0.4249233,-0.36248813 0.6367187,-0.57755448 0.6367187,-0.84375 Z" transform="matrix(-0.58600935,0.81030429,-0.84263491,-0.5384853,0,0)"/>
+      <path style="font-size:0.450404px;fill:#66ccff;fill-opacity:0.797154;stroke-width:0.0375926;stroke-opacity:0.153144" d="m 0.60985613,0.63445645 c 0.0139625,0 0.0279837,0.004499 0.0333299,-0.005405 0.004937,-0.009146 0.004474,-0.0287763 -0.005855,-0.0315283 -0.009742,-0.002596 -0.0153137,0.002702 -0.0193674,0.002702 -0.0153137,0 -0.0229706,-0.006756 -0.0229706,-0.0238714 0,-0.0238714 4.504e-4,-0.10269211 0.003603,-0.1585422 0,0 0.0261878,-1.679e-4 0.049094,0 0.0112596,8.253e-5 0.0112596,-0.0337018 0,-0.0337797 -0.0676666,-4.6828e-4 -0.23556125,0 -0.23556125,0 0,0 -0.0221057,2.0397e-4 -0.0351315,0.002252 -0.009103,0.001431 -0.0105078,0.0317105 0,0.0315283 0.0209618,-3.6336e-4 0.0567509,0 0.0567509,0 0,0.0662094 -0.0117841,0.11640876 -0.0175657,0.21078906 -8.4577e-4,0.0138067 0.0397147,0.0159771 0.0414372,0.002252 0.009734,-0.0775627 0.0139625,-0.14412927 0.0139625,-0.21304108 h 0.0878288 c -9.008e-4,0.0540485 -0.003153,0.13016675 -0.003153,0.15583978 0,0.0391851 0.0148633,0.0608045 0.0535982,0.0608045 z"/>
+      <path style="font-weight:bold;font-size:0.156579px;font-family:MiSans;-inkscape-font-specification:'MiSans Bold';fill:#66ccff;fill-opacity:0.200911;stroke-width:0.0130688;stroke-opacity:0.153144" d="m 0.88681211,0.7776714 c 0.0111171,-0.0115869 0.0184763,-0.0236434 0.0184763,-0.0377355 0,-0.0225474 -0.0155013,-0.0382053 -0.0419632,-0.0382053 -0.0242697,1.5658e-4 -0.037579,0.0137789 -0.043529,0.0272448 l 0.022704,0.0155013 c 0.004541,-0.0106474 0.0106474,-0.0161276 0.0198855,-0.0161276 0.008768,0 0.0131526,0.00548 0.0131526,0.0131526 0,0.006576 -0.002505,0.0123697 -0.0114303,0.0216079 l -0.0441553,0.0452513 v 0.0192592 h 0.0878408 V 0.8003754 h -0.0429026 z"/>
+      <ellipse style="fill:#66ccff;fill-opacity:1;stroke:none;stroke-width:0.00852433;stroke-dasharray:none;stroke-opacity:0.153144" cx="0.88025743" cy="0.21570173" rx="0.017001983" ry="0.017873131"/>
+      <circle style="fill:#66ccff;fill-opacity:1;stroke:none;stroke-width:0.0250392;stroke-dasharray:none;stroke-opacity:0.153144" cx="0.34807181" cy="0.95605254" r="0.017174596"/>
+    </g>
+  </g>
+</svg>
