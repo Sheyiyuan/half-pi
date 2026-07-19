@@ -161,8 +161,8 @@ func TestHandExecUsesSharedAuthorityAndEmitsResultForOriginalSession(t *testing.
 	wsHub := hub.New()
 	authority := remoteexec.NewAuthority(wsHub, remoteexec.NewRegistry(db), bus)
 	const applicationKey = "22222222222222222222222222222222"
-	wsHub.OnHandshake(func(key hub.PeerKey, _ protocol.Register) (hub.Authentication, error) {
-		return hub.Authentication{ApplicationKey: applicationKey, PrincipalID: key.Label}, nil
+	wsHub.OnHandshake(func(key hub.PeerKey) (hub.Authentication, error) {
+		return hub.Authentication{Token: "11111111111111111111111111111111", ApplicationKey: applicationKey, PrincipalID: key.Label}, nil
 	})
 	wsHub.OnMessage(authority.HandleHandMessage)
 	wsHub.OnDisconnect(authority.HandleHandDisconnect)

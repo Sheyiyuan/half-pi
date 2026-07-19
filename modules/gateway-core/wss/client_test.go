@@ -1,6 +1,7 @@
 package wss_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -41,8 +42,8 @@ func faceCredentials(label string) wss.Credentials {
 
 func TestClientFourStepEncryptedSession(t *testing.T) {
 	h := hub.New()
-	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
-		return hub.Authentication{ApplicationKey: testKey, PrincipalID: key.Label}, nil
+	h.OnHandshake(func(key hub.PeerKey) (hub.Authentication, error) {
+		return hub.Authentication{Token: testToken, ApplicationKey: testKey, PrincipalID: key.Label}, nil
 	})
 	received := make(chan protocol.Envelope, 1)
 	h.OnMessage(func(peer *hub.Peer, env protocol.Envelope) { received <- env })
@@ -54,8 +55,12 @@ func TestClientFourStepEncryptedSession(t *testing.T) {
 		t.Fatalf("ConnectAndRegister: %v", err)
 	}
 	defer conn.Conn.Close()
-	if h.PeerByType(hub.PeerFace, "face-1") == nil {
-		t.Fatal("registered face is not routable")
+	registerDeadline := time.Now().Add(time.Second)
+	for h.PeerByType(hub.PeerFace, "face-1") == nil {
+		if time.Now().After(registerDeadline) {
+			t.Fatal("registered face did not become routable")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	ready := conn.RegisteredEnvelope()
 	registered, err := protocol.DecodePayload[protocol.Registered](&ready)
@@ -87,8 +92,8 @@ func TestClientFourStepEncryptedSession(t *testing.T) {
 
 func TestClientRejectsWrongApplicationKey(t *testing.T) {
 	h := hub.New()
-	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
-		return hub.Authentication{ApplicationKey: testKey, PrincipalID: key.Label}, nil
+	h.OnHandshake(func(key hub.PeerKey) (hub.Authentication, error) {
+		return hub.Authentication{Token: testToken, ApplicationKey: testKey, PrincipalID: key.Label}, nil
 	})
 	url, closeServer := startHub(t, h)
 	defer closeServer()
@@ -104,6 +109,85 @@ func TestClientRejectsWrongApplicationKey(t *testing.T) {
 	}
 }
 
+func TestClientRejectsWrongToken(t *testing.T) {
+	h := hub.New()
+	h.OnHandshake(func(key hub.PeerKey) (hub.Authentication, error) {
+		return hub.Authentication{Token: testToken, ApplicationKey: testKey, PrincipalID: key.Label}, nil
+	})
+	url, closeServer := startHub(t, h)
+	defer closeServer()
+	credentials := faceCredentials("wrong-token")
+	credentials.Token = "11111111111111111111111111111111"
+	_, err := wss.NewClient(url).ConnectAndRegister(credentials)
+	var handshakeErr *wss.HandshakeError
+	if !errors.As(err, &handshakeErr) || handshakeErr.Code != "authentication_failed" || !handshakeErr.Permanent() || handshakeErr.Retryable() {
+		t.Fatalf("wrong token error = %v", err)
+	}
+	if h.Count() != 0 {
+		t.Fatal("wrong-token peer became routable")
+	}
+}
+
+func TestHandshakeFramesDoNotExposeSecretsOrHandInfo(t *testing.T) {
+	frames := make(chan [][]byte, 1)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_, registerRaw, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		challenge := protocol.RegisterChallenge{
+			ProtocolVersion: protocol.ProtocolVersion,
+			HandshakeID:     "abcdefabcdefabcdefabcdefabcdefab",
+			ServerID:        hub.DefaultHubID,
+			SessionID:       "1234567890abcdef1234567890abcdef",
+			Challenge:       "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+			ExpiresAt:       time.Now().Add(5 * time.Second).UnixMilli(),
+			Algorithm:       protocol.HandshakeAlgorithm,
+		}
+		challengeEnv, err := protocol.NewEnvelope("challenge", protocol.TypeRegisterChallenge, challenge)
+		if err != nil || conn.WriteJSON(challengeEnv) != nil {
+			return
+		}
+		_, proofRaw, err := conn.ReadMessage()
+		if err != nil {
+			return
+		}
+		frames <- [][]byte{registerRaw, proofRaw}
+	}))
+	defer srv.Close()
+
+	hostname := "private-build-host"
+	workDir := "/private/customer/workspace"
+	credentials := wss.Credentials{
+		Label: "wire-hand", Type: protocol.PeerHand,
+		Token: testToken, ApplicationKey: testKey,
+		Info: &protocol.HandInfo{OS: "linux", Arch: "amd64", Hostname: hostname, WorkDir: workDir},
+	}
+	_, err := wss.NewClient("ws" + strings.TrimPrefix(srv.URL, "http")).ConnectAndRegister(credentials)
+	if err == nil {
+		t.Fatal("incomplete test handshake unexpectedly succeeded")
+	}
+
+	select {
+	case captured := <-frames:
+		wire := bytes.Join(captured, nil)
+		for name, secret := range map[string]string{
+			"token": testToken, "application key": testKey, "hostname": hostname, "work dir": workDir,
+		} {
+			if bytes.Contains(wire, []byte(secret)) {
+				t.Fatalf("raw handshake frames exposed %s", name)
+			}
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timeout waiting for captured handshake frames")
+	}
+}
+
 func TestClientRejectsInvalidLocalCredentialsBeforeDial(t *testing.T) {
 	credentials := faceCredentials("face-1")
 	credentials.Token = "bad"
@@ -114,8 +198,8 @@ func TestClientRejectsInvalidLocalCredentialsBeforeDial(t *testing.T) {
 
 func TestClientInvalidEncryptedTrafficClosesConnection(t *testing.T) {
 	h := hub.New()
-	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
-		return hub.Authentication{ApplicationKey: testKey, PrincipalID: key.Label}, nil
+	h.OnHandshake(func(key hub.PeerKey) (hub.Authentication, error) {
+		return hub.Authentication{Token: testToken, ApplicationKey: testKey, PrincipalID: key.Label}, nil
 	})
 	url, closeServer := startHub(t, h)
 	defer closeServer()
@@ -138,8 +222,8 @@ func TestClientInvalidEncryptedTrafficClosesConnection(t *testing.T) {
 
 func TestClientSendFailureAfterStampClosesConnection(t *testing.T) {
 	h := hub.New()
-	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
-		return hub.Authentication{ApplicationKey: testKey, PrincipalID: key.Label}, nil
+	h.OnHandshake(func(key hub.PeerKey) (hub.Authentication, error) {
+		return hub.Authentication{Token: testToken, ApplicationKey: testKey, PrincipalID: key.Label}, nil
 	})
 	url, closeServer := startHub(t, h)
 	defer closeServer()

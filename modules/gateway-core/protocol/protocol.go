@@ -41,7 +41,7 @@ const (
 
 const (
 	// ProtocolVersion 是当前唯一支持的 wire protocol 版本。
-	ProtocolVersion = 1
+	ProtocolVersion = 2
 	// HandshakeAlgorithm 是注册证明和会话 payload 使用的算法。
 	HandshakeAlgorithm = "AES-128-GCM"
 )
@@ -87,16 +87,14 @@ func (e *Envelope) AAD() []byte {
 	return data
 }
 
-// Register 是 Face 或 Hand 首次连接时发送的注册消息。
+// Register 是 Face 或 Hand 首次连接时发送的公开路由信息，不包含长期秘密。
 type Register struct {
-	ProtocolVersion int       `json:"protocol_version"`
-	ClientID        string    `json:"client_id"`
-	Token           string    `json:"token"`
-	Type            PeerType  `json:"type"`
-	Info            *HandInfo `json:"info,omitempty"`
+	ProtocolVersion int      `json:"protocol_version"`
+	ClientID        string   `json:"client_id"`
+	Type            PeerType `json:"type"`
 }
 
-// HandInfo Hand 注册时上报的静态设备信息。
+// HandInfo 是 Hand 在加密注册证明中上报的静态设备信息。
 type HandInfo struct {
 	OS       string `json:"os"`       // 操作系统：linux / darwin / windows
 	Arch     string `json:"arch"`     // CPU 架构：amd64 / arm64
@@ -104,7 +102,7 @@ type HandInfo struct {
 	WorkDir  string `json:"work_dir"` // 工作目录
 }
 
-// Registered 是服务端接受注册后返回给客户端的会话信息。
+// Registered 是服务端接受注册后加密返回给客户端的会话信息。
 type Registered struct {
 	ProtocolVersion int    `json:"protocol_version"`
 	ClientID        string `json:"client_id"`
@@ -129,6 +127,12 @@ type RegisterProof struct {
 	HandshakeID     string `json:"handshake_id"`
 	Algorithm       string `json:"algorithm"`
 	Proof           string `json:"proof"`
+}
+
+// RegisterProofClaims 是 register proof 内部加密的身份声明。
+type RegisterProofClaims struct {
+	Challenge string    `json:"challenge"`
+	HandInfo  *HandInfo `json:"hand_info,omitempty"`
 }
 
 // HandshakeTranscript 是会话密钥派生使用的规范 transcript。

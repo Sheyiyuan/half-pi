@@ -2,7 +2,6 @@ package hub_test
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -43,11 +42,8 @@ func credentials(label string, peerType protocol.PeerType) wss.Credentials {
 
 func authenticatedHub() *hub.Hub {
 	h := hub.New()
-	h.OnHandshake(func(peerKey hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
-		if register.Token != token {
-			return hub.Authentication{}, fmt.Errorf("bad token")
-		}
-		return hub.Authentication{ApplicationKey: key, PrincipalID: peerKey.Label}, nil
+	h.OnHandshake(func(peerKey hub.PeerKey) (hub.Authentication, error) {
+		return hub.Authentication{Token: token, ApplicationKey: key, PrincipalID: peerKey.Label}, nil
 	})
 	return h
 }
@@ -68,6 +64,9 @@ func TestCompoundPeerKeyAllowsSameLabelAcrossTypes(t *testing.T) {
 	defer hand.Conn.Close()
 	if h.Count() != 2 || h.PeerByType(hub.PeerFace, "shared") == nil || h.PeerByType(hub.PeerHand, "shared") == nil {
 		t.Fatalf("compound peers not retained: %+v", h.Peers())
+	}
+	if info := h.PeerByType(hub.PeerHand, "shared").Info; info == nil || info.Hostname != "test" {
+		t.Fatalf("encrypted Hand info was not retained: %+v", info)
 	}
 	h.RemoveByType(hub.PeerFace, "shared")
 	if h.PeerByType(hub.PeerFace, "shared") != nil || h.PeerByType(hub.PeerHand, "shared") == nil {
@@ -161,7 +160,7 @@ func TestProofStagePeerIsNotVisible(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	reg, _ := protocol.NewEnvelope("r", protocol.TypeRegister, protocol.Register{ProtocolVersion: 1, ClientID: "pending", Token: token, Type: protocol.PeerFace})
+	reg, _ := protocol.NewEnvelope("r", protocol.TypeRegister, protocol.Register{ProtocolVersion: protocol.ProtocolVersion, ClientID: "pending", Type: protocol.PeerFace})
 	if err := conn.WriteJSON(reg); err != nil {
 		t.Fatal(err)
 	}
@@ -179,10 +178,10 @@ func TestRemoveByTypeRevokesAuthenticatedHandshake(t *testing.T) {
 	authenticated := make(chan struct{})
 	release := make(chan struct{})
 	var once sync.Once
-	h.OnHandshake(func(peerKey hub.PeerKey, _ protocol.Register) (hub.Authentication, error) {
+	h.OnHandshake(func(peerKey hub.PeerKey) (hub.Authentication, error) {
 		once.Do(func() { close(authenticated) })
 		<-release
-		return hub.Authentication{ApplicationKey: key, PrincipalID: peerKey.Label}, nil
+		return hub.Authentication{Token: token, ApplicationKey: key, PrincipalID: peerKey.Label}, nil
 	})
 	url, closeServer := server(t, h)
 	defer closeServer()
@@ -258,9 +257,10 @@ func TestRegisterStrictDecodeAndVersion(t *testing.T) {
 	url, closeServer := server(t, h)
 	defer closeServer()
 	for _, payload := range []string{
-		`{"protocol_version":0,"client_id":"bad","token":"` + token + `","type":"face"}`,
-		`{"protocol_version":1,"client_id":"bad","token":"` + token + `","type":"face","unknown":1}`,
-		`{"protocol_version":1,"client_id":"bad","token":"` + token + `","type":"face","info":null}`,
+		`{"protocol_version":1,"client_id":"bad","type":"face"}`,
+		`{"protocol_version":2,"client_id":"bad","type":"face","unknown":1}`,
+		`{"protocol_version":2,"client_id":"bad","type":"face","token":"` + token + `"}`,
+		`{"protocol_version":2,"client_id":"bad","type":"hand","info":null}`,
 	} {
 		conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 		if err != nil {

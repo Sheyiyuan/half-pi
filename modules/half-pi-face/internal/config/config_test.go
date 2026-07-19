@@ -59,8 +59,9 @@ func TestValidateRejectsInvalidCredentialsAndMode(t *testing.T) {
 		{name: "token", edit: func(cfg *Config) { cfg.Server.Token = "bad" }, want: "server.token"},
 		{name: "same secrets", edit: func(cfg *Config) { cfg.Server.ApplicationKey = testToken }, want: "must differ"},
 		{name: "mode", edit: func(cfg *Config) { cfg.Face.Mode = "unknown" }, want: "face.mode"},
-		{name: "insecure remote", edit: func(cfg *Config) { cfg.Server.URL = "ws://192.0.2.10/ws" }, want: "must use wss"},
 		{name: "URL credentials", edit: func(cfg *Config) { cfg.Server.URL = "wss://user@example.com/ws" }, want: "user info"},
+		{name: "HTTP URL", edit: func(cfg *Config) { cfg.Server.URL = "http://example.com/ws" }, want: "absolute ws:// or wss://"},
+		{name: "relative URL", edit: func(cfg *Config) { cfg.Server.URL = "/ws" }, want: "absolute ws:// or wss://"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -70,6 +71,16 @@ func TestValidateRejectsInvalidCredentialsAndMode(t *testing.T) {
 				t.Fatalf("Validate error = %v", err)
 			}
 		})
+	}
+}
+
+func TestValidateAcceptsRemoteApplicationEncryptedWS(t *testing.T) {
+	cfg := Config{
+		Server: ServerConfig{URL: "ws://192.0.2.10:15707/ws", Token: testToken, ApplicationKey: testKey},
+		Face:   FaceConfig{ID: "remote-face", Mode: ModeHeadless},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("remote ws URL rejected: %v", err)
 	}
 }
 

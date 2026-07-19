@@ -26,18 +26,18 @@ const (
 
 type testCredentials struct{}
 
-func (testCredentials) AuthenticateHandConnection(label, token string) (string, string, error) {
-	if label != "same-label" || token != testToken {
-		return "", "", fmt.Errorf("authentication failed")
+func (testCredentials) LoadHandConnectionCredential(label string) (string, string, string, error) {
+	if label != "same-label" {
+		return "", "", "", fmt.Errorf("authentication failed")
 	}
-	return testHandKey, "hand-principal", nil
+	return testToken, testHandKey, "hand-principal", nil
 }
 
-func (testCredentials) AuthenticateFaceConnection(label, token string) (string, string, error) {
-	if label != "same-label" || token != testToken {
-		return "", "", fmt.Errorf("authentication failed")
+func (testCredentials) LoadFaceConnectionCredential(label string) (string, string, string, error) {
+	if label != "same-label" {
+		return "", "", "", fmt.Errorf("authentication failed")
 	}
-	return testFaceKey, "face-principal", nil
+	return testToken, testFaceKey, "face-principal", nil
 }
 
 type recordingHandHandler struct {
@@ -113,8 +113,12 @@ func TestDispatcherSeparatesHandAndFaceWithSameLabel(t *testing.T) {
 	}
 	defer faceConn.Conn.Close()
 
-	if h.PeerByType(hub.PeerHand, "same-label") == nil || h.PeerByType(hub.PeerFace, "same-label") == nil {
-		t.Fatal("same-label typed peers were not both registered")
+	registerDeadline := time.Now().Add(time.Second)
+	for h.PeerByType(hub.PeerHand, "same-label") == nil || h.PeerByType(hub.PeerFace, "same-label") == nil {
+		if time.Now().After(registerDeadline) {
+			t.Fatal("same-label typed peers were not both registered")
+		}
+		time.Sleep(time.Millisecond)
 	}
 	if err := handConn.SendPayload("hand-msg", protocol.TypeHandEvent, protocol.HandEvent{Name: "test"}); err != nil {
 		t.Fatal(err)

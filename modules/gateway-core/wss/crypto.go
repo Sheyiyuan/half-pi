@@ -1,8 +1,7 @@
 // Package wss 提供应用层加密 WebSocket 通信，用于 Face-Mind-Hand 消息交换。
 //
 // 加密在应用层完成（AES-128-GCM），不依赖 TLS 证书。
-// 重放防护由 protocol.Envelope 的 session/seq 提供。
-// 生产环境请配合 TLS 使用。
+// 重放防护由 protocol.Envelope 的 session/seq 提供；部署层可按需通过反向代理提供 TLS。
 package wss
 
 import (

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -279,11 +280,44 @@ func TestCredentialNamespacesRejectCrossAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.AuthenticateFaceConnection(hand.Label, hand.Token); err == nil {
+	if _, err := s.AuthenticateFaceToken(hand.Label, hand.Token); err == nil {
 		t.Fatal("Hand credential authenticated as Face")
 	}
-	if _, _, err := s.AuthenticateHandConnection(face.Label, face.Token); err == nil {
+	if _, err := s.AuthenticateHandCredential(face.Label, face.Token); err == nil {
 		t.Fatal("Face credential authenticated as Hand")
+	}
+}
+
+func TestLoadConnectionCredentialUsesTypedLabel(t *testing.T) {
+	s := newCredentialTestStore(t)
+	hand, err := s.AddHandCredential("office-hand")
+	if err != nil {
+		t.Fatal(err)
+	}
+	face, err := s.AddFaceToken("terminal-face", []protocol.FaceScope{protocol.FaceScopeChat})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	handToken, handKey, handPrincipal, err := s.LoadHandConnectionCredential(hand.Label)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if handToken != hand.Token || handKey != hand.ApplicationKey || handPrincipal != strconv.FormatInt(hand.ID, 10) {
+		t.Fatal("loaded Hand handshake credential does not match stored record")
+	}
+	faceToken, faceKey, facePrincipal, err := s.LoadFaceConnectionCredential(face.Label)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if faceToken != face.Token || faceKey != face.ApplicationKey || facePrincipal != strconv.FormatInt(face.ID, 10) {
+		t.Fatal("loaded Face handshake credential does not match stored record")
+	}
+	if _, _, _, err := s.LoadFaceConnectionCredential(hand.Label); err == nil {
+		t.Fatal("Hand label resolved in Face credential namespace")
+	}
+	if _, _, _, err := s.LoadHandConnectionCredential(face.Label); err == nil {
+		t.Fatal("Face label resolved in Hand credential namespace")
 	}
 }
 

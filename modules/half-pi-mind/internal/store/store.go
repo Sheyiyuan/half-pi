@@ -43,40 +43,34 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
-// AuthenticateHandCredentialKey 验证 Hand 凭据并返回 application key。
-func (s *Store) AuthenticateHandCredentialKey(label, token string) (string, error) {
-	credential, err := s.AuthenticateHandCredential(label, token)
-	if err != nil {
-		return "", err
+// LoadHandConnectionCredential 按 Hand label 读取握手所需的双秘密和主体 ID。
+func (s *Store) LoadHandConnectionCredential(label string) (string, string, string, error) {
+	if err := validateCredentialLabel(label); err != nil {
+		return "", "", "", fmt.Errorf("authentication failed")
 	}
-	return credential.ApplicationKey, nil
+	credential, err := s.handCredentialByLabel(label)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return "", "", "", fmt.Errorf("authentication failed")
+		}
+		return "", "", "", fmt.Errorf("load hand connection credential: %w", err)
+	}
+	return credential.Token, credential.ApplicationKey, strconv.FormatInt(credential.ID, 10), nil
 }
 
-// AuthenticateHandConnection 验证 Hand 凭据并返回连接绑定信息。
-func (s *Store) AuthenticateHandConnection(label, token string) (string, string, error) {
-	credential, err := s.AuthenticateHandCredential(label, token)
-	if err != nil {
-		return "", "", err
+// LoadFaceConnectionCredential 按 Face label 读取握手所需的双秘密和主体 ID。
+func (s *Store) LoadFaceConnectionCredential(label string) (string, string, string, error) {
+	if err := validateCredentialLabel(label); err != nil {
+		return "", "", "", fmt.Errorf("authentication failed")
 	}
-	return credential.ApplicationKey, strconv.FormatInt(credential.ID, 10), nil
-}
-
-// AuthenticateFaceCredentialKey 验证 Face 凭据并返回 application key。
-func (s *Store) AuthenticateFaceCredentialKey(label, token string) (string, error) {
-	credential, err := s.AuthenticateFaceToken(label, token)
+	credential, err := s.faceTokenByLabel(label)
 	if err != nil {
-		return "", err
+		if err == sql.ErrNoRows {
+			return "", "", "", fmt.Errorf("authentication failed")
+		}
+		return "", "", "", fmt.Errorf("load face connection credential: %w", err)
 	}
-	return credential.ApplicationKey, nil
-}
-
-// AuthenticateFaceConnection 验证 Face 凭据并返回连接绑定信息。
-func (s *Store) AuthenticateFaceConnection(label, token string) (string, string, error) {
-	credential, err := s.AuthenticateFaceToken(label, token)
-	if err != nil {
-		return "", "", err
-	}
-	return credential.ApplicationKey, strconv.FormatInt(credential.ID, 10), nil
+	return credential.Token, credential.ApplicationKey, strconv.FormatInt(credential.ID, 10), nil
 }
 
 func (s *Store) migrate() error {

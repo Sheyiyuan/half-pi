@@ -20,8 +20,8 @@ func newCancelAuthority(t *testing.T, handID string, registry *Registry) (*Autho
 	t.Helper()
 	wsHub := hub.New()
 	const applicationKey = "22222222222222222222222222222222"
-	wsHub.OnHandshake(func(key hub.PeerKey, _ protocol.Register) (hub.Authentication, error) {
-		return hub.Authentication{ApplicationKey: applicationKey, PrincipalID: key.Label}, nil
+	wsHub.OnHandshake(func(key hub.PeerKey) (hub.Authentication, error) {
+		return hub.Authentication{Token: "11111111111111111111111111111111", ApplicationKey: applicationKey, PrincipalID: key.Label}, nil
 	})
 	authority := NewAuthority(wsHub, registry, nil)
 	wsHub.OnMessage(authority.HandleHandMessage)

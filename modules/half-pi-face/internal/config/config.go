@@ -4,12 +4,10 @@ package config
 import (
 	"encoding/hex"
 	"fmt"
-	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -19,7 +17,7 @@ const (
 	DefaultServerURL = "ws://127.0.0.1:15707/ws"
 	// ModeHeadless 是机器可消费的 JSONL 客户端模式。
 	ModeHeadless = "headless"
-	// ModeTUI 是面向人类的终端客户端模式。
+	// ModeTUI 是当前行式终端 REPL 的兼容模式名，保留给后续真正的 TUI 实现。
 	ModeTUI = "tui"
 )
 
@@ -98,9 +96,6 @@ func (c *Config) Validate() error {
 	if serverURL.User != nil {
 		return fmt.Errorf("server.url must not contain user info")
 	}
-	if serverURL.Scheme == "ws" && !isLoopbackHost(serverURL.Hostname()) {
-		return fmt.Errorf("non-loopback server.url must use wss://")
-	}
 	if !faceLabelPattern.MatchString(c.Face.ID) {
 		return fmt.Errorf("face.id must match [A-Za-z0-9][A-Za-z0-9._-]{0,63}")
 	}
@@ -120,14 +115,6 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("server.token and server.application_key must differ")
 	}
 	return nil
-}
-
-func isLoopbackHost(host string) bool {
-	if strings.EqualFold(host, "localhost") {
-		return true
-	}
-	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
 }
 
 // WriteDefault 写入受限权限的默认配置，且不覆盖已有文件。

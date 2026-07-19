@@ -12,9 +12,9 @@ import (
 )
 
 const (
-	proofInfo = "half-pi/v1/register-proof/"
-	c2sInfo   = "half-pi/v1/client-to-server/"
-	s2cInfo   = "half-pi/v1/server-to-client/"
+	proofInfo = "half-pi/v2/register-proof/"
+	c2sInfo   = "half-pi/v2/client-to-server/"
+	s2cInfo   = "half-pi/v2/server-to-client/"
 )
 
 // SessionKeys 是注册 transcript 派生的三把用途隔离密钥。
@@ -24,16 +24,20 @@ type SessionKeys struct {
 	ServerToClient [KeySize]byte
 }
 
-// DeriveSessionKeys 按 v1 transcript 规范派生 proof、C→S 和 S→C 密钥。
-func DeriveSessionKeys(applicationKey string, transcript protocol.HandshakeTranscript) (SessionKeys, error) {
+// DeriveSessionKeys 按 v2 transcript 和两项长期秘密派生 proof、C→S 和 S→C 密钥。
+func DeriveSessionKeys(token, applicationKey string, transcript protocol.HandshakeTranscript) (SessionKeys, error) {
 	var keys SessionKeys
-	root, err := hex.DecodeString(applicationKey)
-	if err != nil || len(root) != KeySize {
-		return keys, fmt.Errorf("application key must be 32 lowercase hex characters")
+	tokenBytes, err := decodeHandshakeSecret("token", token)
+	if err != nil {
+		return keys, err
 	}
-	if applicationKey != hex.EncodeToString(root) {
-		return keys, fmt.Errorf("application key must be lowercase hex")
+	applicationKeyBytes, err := decodeHandshakeSecret("application key", applicationKey)
+	if err != nil {
+		return keys, err
 	}
+	root := make([]byte, 0, len(tokenBytes)+len(applicationKeyBytes))
+	root = append(root, tokenBytes...)
+	root = append(root, applicationKeyBytes...)
 	challenge, err := base64.StdEncoding.DecodeString(transcript.Challenge)
 	if err != nil || len(challenge) != 32 || base64.StdEncoding.EncodeToString(challenge) != transcript.Challenge {
 		return keys, fmt.Errorf("challenge must be canonical base64 of 32 bytes")
@@ -64,11 +68,11 @@ func DeriveSessionKeys(applicationKey string, transcript protocol.HandshakeTrans
 	return keys, nil
 }
 
-// NewRegisterProof 创建绑定 transcript 的 v1 GCM proof。
-func NewRegisterProof(keys SessionKeys, transcript protocol.HandshakeTranscript) (protocol.RegisterProof, error) {
-	challenge, err := base64.StdEncoding.DecodeString(transcript.Challenge)
-	if err != nil || len(challenge) != 32 {
-		return protocol.RegisterProof{}, fmt.Errorf("decode challenge")
+// NewRegisterProof 创建绑定 transcript 且加密身份声明的 v2 GCM proof。
+func NewRegisterProof(keys SessionKeys, transcript protocol.HandshakeTranscript, handInfo *protocol.HandInfo) (protocol.RegisterProof, error) {
+	claims := protocol.RegisterProofClaims{Challenge: transcript.Challenge, HandInfo: handInfo}
+	if err := validateProofClaims(transcript.PeerType, claims, handInfo != nil); err != nil {
+		return protocol.RegisterProof{}, err
 	}
 	aad, err := proofAAD(transcript)
 	if err != nil {
@@ -78,7 +82,11 @@ func NewRegisterProof(keys SessionKeys, transcript protocol.HandshakeTranscript)
 	if err != nil {
 		return protocol.RegisterProof{}, err
 	}
-	proof, err := cipher.Encrypt(challenge, aad)
+	plain, err := json.Marshal(claims)
+	if err != nil {
+		return protocol.RegisterProof{}, fmt.Errorf("marshal register proof claims: %w", err)
+	}
+	proof, err := cipher.Encrypt(plain, aad)
 	if err != nil {
 		return protocol.RegisterProof{}, err
 	}
@@ -90,37 +98,70 @@ func NewRegisterProof(keys SessionKeys, transcript protocol.HandshakeTranscript)
 	}, nil
 }
 
-// VerifyRegisterProof 验证 proof 的字段、规范 base64、AAD 和挑战明文。
-func VerifyRegisterProof(keys SessionKeys, transcript protocol.HandshakeTranscript, proof protocol.RegisterProof) error {
+// VerifyRegisterProof 验证并解密 proof，返回通过角色约束检查的身份声明。
+func VerifyRegisterProof(keys SessionKeys, transcript protocol.HandshakeTranscript, proof protocol.RegisterProof) (protocol.RegisterProofClaims, error) {
+	var zero protocol.RegisterProofClaims
 	if proof.ProtocolVersion != protocol.ProtocolVersion || proof.HandshakeID != transcript.HandshakeID || proof.Algorithm != protocol.HandshakeAlgorithm {
-		return fmt.Errorf("proof metadata mismatch")
+		return zero, fmt.Errorf("proof metadata mismatch")
 	}
 	data, err := base64.StdEncoding.DecodeString(proof.Proof)
 	if err != nil || base64.StdEncoding.EncodeToString(data) != proof.Proof {
-		return fmt.Errorf("invalid proof encoding")
+		return zero, fmt.Errorf("invalid proof encoding")
 	}
 	aad, err := proofAAD(transcript)
 	if err != nil {
-		return err
+		return zero, err
 	}
 	cipher, err := NewAES128GCM(keys.Proof[:])
 	if err != nil {
-		return err
+		return zero, err
 	}
 	plain, err := cipher.Decrypt(data, aad)
 	if err != nil {
-		return err
+		return zero, err
 	}
-	want, _ := base64.StdEncoding.DecodeString(transcript.Challenge)
-	if len(plain) != len(want) {
-		return fmt.Errorf("proof challenge mismatch")
+	claims, err := protocol.StrictDecode[protocol.RegisterProofClaims](plain)
+	if err != nil {
+		return zero, fmt.Errorf("decode register proof claims: %w", err)
 	}
-	var different byte
-	for i := range plain {
-		different |= plain[i] ^ want[i]
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(plain, &fields); err != nil {
+		return zero, fmt.Errorf("decode register proof fields: %w", err)
 	}
-	if different != 0 {
-		return fmt.Errorf("proof challenge mismatch")
+	_, handInfoPresent := fields["hand_info"]
+	if err := validateProofClaims(transcript.PeerType, claims, handInfoPresent); err != nil {
+		return zero, err
+	}
+	if claims.Challenge != transcript.Challenge {
+		return zero, fmt.Errorf("proof challenge mismatch")
+	}
+	return claims, nil
+}
+
+func decodeHandshakeSecret(name, value string) ([]byte, error) {
+	decoded, err := hex.DecodeString(value)
+	if err != nil || len(decoded) != KeySize || hex.EncodeToString(decoded) != value {
+		return nil, fmt.Errorf("%s must be 32 lowercase hex characters", name)
+	}
+	return decoded, nil
+}
+
+func validateProofClaims(peerType protocol.PeerType, claims protocol.RegisterProofClaims, handInfoPresent bool) error {
+	challenge, err := base64.StdEncoding.DecodeString(claims.Challenge)
+	if err != nil || len(challenge) != 32 || base64.StdEncoding.EncodeToString(challenge) != claims.Challenge {
+		return fmt.Errorf("invalid proof challenge")
+	}
+	switch peerType {
+	case protocol.PeerFace:
+		if handInfoPresent {
+			return fmt.Errorf("face proof must omit hand info")
+		}
+	case protocol.PeerHand:
+		if !handInfoPresent || claims.HandInfo == nil || claims.HandInfo.OS == "" || claims.HandInfo.Arch == "" || claims.HandInfo.Hostname == "" {
+			return fmt.Errorf("hand proof requires hand info")
+		}
+	default:
+		return fmt.Errorf("invalid peer type")
 	}
 	return nil
 }

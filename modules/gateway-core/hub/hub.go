@@ -6,7 +6,6 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"regexp"
 	"sync"
@@ -43,14 +42,15 @@ type PeerKey struct {
 	Label string
 }
 
-// Authentication 是握手认证结果；application key 仅用于派生会话密钥。
+// Authentication 是握手认证结果；两项秘密仅用于派生握手和会话密钥。
 type Authentication struct {
+	Token          string
 	ApplicationKey string
 	PrincipalID    string
 }
 
-// Authenticator 验证 label/token，并返回 application key 与稳定主体 ID。
-type Authenticator func(key PeerKey, register protocol.Register) (Authentication, error)
+// Authenticator 按公开的 peer type 和 label 查询握手凭据与稳定主体 ID。
+type Authenticator func(key PeerKey) (Authentication, error)
 
 // HandshakeError 是客户端可据此决定是否重试的握手错误。
 type HandshakeError struct {
@@ -114,7 +114,7 @@ func (h *Hub) ServeWS(conn *websocket.Conn) error {
 		_ = conn.Close()
 		return err
 	}
-	authentication, err := h.authenticateRegister(key, reg)
+	authentication, err := h.authenticateRegister(key)
 	if err != nil {
 		return h.failHandshake(conn, "authentication_failed", err)
 	}
@@ -139,12 +139,16 @@ func (h *Hub) ServeWS(conn *websocket.Conn) error {
 	if err != nil {
 		return h.failHandshake(conn, handshakeCode(err), err)
 	}
-	keys, err := wss.DeriveSessionKeys(authentication.ApplicationKey, transcript)
-	if err != nil || time.Now().After(deadline) || wss.VerifyRegisterProof(keys, transcript, proof) != nil {
+	keys, err := wss.DeriveSessionKeys(authentication.Token, authentication.ApplicationKey, transcript)
+	if err != nil || time.Now().After(deadline) {
+		return h.failHandshake(conn, "authentication_failed", fmt.Errorf("invalid register proof"))
+	}
+	claims, err := wss.VerifyRegisterProof(keys, transcript, proof)
+	if err != nil {
 		return h.failHandshake(conn, "authentication_failed", fmt.Errorf("invalid register proof"))
 	}
 
-	peer, err := h.reservePeer(key, reg, conn, transcript.SessionID, keys, authentication.PrincipalID)
+	peer, err := h.reservePeer(key, conn, transcript.SessionID, keys, authentication.PrincipalID, claims.HandInfo)
 	if err != nil {
 		return h.failHandshake(conn, "duplicate_peer", err)
 	}
@@ -229,49 +233,35 @@ func readRegister(conn *websocket.Conn) (protocol.Envelope, protocol.Register, e
 	if reg.ProtocolVersion != protocol.ProtocolVersion {
 		return protocol.Envelope{}, zero, &HandshakeError{Code: "unsupported_protocol"}
 	}
-	if err := validateRegister(reg, env.Payload); err != nil {
+	if err := validateRegister(reg); err != nil {
 		return protocol.Envelope{}, zero, err
 	}
 	return env, reg, nil
 }
 
-func validateRegister(reg protocol.Register, payload json.RawMessage) error {
+func validateRegister(reg protocol.Register) error {
 	if reg.Type != PeerHand && reg.Type != PeerFace {
 		return fmt.Errorf("invalid peer type")
 	}
 	if !labelPattern.MatchString(reg.ClientID) {
 		return fmt.Errorf("invalid client label")
 	}
-	token, err := hex.DecodeString(reg.Token)
-	if err != nil || len(token) != 16 || hex.EncodeToString(token) != reg.Token {
-		return fmt.Errorf("invalid token")
-	}
-	if reg.Type == PeerFace {
-		var fields map[string]json.RawMessage
-		if err := json.Unmarshal(payload, &fields); err != nil {
-			return fmt.Errorf("invalid register payload")
-		}
-		if _, present := fields["info"]; present {
-			return fmt.Errorf("face must omit info")
-		}
-	}
-	if reg.Type == PeerHand && (reg.Info == nil || reg.Info.OS == "" || reg.Info.Arch == "" || reg.Info.Hostname == "") {
-		return fmt.Errorf("hand info is required")
-	}
 	return nil
 }
 
-func (h *Hub) authenticateRegister(key PeerKey, reg protocol.Register) (Authentication, error) {
+func (h *Hub) authenticateRegister(key PeerKey) (Authentication, error) {
 	if h.authenticate == nil {
 		return Authentication{}, fmt.Errorf("authenticator is not configured")
 	}
-	authentication, err := h.authenticate(key, reg)
+	authentication, err := h.authenticate(key)
 	if err != nil {
 		return Authentication{}, err
 	}
-	decoded, err := hex.DecodeString(authentication.ApplicationKey)
-	if err != nil || len(decoded) != 16 || hex.EncodeToString(decoded) != authentication.ApplicationKey {
-		return Authentication{}, fmt.Errorf("invalid application key")
+	for name, value := range map[string]string{"token": authentication.Token, "application key": authentication.ApplicationKey} {
+		decoded, err := hex.DecodeString(value)
+		if err != nil || len(decoded) != 16 || hex.EncodeToString(decoded) != value {
+			return Authentication{}, fmt.Errorf("invalid %s", name)
+		}
 	}
 	if authentication.PrincipalID == "" {
 		return Authentication{}, fmt.Errorf("invalid principal ID")
@@ -350,7 +340,7 @@ func (h *Hub) failHandshake(conn *websocket.Conn, code string, cause error) erro
 	return &HandshakeError{Code: code}
 }
 
-func (h *Hub) reservePeer(key PeerKey, reg protocol.Register, conn *websocket.Conn, sessionID string, keys wss.SessionKeys, principalID string) (*Peer, error) {
+func (h *Hub) reservePeer(key PeerKey, conn *websocket.Conn, sessionID string, keys wss.SessionKeys, principalID string, info *protocol.HandInfo) (*Peer, error) {
 	session, err := protocol.NewSession(h.ID, key.Label, sessionID)
 	if err != nil {
 		return nil, err
@@ -366,7 +356,7 @@ func (h *Hub) reservePeer(key PeerKey, reg protocol.Register, conn *websocket.Co
 	peer := &Peer{
 		ID: key.Label, Type: key.Type, PrincipalID: principalID,
 		Conn: conn, JoinedAt: time.Now(), hub: h, session: session,
-		inCipher: inCipher, outCipher: outCipher, Info: reg.Info,
+		inCipher: inCipher, outCipher: outCipher, Info: info,
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()

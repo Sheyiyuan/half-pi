@@ -10,8 +10,8 @@ import (
 
 // CredentialStore 提供 Hand 和 Face 分离的认证入口。
 type CredentialStore interface {
-	AuthenticateHandConnection(label, token string) (applicationKey, principalID string, err error)
-	AuthenticateFaceConnection(label, token string) (applicationKey, principalID string, err error)
+	LoadHandConnectionCredential(label string) (token, applicationKey, principalID string, err error)
+	LoadFaceConnectionCredential(label string) (token, applicationKey, principalID string, err error)
 }
 
 // HandHandler 接收已认证 Hand 的业务消息和断连事件。
@@ -31,18 +31,18 @@ type FaceHandler interface {
 
 // Install 将 dispatcher 安装为 Hub 回调的唯一所有者。
 func Install(h *hub.Hub, credentials CredentialStore, hands HandHandler, faces FaceHandler) {
-	h.OnHandshake(func(key hub.PeerKey, register protocol.Register) (hub.Authentication, error) {
-		var applicationKey, principalID string
+	h.OnHandshake(func(key hub.PeerKey) (hub.Authentication, error) {
+		var token, applicationKey, principalID string
 		var err error
 		switch key.Type {
 		case hub.PeerHand:
-			applicationKey, principalID, err = credentials.AuthenticateHandConnection(key.Label, register.Token)
+			token, applicationKey, principalID, err = credentials.LoadHandConnectionCredential(key.Label)
 		case hub.PeerFace:
-			applicationKey, principalID, err = credentials.AuthenticateFaceConnection(key.Label, register.Token)
+			token, applicationKey, principalID, err = credentials.LoadFaceConnectionCredential(key.Label)
 		default:
 			err = fmt.Errorf("unsupported peer type")
 		}
-		return hub.Authentication{ApplicationKey: applicationKey, PrincipalID: principalID}, err
+		return hub.Authentication{Token: token, ApplicationKey: applicationKey, PrincipalID: principalID}, err
 	})
 	h.OnConnect(func(peer *hub.Peer) {
 		if peer.Type == hub.PeerHand {

@@ -64,7 +64,7 @@ type SessionConn struct {
 	writeMu    sync.Mutex
 }
 
-// ConnectAndRegister 连接服务端并完成 version 1 四步挑战握手。
+// ConnectAndRegister 连接服务端并完成 version 2 四步挑战握手。
 func (c *Client) ConnectAndRegister(credentials Credentials) (*SessionConn, error) {
 	if err := validateCredentials(credentials); err != nil {
 		return nil, err
@@ -84,9 +84,7 @@ func (c *Client) ConnectAndRegister(credentials Credentials) (*SessionConn, erro
 	reg, err := protocol.NewEnvelope("", protocol.TypeRegister, protocol.Register{
 		ProtocolVersion: protocol.ProtocolVersion,
 		ClientID:        credentials.Label,
-		Token:           credentials.Token,
 		Type:            credentials.Type,
-		Info:            credentials.Info,
 	})
 	if err != nil {
 		return fail(err)
@@ -118,11 +116,11 @@ func (c *Client) ConnectAndRegister(credentials Credentials) (*SessionConn, erro
 		SessionID:       challenge.SessionID,
 		Challenge:       challenge.Challenge,
 	}
-	keys, err := DeriveSessionKeys(credentials.ApplicationKey, transcript)
+	keys, err := DeriveSessionKeys(credentials.Token, credentials.ApplicationKey, transcript)
 	if err != nil {
 		return fail(err)
 	}
-	proof, err := NewRegisterProof(keys, transcript)
+	proof, err := NewRegisterProof(keys, transcript, credentials.Info)
 	if err != nil {
 		return fail(err)
 	}
