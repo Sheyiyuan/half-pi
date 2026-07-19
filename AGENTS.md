@@ -211,6 +211,8 @@ make test         # 运行全部 5 个模块的测试
 ##### Gateway-core 通信层 (`modules/gateway-core/`)
 - `protocol/`：Envelope 消息协议，Session 重放防护（单调序号），AAD 构造
 - `wss/crypto`：AES-128-GCM 加解密 + Envelope 集成
+- v2 四步握手：register 只公开 type/label，token + application key 共同派生 proof/C→S/S→C 密钥，HandInfo 位于加密 proof claims
+- v1 与首帧携带 token/Info 的注册严格拒绝；registered 及全部业务 payload 强制加密
 - `wss/server`：HTTP → WebSocket 升级
 - `wss/client`：ConnectAndRegister 完整握手 + Send/Read 封装
 - `hub/`：Peer 管理、ServeWS 生命周期、Broadcast、重放防护、OnDisconnect 回调
@@ -235,7 +237,7 @@ make test         # 运行全部 5 个模块的测试
   - **REPL 模式（`--repl`）**：WS Hub + 交互式 REPL，事件输出到终端
 - `--version` 打印版本号
 - Hand/Face 独立凭据表，token 与 application key 分离
-- REPL 命令：`/hand add/list/remove`、`/face add/list/remove`、`/peers`
+- REPL 命令：`/hand add/list/remove`、`/face add/list/remove`、`/peers`（复用本地管理服务）
 - 连接/断开事件通过 EventBus 发布到日志/终端
 - `server.enabled` 配置开关
 
@@ -282,17 +284,29 @@ make test         # 运行全部 5 个模块的测试
 - 终端 Face 支持 conversation、Chat/cancel、审批、Hand、run 和 task 操作，snapshot 后自动订阅当前 conversation
 - 所有 Mind payload 在渲染前严格验证，嵌套 result 按 pending operation 校验，终端文本转义 C0/C1 控制字符
 - 真实进程 E2E 使用动态端口、临时 HOME/SQLite/工作目录和 Scripted LLM，构建并运行 `-race` Mind/Hand/Face 二进制
-- E2E 覆盖多 Face 持久化恢复、request replay/conflict、run-bound 审批、远程取消、后台 task 对账、TUI 一致性与脱敏审计
+- E2E 覆盖多 Face 持久化恢复、request replay/conflict、run-bound 审批、远程取消、后台 task 对账、终端 REPL 一致性与脱敏审计
+
+##### Mind 本地管理 CLI
+- `half-pi-mind config init|path|validate|show`
+- `half-pi-mind face add|list|remove`，支持 `--scopes` 或 `--profile observer|operator`
+- `half-pi-mind hand add|list|remove`
+- `half-pi-mind status` / `peers`
+- Mind 运行时通过本地 IPC 调用进程内 `management.Service`；Mind 未运行时在取得状态锁后离线打开 Store
+- service 与 REPL 在打开 Store 前持有 OS 状态锁；REPL `/face`、`/hand`、`/peers` 复用同一管理服务
+- 新增 `management_audits`，凭据成功 mutation 与成功 audit 同事务提交，失败路径写无秘密失败审计
+- Windows named pipe 使用 `go-winio`，状态锁使用 `LockFileEx`，新建 run/lock/pipe 的 DACL 仅允许当前用户 SID 和 SYSTEM
+- Unix 真实进程 E2E 覆盖离线创建、在线 CRUD/立即断连、Hub disabled、REPL 一致性和 IPC fail closed；Windows `386/amd64/arm64` 已完成交叉编译（上游 SQLite 不支持 `windows/arm`）
+- WinBoat Windows 11 Pro 原生验收已通过：七组 race 测试、named pipe handle DACL、`LockFileEx`、run/lock DACL、离线创建、在线 CRUD 和 Hub-disabled 管理链路均成功
 
 ##### 设计文档
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
 - `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（客户端、Mind runtime 与进程 E2E 可用）
 - `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
-- `docs/mind-management-cli.md` — Mind 本地管理 CLI、在线 IPC、离线 Store 与状态锁设计（待实现）
+- `docs/mind-management-cli.md` — Mind 本地管理 CLI、在线 IPC、离线 Store 与状态锁设计/实现记录
 - `docs/archived/README.md` — 已完成或被替代设计的归档索引
 
 #### ⏳ 待完成
-- [ ] Mind 本地管理 CLI：在线 IPC、离线状态锁、Face/Hand 凭据与配置管理
+- [ ] 真正的全屏交互式 Face TUI（当前人类终端 Face 为行式 REPL）
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
 - [ ] Windows 原生凭据/config/database ACL 发布环境验收
@@ -349,7 +363,7 @@ make test         # 运行全部 5 个模块的测试
 - SQLite `hand_credentials` 表，每 Hand 独立 token/application key；旧 `hand_tokens` fail closed
 - REPL `/hand add <label>` 生成 32 字符 hex token
 - `/hand list` / `/hand remove <id>` 管理
-- `hub.OnHandshake` 回调验证 token
+- `hub.OnHandshake` 按 type+label 读取双秘密并验证加密 proof
 - `hub.OnDisconnect` 回调通知终端
 
 ### 2026-07-14：WS Hub 启动策略
@@ -417,11 +431,26 @@ make test         # 运行全部 5 个模块的测试
 - Windows 11 原生环境运行 `scripts/test-windows.ps1` 通过，完整 `half-pi-core/tools` race 测试和进程树取消专项测试均成功
 - Windows Job Object 取消语义完成外部平台验收；Windows ACL 仍是独立发布环境检查项
 
+### 2026-07-19：Mind 管理 CLI Windows 原生验收
+- WinBoat Windows 11 Pro `AMD64`（build 26200）原生执行 `scripts/test-windows.ps1 -PrebuiltDir` 通过，七个 race 测试二进制全部 PASS 且 stderr 为空
+- 原生链路覆盖 `go-winio` named pipe、handle DACL、动态 deadline、`LockFileEx`、run/lock DACL、离线 Face add、在线 Face/Hand CRUD、status 和 Hub-disabled peers
+- 验收修复 Windows 交互终端测试注入、`go-winio` deadline 错误归一化、目录 DACL 继承和 PowerShell 非零 CLI 退出收集
+- Windows `386/amd64/arm64` 继续保持交叉编译通过；`windows/arm` 因上游 `modernc.org/sqlite` 不支持而不纳入 Mind 构建矩阵
+
+### 2026-07-19：Gateway v2 全程应用层加密
+- 废弃首帧明文携带 token/HandInfo 的 v1 握手，旧版本和秘密字段严格 fail closed，不保留降级旁路
+- register 仅公开 protocol version、peer type 和 label；Mind 按 type+label 查询分表凭据
+- token 与 application key 共同参与 HKDF-SHA-256，按 transcript/challenge 派生 proof、C→S 和 S→C 三把 AES-128-GCM 密钥
+- challenge 回显和 HandInfo 放入加密 proof claims；Face 必须省略 HandInfo，Hand 必须提供完整 HandInfo
+- 原始 WebSocket 帧测试确认 token、application key、hostname 和 work_dir 不以明文出现；错误双秘密、角色字段和 transcript 篡改均拒绝
+- WinBoat Windows 11 Pro `AMD64`（build 26200）原生运行 protocol/wss/hub/dispatcher race 测试和 Mind/Hand/Face v2 进程链路通过；Face 收到 version 2 encrypted registered，双 peer 在线与撤销断连均通过
+- `scripts/test-windows.ps1` 已将 gateway protocol/hub/wss 与 Mind dispatcher 纳入多架构编译、原生 race 和 Prebuilt 门禁
+- WinBoat 使用当前源码执行更新后的官方 `scripts/test-windows.ps1 -PrebuiltDir` 通过，11 组原生 race 测试全部 PASS，官方 stderr 为空
+
 ---
 
 ## 下一步
 
-1. 实现 Mind 本地管理 CLI、在线 IPC 与带状态锁的离线凭据管理
-2. 实现 `/compact` 上下文压缩
-3. 完成 Skill → 工作区集成
-4. 在发布环境验收 Windows 原生 ACL
+1. 实现 `/compact` 上下文压缩
+2. 完成 Skill → 工作区集成
+3. 在发布环境验收 Windows 凭据/config/database ACL

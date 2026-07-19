@@ -2,7 +2,9 @@
 
 ## 状态与边界
 
-已归档。本文是 2026-07-18 经逐项确认并完成落地的实施规格。Linux/race 测试、全仓构建、Windows 交叉编译和原生 Windows 进程树取消验收均已通过；Windows 原生 ACL 仍作为发布环境验收项。除发现安全冲突外，不再修改 wire contract。
+> **历史规格，不得作为当前接入依据。** 本文记录的 v1 首帧明文 token/HandInfo 和 application-key-only KDF 在 2026-07-19 安全审计中被判定不满足全程应用层加密，已由 v2 握手替代。当前协议以 [`../face-protocol.md`](../face-protocol.md) 和 [`../ai-face-protocol.md`](../ai-face-protocol.md) 为准；v1 必须 fail closed。
+
+已归档。本文是 2026-07-18 经逐项确认并完成落地的历史实施规格。Linux/race 测试、全仓构建、Windows 交叉编译和原生 Windows 进程树取消验收均已通过；Windows 原生 ACL 仍作为发布环境验收项。
 
 本轮完成后可以声明：Face wire contract 已冻结；Hand/Face 凭据和身份边界可用；四步挑战握手与注册后业务 payload 强制加密可用；Face 后台 task 协议已冻结。
 

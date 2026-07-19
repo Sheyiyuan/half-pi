@@ -2,7 +2,9 @@
 
 ## 状态
 
-本文面向 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1-P4 Face runtime、JSONL Headless 客户端和共用协议的人类终端 Face 已实现并通过 race 测试。当前可使用 conversation/Hand/run/task 查询、快照、订阅、Chat/cancel、异步审批和 run/task cancel；真实 Mind/Hand/Headless/TUI 进程级 E2E 已完成。
+本文面向 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1-P4 Face runtime、JSONL Headless 客户端和共用协议的人类终端 REPL 已实现并通过 race 测试。当前可使用 conversation/Hand/run/task 查询、快照、订阅、Chat/cancel、异步审批和 run/task cancel；真实 Mind/Hand/Headless/终端 REPL 进程级 E2E 已完成。真正的全屏交互式 TUI 尚未实现。
+
+v2 握手已在 WinBoat Windows 11 Pro AMD64 原生运行 gateway/Mind race 测试及 Mind/Hand/Face 进程链路，验证 encrypted `registered`、双 peer 在线、撤销断连和输出秘密扫描；Windows `386/amd64/arm64` 交叉编译同时通过。更新后的官方 `scripts/test-windows.ps1 -PrebuiltDir` 使用当前源码执行，11 组测试全部 PASS 且 stderr 为空。
 
 架构和完整生命周期见 [`face-protocol.md`](face-protocol.md)。本文只说明客户端应依赖的正式协议契约。
 
@@ -17,7 +19,9 @@
 
 ## 鉴权假设
 
-Face 注册使用 version 1 WebSocket 四步挑战握手，必须同时使用与 Hand 分离的 Face token 和 application key。服务端按 Face 凭据表认证，注册成功后业务 payload 全部强制加密；连接同时绑定认证时的稳定 principal ID。Gateway 按连接 label 解析不含秘密的 Face identity，并在每个 command 上重新校验 principal ID 与 scope，因此删除后同名重建凭据不会让旧连接继承新权限。
+Face 注册使用 version 2 WebSocket 四步挑战握手，必须同时持有与 Hand 分离的 Face token 和 application key。第一步 `register` 只公开 protocol version、peer type 和 label，不发送 token、application key 或设备信息；服务端据此从 Face 凭据表读取双秘密。客户端与服务端以 `token || application_key`、单次 challenge 和完整 transcript 通过 HKDF-SHA-256 派生 proof、C→S、S→C 三把方向/用途隔离的 AES-128-GCM 密钥。Face proof 只加密 challenge 回显，禁止携带 HandInfo；`registered` 和后续全部业务 payload 强制加密。旧 v1 和携带秘密字段的注册帧 fail closed，不提供明文兼容旁路。
+
+连接成功后绑定认证时的稳定 principal ID。Gateway 按连接 label 解析不含秘密的 Face identity，并在每个 command 上重新校验 principal ID 与 scope，因此删除后同名重建凭据不会让旧连接继承新权限。
 
 当前单用户 Alpha 采用以下访问模型：
 
@@ -192,11 +196,11 @@ stdin command 使用尚未 stamp 的 `protocol.Envelope`；客户端负责生成
 
 调用方可以显式提供 `msg_id`，但不得提供 `session_id`、`from`、`to` 或 `seq`。客户端会在发送前调用正式 payload 验证器，并拒绝服务端消息类型、未知字段和超限输入。stdout 返回的 envelope 已解密但保留 Mind 签发的连接字段，可直接按 `type` 和 typed payload 解码。
 
-默认配置位于 `~/.half-pi/face/config.toml`，权限在 Unix 上收紧为目录 `0700`、文件 `0600`。凭据也可通过 `FACE_TOKEN`、`HALF_PI_FACE_APPLICATION_KEY`、`HALF_PI_FACE_ID` 和 `HALF_PI_FACE_SERVER` 注入；非 loopback 地址仍必须使用 `wss://`。
+默认配置位于 `~/.half-pi/face/config.toml`，权限在 Unix 上收紧为目录 `0700`、文件 `0600`。凭据也可通过 `FACE_TOKEN`、`HALF_PI_FACE_APPLICATION_KEY`、`HALF_PI_FACE_ID` 和 `HALF_PI_FACE_SERVER` 注入。跨设备地址可以使用 `ws://` 或 `wss://`；Half-Pi 始终执行应用层双向鉴权、方向隔离密钥派生和 Envelope 加密，TLS/WSS 由反向代理等部署层按需提供。
 
 ## 安全要求
 
-- 非 loopback 连接必须使用 TLS/WSS 或完成应用层加密接入。
+- 所有 Face 连接必须完成应用层四步鉴权和加密；禁止增加远程明文兼容旁路。
 - token 不得进入日志、事件或 `face.result.data`。
 - AI Face 默认使用最小 scope；执行审批测试时使用独立身份和隔离 Hand。
 - 不发送原始工具参数、模型内部请求或未脱敏的工具结果到普通事件流。
@@ -204,7 +208,7 @@ stdin command 使用尚未 stamp 的 `protocol.Envelope`；客户端负责生成
 
 ## 验收状态与后续清单
 
-异步审批 Broker、run/task cancel 和 Face identity 审计已作为 P3 runtime 基线完成。2026-07-19 的真实进程 E2E 使用动态端口、临时 HOME/SQLite/工作目录和 Scripted LLM，验证同 principal replay/conflict、跨 Face 恢复、run-bound 审批、远程取消、后台 task 对账、TUI 快照与 SQLite 脱敏审计。
+异步审批 Broker、run/task cancel 和 Face identity 审计已作为 P3 runtime 基线完成。2026-07-19 的真实进程 E2E 使用动态端口、临时 HOME/SQLite/工作目录和 Scripted LLM，验证同 principal replay/conflict、跨 Face 恢复、run-bound 审批、远程取消、后台 task 对账、终端 REPL 快照与 SQLite 脱敏审计。
 
 后续协议增强项是 conversation 写命令等非 Chat command 的通用幂等 registry。
 
