@@ -183,7 +183,7 @@ func TestSanitized(t *testing.T) {
 	}
 
 	cp := cfg.Sanitized()
-	if cp.LLM.Providers[0].APIKey != "sk-a****" {
+	if cp.LLM.Providers[0].APIKey != "<redacted>" {
 		t.Errorf("脱敏结果 = %q", cp.LLM.Providers[0].APIKey)
 	}
 	if cfg.LLM.Providers[0].APIKey != "sk-abcdef123456" {

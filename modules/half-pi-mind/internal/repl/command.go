@@ -1,15 +1,28 @@
 package repl
 
 import (
+	"encoding/json"
+	"flag"
 	"fmt"
-	"strconv"
+	"io"
+	"os"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/management"
 )
+
+const faceAddUsage = "/face add <label> (--profile <observer|operator> | --scopes <comma-separated-scopes>) [--format <text|json|toml>]"
+
+type faceAddOptions struct {
+	label  string
+	scopes []protocol.FaceScope
+	format string
+}
 
 func (r *Repl) handleCommand(input string) bool {
 	switch {
@@ -56,8 +69,8 @@ func (r *Repl) handleCommand(input string) bool {
 		r.handleFaceList()
 		return true
 
-	case strings.HasPrefix(input, "/face add "):
-		r.handleFaceAdd(strings.TrimSpace(strings.TrimPrefix(input, "/face add ")))
+	case input == "/face add" || strings.HasPrefix(input, "/face add "):
+		r.handleFaceAdd(strings.TrimSpace(strings.TrimPrefix(input, "/face add")), os.Stdout)
 		return true
 
 	case strings.HasPrefix(input, "/face remove "):
@@ -194,8 +207,12 @@ func shortID(id string) string {
 	return s
 }
 
+func newRequestID() string {
+	return uuid.NewString()
+}
+
 func (r *Repl) handleHandList() {
-	credentials, err := r.store.ListHandCredentials()
+	credentials, err := r.management.ListHands()
 	if err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("list hand tokens: %v", err))
 		return
@@ -215,7 +232,7 @@ func (r *Repl) handleHandAdd(label string) {
 		r.emit(events.LevelWarn, events.TypeSystem, "usage: /hand add <label>")
 		return
 	}
-	credential, err := r.store.AddHandCredential(label)
+	credential, err := r.management.AddHand(management.RequestMeta{RequestID: newRequestID(), Source: management.SourceREPL, Actor: fmt.Sprintf("repl:%d", os.Getpid())}, label)
 	if err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("add hand token: %v", err))
 		return
@@ -234,43 +251,87 @@ func (r *Repl) handleHandAdd(label string) {
 }
 
 func (r *Repl) handleFaceList() {
-	credentials, err := r.store.ListFaceTokens()
+	credentials, err := r.management.ListFaces()
 	if err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("list Face credentials: %v", err))
 		return
 	}
 	if len(credentials) == 0 {
-		fmt.Println("No Face credentials. Use /face add <label> --scopes <scopes> to create one.")
+		fmt.Printf("No Face credentials. Use %s to create one.\n", faceAddUsage)
 		return
 	}
 	fmt.Println("id  face           scopes  created")
 	for _, credential := range credentials {
-		fmt.Printf("%2d  %-14s %s  %s\n", credential.ID, credential.Label, joinScopes(credential.Scopes), credential.CreatedAt.Format("01-02 15:04"))
+		fmt.Printf("%2d  %-14s %s  %s\n", credential.ID, credential.Label, strings.Join(credential.Scopes, ","), credential.CreatedAt.Format("01-02 15:04"))
 	}
 }
 
-func (r *Repl) handleFaceAdd(args string) {
-	fields := strings.Fields(args)
-	if len(fields) != 3 || fields[1] != "--scopes" {
-		r.emit(events.LevelWarn, events.TypeSystem, "usage: /face add <label> --scopes <comma-separated-scopes>")
+func (r *Repl) handleFaceAdd(args string, output io.Writer) {
+	options, err := parseFaceAddOptions(args)
+	if err != nil {
+		r.emit(events.LevelWarn, events.TypeSystem, fmt.Sprintf("usage: %s (%v)", faceAddUsage, err))
 		return
 	}
-	rawScopes := strings.Split(fields[2], ",")
-	scopes := make([]protocol.FaceScope, len(rawScopes))
-	for i, scope := range rawScopes {
-		scopes[i] = protocol.FaceScope(scope)
-	}
-	credential, err := r.store.AddFaceToken(fields[0], scopes)
+	credential, err := r.management.AddFace(management.RequestMeta{RequestID: newRequestID(), Source: management.SourceREPL, Actor: fmt.Sprintf("repl:%d", os.Getpid())}, options.label, options.scopes)
 	if err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("add Face credential: %v", err))
 		return
 	}
-	fmt.Println("Face created:")
-	fmt.Printf("  id:              %d\n", credential.ID)
-	fmt.Printf("  label:           %s\n", credential.Label)
-	fmt.Printf("  token:           %s\n", credential.Token)
-	fmt.Printf("  application_key: %s\n", credential.ApplicationKey)
-	fmt.Printf("  scopes:          %s\n", joinScopes(credential.Scopes))
+	if err := writeFaceCredential(output, credential, options.format); err != nil {
+		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("write Face credential: %v", err))
+	}
+}
+
+func parseFaceAddOptions(args string) (faceAddOptions, error) {
+	fields := strings.Fields(args)
+	if len(fields) == 0 {
+		return faceAddOptions{}, fmt.Errorf("missing label")
+	}
+	options := faceAddOptions{label: fields[0]}
+	fs := flag.NewFlagSet("face add", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	scopesText := fs.String("scopes", "", "comma-separated Face scopes")
+	profile := fs.String("profile", "", "observer|operator")
+	fs.StringVar(&options.format, "format", "text", "text|json|toml")
+	if err := fs.Parse(fields[1:]); err != nil {
+		return faceAddOptions{}, err
+	}
+	if fs.NArg() != 0 {
+		return faceAddOptions{}, fmt.Errorf("unexpected positional arguments: %s", strings.Join(fs.Args(), " "))
+	}
+	switch options.format {
+	case "text", "json", "toml":
+	default:
+		return faceAddOptions{}, fmt.Errorf("unsupported format %q", options.format)
+	}
+	if (*scopesText == "") == (*profile == "") {
+		return faceAddOptions{}, fmt.Errorf("exactly one of --profile or --scopes is required")
+	}
+	var err error
+	if *profile != "" {
+		options.scopes, err = management.ExpandProfile(*profile)
+	} else {
+		options.scopes, err = management.ParseScopes(*scopesText)
+	}
+	if err != nil {
+		return faceAddOptions{}, err
+	}
+	return options, nil
+}
+
+func writeFaceCredential(w io.Writer, credential management.SecretCredentialDTO, format string) error {
+	switch format {
+	case "json":
+		return json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": credential})
+	case "toml":
+		_, err := fmt.Fprintf(w, "[server]\ntoken = %q\napplication_key = %q\n\n[face]\nid = %q\nmode = \"tui\"\n", credential.Token, credential.ApplicationKey, credential.Label)
+		return err
+	case "text":
+		_, err := fmt.Fprintf(w, "Face created:\n  id:              %d\n  label:           %s\n  token:           %s\n  application_key: %s\n  scopes:          %s\n", credential.ID, credential.Label, credential.Token, credential.ApplicationKey, strings.Join(credential.Scopes, ","))
+		return err
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
 }
 
 func (r *Repl) handleCredentialRemove(peerType hub.PeerType, args string) {
@@ -279,73 +340,20 @@ func (r *Repl) handleCredentialRemove(peerType hub.PeerType, args string) {
 		r.emit(events.LevelWarn, events.TypeSystem, fmt.Sprintf("usage: /%s remove --id <id> | --label <label>", peerType))
 		return
 	}
-	label, err := r.removeCredential(peerType, fields[0], fields[1])
+	result, err := r.removeCredential(peerType, fields[0], fields[1])
 	if err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("remove %s credential: %v", peerType, err))
 		return
 	}
-	if r.hub != nil {
-		r.hub.RemoveByType(peerType, label)
-	}
-	fmt.Printf("%s credential %q removed\n", peerType, label)
+	fmt.Printf("%s credential %q removed\n", peerType, result.Label)
 }
 
-func (r *Repl) removeCredential(peerType hub.PeerType, selector, value string) (string, error) {
+func (r *Repl) removeCredential(peerType hub.PeerType, selector, value string) (management.RemoveResult, error) {
+	meta := management.RequestMeta{RequestID: newRequestID(), Source: management.SourceREPL, Actor: fmt.Sprintf("repl:%d", os.Getpid())}
 	if peerType == hub.PeerHand {
-		credentials, err := r.store.ListHandCredentials()
-		if err != nil {
-			return "", err
-		}
-		label, id, err := selectCredential(credentials, selector, value)
-		if err != nil {
-			return "", err
-		}
-		if selector == "--id" {
-			err = r.store.RemoveHandCredential(id)
-		} else {
-			err = r.store.RemoveHandCredentialByLabel(label)
-		}
-		return label, err
+		return r.management.RemoveHand(meta, strings.TrimPrefix(selector, "--"), value)
 	}
-	credentials, err := r.store.ListFaceTokens()
-	if err != nil {
-		return "", err
-	}
-	plain := make([]store.Credential, len(credentials))
-	for i := range credentials {
-		plain[i] = credentials[i].Credential
-	}
-	label, id, err := selectCredential(plain, selector, value)
-	if err != nil {
-		return "", err
-	}
-	if selector == "--id" {
-		err = r.store.RemoveFaceToken(id)
-	} else {
-		err = r.store.RemoveFaceTokenByLabel(label)
-	}
-	return label, err
-}
-
-func selectCredential(credentials []store.Credential, selector, value string) (string, int64, error) {
-	if selector == "--label" {
-		for _, credential := range credentials {
-			if credential.Label == value {
-				return credential.Label, credential.ID, nil
-			}
-		}
-		return "", 0, fmt.Errorf("credential not found")
-	}
-	id, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || id <= 0 {
-		return "", 0, fmt.Errorf("invalid credential ID")
-	}
-	for _, credential := range credentials {
-		if credential.ID == id {
-			return credential.Label, id, nil
-		}
-	}
-	return "", 0, fmt.Errorf("credential not found")
+	return r.management.RemoveFace(meta, strings.TrimPrefix(selector, "--"), value)
 }
 
 func joinScopes(scopes []protocol.FaceScope) string {
@@ -357,11 +365,11 @@ func joinScopes(scopes []protocol.FaceScope) string {
 }
 
 func (r *Repl) handlePeers() {
-	if r.hub == nil {
-		fmt.Println("hub not running")
+	peers, err := r.management.Peers()
+	if err != nil {
+		fmt.Printf("peers: %v\n", err)
 		return
 	}
-	peers := r.hub.Peers()
 	if len(peers) == 0 {
 		fmt.Println("No connected peers.")
 		return

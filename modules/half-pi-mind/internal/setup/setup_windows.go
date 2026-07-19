@@ -13,5 +13,9 @@ func halfPiHome() (string, error) {
 	if appData == "" {
 		return "", fmt.Errorf("APPDATA environment variable is not set")
 	}
-	return filepath.Join(appData, "half-pi"), nil
+	home, err := filepath.Abs(filepath.Join(appData, "half-pi"))
+	if err != nil {
+		return "", fmt.Errorf("resolve half-pi home: %w", err)
+	}
+	return filepath.Clean(home), nil
 }

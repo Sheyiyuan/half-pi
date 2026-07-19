@@ -13,46 +13,46 @@ import (
 // ── 配置结构 ──
 
 type Config struct {
-	Server  ServerConfig  `toml:"server"`
-	LLM     LLMConfig     `toml:"llm"`
-	Storage StorageConfig `toml:"storage"`
+	Server  ServerConfig  `toml:"server" json:"server"`
+	LLM     LLMConfig     `toml:"llm" json:"llm"`
+	Storage StorageConfig `toml:"storage" json:"storage"`
 }
 
 type ServerConfig struct {
-	Host    string `toml:"host"`
-	Port    int    `toml:"port"`
-	Enabled bool   `toml:"enabled"`
+	Host    string `toml:"host" json:"host"`
+	Port    int    `toml:"port" json:"port"`
+	Enabled bool   `toml:"enabled" json:"enabled"`
 }
 
 type LLMConfig struct {
-	DefaultProvider string        `toml:"default_provider"`
-	DefaultModel    string        `toml:"default_model"`
-	Providers       []ProviderCfg `toml:"providers"`
-	Models          []ModelCfg    `toml:"models"`
+	DefaultProvider string        `toml:"default_provider" json:"default_provider"`
+	DefaultModel    string        `toml:"default_model" json:"default_model"`
+	Providers       []ProviderCfg `toml:"providers" json:"providers"`
+	Models          []ModelCfg    `toml:"models" json:"models"`
 }
 
 type ProviderCfg struct {
-	Name       string `toml:"name"`
-	Adapter    string `toml:"adapter"`
-	BaseURL    string `toml:"base_url"`
-	APIKey     string `toml:"api_key"`
-	ScriptPath string `toml:"script_path"`
+	Name       string `toml:"name" json:"name"`
+	Adapter    string `toml:"adapter" json:"adapter"`
+	BaseURL    string `toml:"base_url" json:"base_url"`
+	APIKey     string `toml:"api_key" json:"api_key"`
+	ScriptPath string `toml:"script_path" json:"script_path"`
 }
 
 type ModelCfg struct {
-	ID           string   `toml:"id"`
-	Name         string   `toml:"name,omitempty"`
-	Provider     string   `toml:"provider"`
-	Capabilities []string `toml:"capabilities"`
-	MaxTokens    int      `toml:"max_tokens"`
-	Temperature  float64  `toml:"temperature"`
-	InputPrice   float64  `toml:"input_price_per_1k"`
-	OutputPrice  float64  `toml:"output_price_per_1k"`
+	ID           string   `toml:"id" json:"id"`
+	Name         string   `toml:"name,omitempty" json:"name,omitempty"`
+	Provider     string   `toml:"provider" json:"provider"`
+	Capabilities []string `toml:"capabilities" json:"capabilities"`
+	MaxTokens    int      `toml:"max_tokens" json:"max_tokens"`
+	Temperature  float64  `toml:"temperature" json:"temperature"`
+	InputPrice   float64  `toml:"input_price_per_1k" json:"input_price_per_1k"`
+	OutputPrice  float64  `toml:"output_price_per_1k" json:"output_price_per_1k"`
 }
 
 type StorageConfig struct {
-	DataDir string `toml:"data_dir"`
-	LogDir  string `toml:"log_dir"`
+	DataDir string `toml:"data_dir" json:"data_dir"`
+	LogDir  string `toml:"log_dir" json:"log_dir"`
 }
 
 // ── 解析后的运行时配置 ──
@@ -173,12 +173,7 @@ func (c *Config) Sanitized() *Config {
 	providers := make([]ProviderCfg, len(cp.LLM.Providers))
 	for i, p := range cp.LLM.Providers {
 		if p.APIKey != "" {
-			s := p.APIKey
-			if len(s) > 4 {
-				p.APIKey = s[:4] + "****"
-			} else {
-				p.APIKey = "****"
-			}
+			p.APIKey = "<redacted>"
 		}
 		providers[i] = p
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/conversation"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/management"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 
@@ -25,6 +26,7 @@ type Repl struct {
 	hub         *hub.Hub
 	actor       *conversation.Actor
 	bridge      *local.RemoteBridge
+	management  *management.Service
 	switchActor func(string) (*conversation.Actor, error)
 	approver    *approver
 	approvals   *approval.Broker
@@ -32,7 +34,7 @@ type Repl struct {
 }
 
 // Run 启动交互式 REPL 循环。
-func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Actor, error), approvals *approval.Broker, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub) {
+func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Actor, error), approvals *approval.Broker, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub, managementService *management.Service) {
 	r := &Repl{
 		core:        actor.Core(),
 		bus:         bus,
@@ -41,6 +43,7 @@ func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Acto
 		hub:         wsHub,
 		actor:       actor,
 		bridge:      actor.Bridge(),
+		management:  managementService,
 		switchActor: switchActor,
 		approvals:   approvals,
 		input:       newInputReader(bufio.NewScanner(os.Stdin)),
@@ -66,7 +69,7 @@ func (r *Repl) printBanner(serverEnabled bool) {
 	fmt.Println("/hand list            list Hand credentials")
 	fmt.Println("/hand add <label>     create hand token")
 	fmt.Println("/hand remove --id <id> | --label <label>")
-	fmt.Println("/face add <label> --scopes <comma-separated-scopes>")
+	fmt.Println(faceAddUsage)
 	fmt.Println("/face list            list Face credentials")
 	fmt.Println("/face remove --id <id> | --label <label>")
 	fmt.Println("/hand select <id>     select session default Hand")

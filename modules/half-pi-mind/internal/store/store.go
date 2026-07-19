@@ -212,6 +212,22 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_approval_audits_conversation ON approval_audits(conversation_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_approval_audits_status ON approval_audits(status, expires_at)`,
+		`CREATE TABLE IF NOT EXISTS management_audits (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			request_id TEXT NOT NULL,
+			source TEXT NOT NULL,
+			actor TEXT NOT NULL DEFAULT '',
+			operation TEXT NOT NULL,
+			target_type TEXT NOT NULL,
+			target_id TEXT NOT NULL DEFAULT '',
+			target_label TEXT NOT NULL DEFAULT '',
+			status TEXT NOT NULL,
+			code TEXT NOT NULL DEFAULT '',
+			message TEXT NOT NULL DEFAULT '',
+			created_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_management_audits_request ON management_audits(request_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_management_audits_created ON management_audits(created_at)`,
 	}
 	for _, stmt := range statements {
 		if _, err := s.db.Exec(stmt); err != nil {

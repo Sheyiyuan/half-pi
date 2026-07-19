@@ -28,7 +28,8 @@ func (s *Store) CreateSession(groupID, id string) error {
 // CreateSessionNamed 创建一个带可选名称的 conversation。
 func (s *Store) CreateSessionNamed(groupID, id, name string) error {
 	_, err := s.db.Exec(
-		`INSERT INTO sessions (id, group_id, name) VALUES (?, ?, ?)`, id, groupID, name,
+		`INSERT INTO sessions (id, group_id, name, created_at, updated_at)
+		 VALUES (?, ?, ?, datetime('now'), datetime('now'))`, id, groupID, name,
 	)
 	if err != nil {
 		return fmt.Errorf("create session: %w", err)

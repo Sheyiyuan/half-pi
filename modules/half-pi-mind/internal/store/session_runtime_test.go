@@ -52,6 +52,16 @@ func TestSessionRuntimeMetadataMigratesLegacySchema(t *testing.T) {
 	if session.UpdatedAt.IsZero() || !session.UpdatedAt.Equal(session.CreatedAt) {
 		t.Fatalf("migrated timestamps = created %v, updated %v", session.CreatedAt, session.UpdatedAt)
 	}
+	if err := store.CreateSession("group-1", "conversation-2"); err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.GetSession("conversation-2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.CreatedAt.IsZero() || created.UpdatedAt.IsZero() || !created.UpdatedAt.Equal(created.CreatedAt) {
+		t.Fatalf("new session timestamps after migration = created %v, updated %v", created.CreatedAt, created.UpdatedAt)
+	}
 }
 
 func TestSessionRuntimeMetadataRejectsInvalidMode(t *testing.T) {

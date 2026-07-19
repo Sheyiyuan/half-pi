@@ -10,35 +10,49 @@ import (
 
 // Env 持有 half-pi 运行环境的路径。
 type Env struct {
-	HomeDir   string
-	Config    string
-	DataDir   string
-	LogDir    string
-	DBPath    string
-	EventLog  string
-	SkillsDir string
+	HomeDir         string
+	Config          string
+	DataDir         string
+	LogDir          string
+	RunDir          string
+	DBPath          string
+	EventLog        string
+	SkillsDir       string
+	LockPath        string
+	ControlEndpoint string
+}
+
+// Resolve 返回 half-pi 运行环境路径，不创建文件或目录。
+func Resolve() (*Env, error) {
+	halfPiDir, err := halfPiHome()
+	if err != nil {
+		return nil, err
+	}
+	env := &Env{
+		HomeDir:   halfPiDir,
+		DataDir:   filepath.Join(halfPiDir, "data"),
+		LogDir:    filepath.Join(halfPiDir, "logs"),
+		RunDir:    filepath.Join(halfPiDir, "run"),
+		SkillsDir: filepath.Join(halfPiDir, "skills"),
+		Config:    filepath.Join(halfPiDir, "config.toml"),
+		DBPath:    filepath.Join(halfPiDir, "db", "half-pi.db"),
+		EventLog:  filepath.Join(halfPiDir, "logs", "events.jsonl"),
+		LockPath:  filepath.Join(halfPiDir, "run", "mind.lock"),
+	}
+	env.ControlEndpoint = controlEndpoint(env)
+	return env, nil
 }
 
 // Init 初始化环境：创建目录结构、写入默认配置。
 // 已存在时不会覆盖，只确保目录存在。
 func Init() (*Env, error) {
-	halfPiDir, err := halfPiHome()
+	env, err := Resolve()
 	if err != nil {
 		return nil, err
 	}
 
-	env := &Env{
-		HomeDir:   halfPiDir,
-		DataDir:   filepath.Join(halfPiDir, "data"),
-		LogDir:    filepath.Join(halfPiDir, "logs"),
-		SkillsDir: filepath.Join(halfPiDir, "skills"),
-		Config:    filepath.Join(halfPiDir, "config.toml"),
-		DBPath:    filepath.Join(halfPiDir, "db", "half-pi.db"),
-		EventLog:  filepath.Join(halfPiDir, "logs", "events.jsonl"),
-	}
-
 	// 运行目录可能包含配置、数据库和凭据，统一限制为当前用户访问。
-	for _, dir := range []string{env.HomeDir, env.DataDir, env.LogDir, env.SkillsDir, filepath.Dir(env.DBPath)} {
+	for _, dir := range []string{env.HomeDir, env.DataDir, env.LogDir, env.RunDir, env.SkillsDir, filepath.Dir(env.DBPath)} {
 		if err := secureDirectory(dir); err != nil {
 			return nil, fmt.Errorf("secure directory %s: %w", dir, err)
 		}
