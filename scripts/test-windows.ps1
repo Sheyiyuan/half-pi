@@ -21,7 +21,7 @@ try {
         return
     }
 
-    if (-not $IsWindows) {
+    if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
         throw "Native Windows mode must run on Windows. Use -CompileOnly elsewhere."
     }
     go test -race -count=1 ./tools
