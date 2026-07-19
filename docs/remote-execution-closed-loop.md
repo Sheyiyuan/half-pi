@@ -2,7 +2,7 @@
 
 ## 状态
 
-核心与增强能力已落地。本文承接 [`archived/remote-execution.md`](archived/remote-execution.md) 的 MVP 设计。审批证明、accepted/rejected、显式取消、唯一终态、服务级 Authority、SQLite 审计、会话隔离、有界 `rpc_progress` 和持久化后台任务已经实现；Windows 进程树取消仍待原生环境验收。工程状态和后续安排分别以 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md) 和 [`next-development-plan.md`](next-development-plan.md) 为准。
+核心与增强能力已落地。本文承接 [`archived/remote-execution.md`](archived/remote-execution.md) 的 MVP 设计。审批证明、accepted/rejected、显式取消、唯一终态、服务级 Authority、SQLite 审计、会话隔离、有界 `rpc_progress`、持久化后台任务和 Windows 进程树取消均已实现并完成验收。实施与收尾记录见 [`archived/remote-execution-implementation-plan.md`](archived/remote-execution-implementation-plan.md) 和 [`archived/next-development-plan.md`](archived/next-development-plan.md)。
 
 ## 背景
 
@@ -322,7 +322,7 @@ handleCancel(runID)
   5. 返回 rpc_cancel_result
 ```
 
-Unix `exec_command` 在 context 取消时终止进程组。Windows 实现使用 kill-on-close Job Object：命令先挂起启动，加入独立 job 后恢复，取消时终止 job 内完整进程树；正常完成时解除 kill-on-close，避免误杀有意启动的后台进程。该实现已通过多架构交叉编译，仍需原生 Windows 集成测试后才能宣称跨平台完整取消。
+Unix `exec_command` 在 context 取消时终止进程组。Windows 实现使用 kill-on-close Job Object：命令先挂起启动，加入独立 job 后恢复，取消时终止 job 内完整进程树；正常完成时解除 kill-on-close，避免误杀有意启动的后台进程。该实现已通过多架构交叉编译，并在原生 Windows 11 环境通过 `scripts/test-windows.ps1`、完整 tools race 测试和 `TestRunCommandCancelsWindowsProcessTree` 验收。
 
 ## 后台任务生命周期
 

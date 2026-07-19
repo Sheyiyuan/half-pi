@@ -129,7 +129,7 @@ make test         # 运行全部 5 个模块的测试
 
 ## 开发进度
 
-### Phase 1 — Mind 核心 + Gateway 通信（完成度 ~97%）
+### Phase 1 — Mind 核心 + Gateway 通信（完成度 ~98%）
 
 #### ✅ 已完成
 
@@ -226,6 +226,7 @@ make test         # 运行全部 5 个模块的测试
 - CLI flag 覆盖 + 环境变量支持，默认连接 `ws://127.0.0.1:15707/ws`
 - 工作目录切换、工具 allow/deny、输出上限、主动监控事件上报
 - 断线自动重连：指数退避（1s → 2s → 4s → … → `hand.retry.max_backoff`，默认 60s）
+- Windows `exec_cmd` / `exec_ps` 使用 Job Object 取消完整进程树；多架构交叉编译和原生 Windows 11 race 验收已通过
 
 ##### Mind Hub 服务器
 - HTTP/WS 服务器（`hub.Hub.ServeWS`）
@@ -234,7 +235,7 @@ make test         # 运行全部 5 个模块的测试
   - **REPL 模式（`--repl`）**：WS Hub + 交互式 REPL，事件输出到终端
 - `--version` 打印版本号
 - Hand/Face 独立凭据表，token 与 application key 分离
-- REPL 命令：`/hand add/list/remove`、`/peers`
+- REPL 命令：`/hand add/list/remove`、`/face add/list/remove`、`/peers`
 - 连接/断开事件通过 EventBus 发布到日志/终端
 - `server.enabled` 配置开关
 
@@ -287,20 +288,14 @@ make test         # 运行全部 5 个模块的测试
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
 - `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（客户端、Mind runtime 与进程 E2E 可用）
 - `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
-- `docs/remote-execution-implementation-plan.md` — 远程执行闭环实施与验收记录
-- `docs/next-development-plan.md` — Face Alpha 验收记录与远程执行收尾计划
-- `docs/archived/remote-execution.md` — 已归档的 Mind → Hand MVP 设计
-- `docs/archived/mind-hand-mvp-followups.md` — 已归档的 MVP 设计债清单
-- `docs/archived/architecture.md` — 完整系统架构设计（三层模型、术语定义、通信协议、安全审计）
-- `docs/archived/mind-service-mode.md` — Mind 服务模式设计（默认后台，`--repl` 选交互）
-- `docs/archived/provider-adapter.md` — LLM 适配器模式设计（内部格式、各厂商适配器细节）
-- `docs/archived/skill-design.md` — 技能系统设计
-- `docs/archived/skill-session-memory-design.md` — 技能/会话/记忆组织设计
+- `docs/mind-management-cli.md` — Mind 本地管理 CLI、在线 IPC、离线 Store 与状态锁设计（待实现）
+- `docs/archived/README.md` — 已完成或被替代设计的归档索引
 
 #### ⏳ 待完成
+- [ ] Mind 本地管理 CLI：在线 IPC、离线状态锁、Face/Hand 凭据与配置管理
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
-- [ ] Mind → Hand 外部验收 — 原生 Windows 运行 `scripts/test-windows.ps1`
+- [ ] Windows 原生凭据/config/database ACL 发布环境验收
 
 ---
 
@@ -418,9 +413,15 @@ make test         # 运行全部 5 个模块的测试
 - E2E 构建真实 `-race` 二进制，以动态端口和 Scripted LLM 验证跨 Face 恢复、审批、取消、后台任务与 SQLite 一致性
 - `use_hand` 自行消费 `confirm`，确保远程审批绑定已生成的 run ID 和 RPC 参数摘要
 
+### 2026-07-19：Windows 原生取消验收
+- Windows 11 原生环境运行 `scripts/test-windows.ps1` 通过，完整 `half-pi-core/tools` race 测试和进程树取消专项测试均成功
+- Windows Job Object 取消语义完成外部平台验收；Windows ACL 仍是独立发布环境检查项
+
 ---
 
 ## 下一步
 
-1. 原生 Windows 运行取消验收脚本（外部环境）
-2. `/compact` 上下文压缩与 Skill 工作区集成
+1. 实现 Mind 本地管理 CLI、在线 IPC 与带状态锁的离线凭据管理
+2. 实现 `/compact` 上下文压缩
+3. 完成 Skill → 工作区集成
+4. 在发布环境验收 Windows 原生 ACL

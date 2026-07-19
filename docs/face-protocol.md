@@ -1,6 +1,6 @@
 # Face 接入与统一协议设计
 
-> Face 核心 wire contract、身份凭据、四步挑战握手、应用层加密和后台 task 协议的最终冻结实施规格见 [`face-core-closure-plan.md`](face-core-closure-plan.md)。本文保留完整 Face Alpha runtime 设计。
+> Face 核心 wire contract、身份凭据、四步挑战握手、应用层加密和后台 task 协议的最终冻结实施规格见 [`archived/face-core-closure-plan.md`](archived/face-core-closure-plan.md)。本文保留完整 Face Alpha runtime 设计。
 
 ## 状态
 

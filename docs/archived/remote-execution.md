@@ -2,7 +2,7 @@
 
 ## 状态
 
-已归档。本文记录 2026-07-16 的远程执行 MVP 设计，其中 `SkipChecks`、裸 `pendingCalls` 和无显式取消等描述已被后续闭环实现取代；当前行为以 [`../remote-execution-closed-loop.md`](../remote-execution-closed-loop.md) 和 [`../remote-execution-implementation-plan.md`](../remote-execution-implementation-plan.md) 为准。
+已归档。本文记录 2026-07-16 的远程执行 MVP 设计，其中 `SkipChecks`、裸 `pendingCalls` 和无显式取消等描述已被后续闭环实现取代；当前行为以 [`../remote-execution-closed-loop.md`](../remote-execution-closed-loop.md) 为准，实施记录见 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md)。
 
 MVP 实现保持 `Core.Chat()` 主循环不变，通过四个本地工具让 LLM 感知、选择并调用远程 Hand：
 
@@ -664,7 +664,7 @@ flowchart TD
 - RPC 携带 `timeout_ms`，Mind 等待超时和 Hand 执行上下文使用同一参数
 - Hand `Serve(ctx)` 在 context 取消时主动关闭 websocket，打断阻塞读取
 - Unix `exec_command` 使用进程组执行，context 取消时杀整个进程组
-- 当时仍不支持显式 `rpc_cancel` 消息和后台任务生命周期管理；显式取消现已落地，后续演进见 [`../remote-execution-implementation-plan.md`](../remote-execution-implementation-plan.md) 和 [`../next-development-plan.md`](../next-development-plan.md)。
+- 当时仍不支持显式 `rpc_cancel` 消息和后台任务生命周期管理；这些能力现已落地，后续演进见 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md) 和 [`next-development-plan.md`](next-development-plan.md)。
 
 ### 2026-07-16：Hand 配置化
 - 工具权限通过 `allow_tools` / `deny_tools` TOML 配置，用户编辑文件 + 重启 Hand 生效

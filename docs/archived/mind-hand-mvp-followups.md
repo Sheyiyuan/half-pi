@@ -1,6 +1,6 @@
 # Mind + Hand MVP 后续重点 TODO（已归档）
 
-> 文档状态：已归档的历史设计债清单。审批闭环、显式取消、审计持久化和会话并发边界已由 [`../remote-execution-implementation-plan.md`](../remote-execution-implementation-plan.md) 的 Phase 0 至 Phase 4 完成；进度流、后台任务和 Windows 原生验收已转入 [`../next-development-plan.md`](../next-development-plan.md)。
+> 文档状态：已归档的历史设计债清单。审批闭环、显式取消、审计持久化和会话并发边界已由 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md) 的 Phase 0 至 Phase 4 完成；进度流、后台任务和 Windows 原生验收记录见 [`next-development-plan.md`](next-development-plan.md)。
 
 ## 背景
 
@@ -40,7 +40,7 @@ TODO：
 - `use_hand` 在本地 context 取消或等待超时时向 Hand 发送 cancel。
 - Hand 为正在执行的 RPC 维护任务表：`rpcID -> cancel func / started_at / tool / status`。
 - 定义取消结果：已取消、已完成、未知 RPC、取消失败。
-- Windows 已使用 Job Object 实现进程树取消并通过多架构交叉编译；待原生 Windows 集成测试验收。
+- Windows 已使用 Job Object 实现进程树取消，并通过多架构交叉编译和原生 Windows 集成测试验收。
 
 验收标准：
 - Mind 主动取消后，Hand 能尽快停止对应 RPC。

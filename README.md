@@ -129,6 +129,7 @@ modules/
 - 工具发现、远程调用执行、截止时间、显式取消、有界进度流和输出截断。
 - 工具允许/拒绝策略，以及执行前的本地安全检查。
 - Unix 命令取消时终止整个进程组，避免遗留子进程。
+- Windows 命令通过 Job Object 终止完整进程树，并已通过原生 Windows 11 race 验收。
 - 后台任务使用独立 SQLite 和受限日志文件，跨 WebSocket 重连继续运行；Hand 重启后未完成任务标记为 lost，不自动重跑。
 
 ### Mind → Hand
@@ -248,6 +249,16 @@ REPL 命令：
 /peers                  查看所有在线节点
 ```
 
+## 文档导航
+
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/face-protocol.md`](docs/face-protocol.md) | Face 正式协议、鉴权、快照、审批与事件投影 |
+| [`docs/ai-face-protocol.md`](docs/ai-face-protocol.md) | AI/Headless Face 客户端接入指南 |
+| [`docs/remote-execution-closed-loop.md`](docs/remote-execution-closed-loop.md) | Mind → Hand 远程执行闭环架构 |
+| [`docs/mind-management-cli.md`](docs/mind-management-cli.md) | 待实现的 Mind 本地管理 CLI、在线 IPC 与离线管理设计 |
+| [`docs/archived/README.md`](docs/archived/README.md) | 已完成和被替代设计的归档索引 |
+
 ## 安全边界
 
 Half Pi 会让 AI 接触真实设备，因此安全能力不是附属功能。
@@ -280,10 +291,10 @@ Half Pi 会让 AI 接触真实设备，因此安全能力不是附属功能。
 - [x] 实现 Mind 侧 Face Gateway、Chat、异步审批、run/task cancel 和多 Face 状态投影。
 - [x] 实现 Headless JSONL 与人类终端 Face，共用同一正式协议连接 Mind。
 - [x] 用 Headless Face 真实进程 E2E 验证跨 Face 恢复、同步、审批、取消和后台任务闭环。
+- [x] 在原生 Windows 验证 Job Object 进程树取消和 tools race 测试。
+- [ ] 实现 Mind 本地管理 CLI、在线 IPC 和锁保护的离线凭据管理。
 - [ ] 默认启用安全传输，并完成密钥管理方案。
 - [ ] 实现工作区级长期记忆和可控的跨组访问。
-
-Face 接入方案见 [`docs/face-protocol.md`](docs/face-protocol.md)，AI/自动化客户端约定见 [`docs/ai-face-protocol.md`](docs/ai-face-protocol.md)，当前执行顺序见 [`docs/next-development-plan.md`](docs/next-development-plan.md)。
 
 ## 项目定位
 

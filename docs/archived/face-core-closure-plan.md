@@ -2,7 +2,7 @@
 
 ## 状态与边界
 
-本文是 2026-07-18 经逐项确认并完成落地的实施规格。Linux/race 测试、全仓构建和 Windows 交叉编译已通过；Windows 原生 ACL 与进程取消仍作为发布环境验收项。除发现安全冲突外，不再修改 wire contract。
+已归档。本文是 2026-07-18 经逐项确认并完成落地的实施规格。Linux/race 测试、全仓构建、Windows 交叉编译和原生 Windows 进程树取消验收均已通过；Windows 原生 ACL 仍作为发布环境验收项。除发现安全冲突外，不再修改 wire contract。
 
 本轮完成后可以声明：Face wire contract 已冻结；Hand/Face 凭据和身份边界可用；四步挑战握手与注册后业务 payload 强制加密可用；Face 后台 task 协议已冻结。
 
@@ -428,9 +428,9 @@ snapshot/list 首先返回 Mind SQLite 的 best-known 状态，并保留 `stale`
 - 最大合法 1 MiB 最坏控制字节 RPCResult 经加密后可在 10 MiB wire limit 内往返，超限 frame 被拒绝。
 - authentication/protocol 永久错误停止重试，duplicate/network 错误按 capped backoff 重试。
 - snapshot/list 的 best-known/stale 语义和按观察触发的异步 task 对账事件。
-- Unix 权限、symlink、SQLite WAL/SHM 和 Hand config 权限；Windows 等价 ACL 行为。
+- Unix 权限、symlink、SQLite WAL/SHM 和 Hand config 权限；Windows 等价 ACL 行为仍由发布环境验收。
 - Face/Hand 分流，Face 断连不影响 Hand run，按类型删除只断开目标 peer。
 - 现有远程执行、progress、durable task 在加密 transport 下无回归。
-- `make test`、`make build`、四模块 vet、Windows tools 四架构测试交叉编译、Windows amd64 Mind/Hand 构建通过。
+- `make test`、`make build`、四模块 vet、Windows tools 四架构测试交叉编译、Windows amd64 Mind/Hand 构建和原生 Windows 进程树取消测试通过。
 
-只有以上五阶段全部完成，且文档明确 Face Gateway、Conversation Actor、Chat runtime 和客户端仍未实现，才可将本轮标记完成。之后原则上不再修改 wire contract，除非发现安全漏洞或不可实现冲突。
+以上五阶段已完成。本规格当时明确排除的 Face Gateway、Conversation Actor、Chat runtime 和客户端随后已由 Face Alpha P1-P4 完成；此后原则上不再修改 wire contract，除非发现安全漏洞或不可实现冲突。

@@ -2,16 +2,16 @@
 
 ## 文档状态
 
-已完成主体实施。Phase 0 至 Phase 4（T0-T9）、T11 有界进度流和持久化后台任务已完成并通过 race 测试及 review。T10 已使用 Windows Job Object 完成实现并通过 Windows 386/amd64/arm/arm64 交叉编译，仍需在原生 Windows 环境运行进程树取消测试后验收。
+已归档并完成。Phase 0 至 Phase 4（T0-T9）、T11 有界进度流和持久化后台任务已通过 race 测试及 review。T10 使用 Windows Job Object 完成实现，并通过 Windows 386/amd64/arm/arm64 交叉编译和原生 Windows 进程树取消验收。
 
 Phase 4 review 已确认：每个已加载 session 保留独立 actor；远端专属或跨平台工具必须经 Mind 一次性确认，并继续由 Hand 执行本地最终守门；审计写入失败时 run 在内存中 fail-closed，取消请求仍会发往 Hand，避免无主执行。
 
 本文承接以下文档：
 
-- `docs/archived/remote-execution.md`：已归档的 MVP 设计。
-- `docs/remote-execution-closed-loop.md`：闭环架构设计。
-- `docs/archived/mind-hand-mvp-followups.md`：已归档的 MVP 后续设计债清单。
-- `docs/next-development-plan.md`：当前开发顺序和剩余验收项。
+- `remote-execution.md`：已归档的 MVP 设计。
+- `../remote-execution-closed-loop.md`：当前闭环架构设计。
+- `mind-hand-mvp-followups.md`：已归档的 MVP 后续设计债清单。
+- `next-development-plan.md`：已归档的 Face Alpha 与远程执行收尾记录。
 
 本文只描述工程落地范围、子任务、阶段依赖和验收标准。协议及架构语义发生变化时，应先更新闭环设计，再同步本计划。
 
@@ -452,14 +452,13 @@ T4。
 
 - 代码、vet 和 Windows 386/amd64/arm/arm64 测试二进制交叉编译已通过。
 - 仓库提供 `scripts/test-windows.ps1 -CompileOnly` 复现多架构交叉编译；在原生 Windows 上不带参数运行同一脚本执行 race 测试。
-- 原生 Windows 集成测试尚未执行，因此 T10 尚未完成最终验收，也不宣称跨平台完整取消。
+- 2026-07-19 已在 Windows 11 原生环境运行验收脚本；完整 tools race 测试和 `TestRunCommandCancelsWindowsProcessTree` 均通过。
 
 **验收标准**
 
 - cancel 后父进程及其子进程均退出。
 - 不影响其他无关进程。
-- Windows 测试通过后才能宣称跨平台完整取消。
-- 未完成前，用户可见能力说明必须明确 Windows 限制。
+- 原生 Windows 测试已通过，可以宣称 Unix/Windows 进程树取消闭环。
 
 ### T11：可选进度流
 
@@ -690,7 +689,7 @@ Windows 进程树测试未通过时，不宣称跨平台完整取消；progress 
 
 - 只在 REPL 或内部环境试用。
 - 审计可暂以内存事件验证，不对外承诺持久追溯。
-- Windows 不承诺进程树完整取消。
+- Phase 2 当时未要求 Windows 进程树完整取消；该能力随后由 T10 完成并通过原生验收。
 
 ### Beta
 
@@ -706,7 +705,7 @@ Windows 进程树测试未通过时，不宣称跨平台完整取消；progress 
 
 需要完成 Phase 0 至 Phase 4。
 
-Face 自身的正式协议、独立鉴权、快照恢复、有序事件投影和 Headless Agent E2E 还必须满足 [`face-protocol.md`](face-protocol.md) 的 Alpha 完成定义；本计划只覆盖远程执行侧的接入门槛。
+Face 自身的正式协议、独立鉴权、快照恢复、有序事件投影和 Headless Agent E2E 还必须满足 [`../face-protocol.md`](../face-protocol.md) 的 Alpha 完成定义；本计划只覆盖远程执行侧的接入门槛。
 
 必须满足：
 
@@ -714,7 +713,7 @@ Face 自身的正式协议、独立鉴权、快照恢复、有序事件投影和
 - 手动和 LLM 两种入口共用同一审批、registry 和审计链路。
 - 发布说明明确平台能力和未实现的增强项。
 
-Phase 5 的 Windows 原生验收是宣称“跨平台取消闭环”的前提。进度流和持久化后台任务已经落地，但 Face runtime 仍是独立后续阶段。
+Phase 5 的 Windows 原生验收已通过，跨平台取消闭环成立。进度流、持久化后台任务和后续 Face runtime 也均已落地。
 
 ## 9. 持久化后台任务验收记录
 
