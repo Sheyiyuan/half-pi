@@ -17,7 +17,7 @@ const (
 	DefaultServerURL = "ws://127.0.0.1:15707/ws"
 	// ModeHeadless 是机器可消费的 JSONL 客户端模式。
 	ModeHeadless = "headless"
-	// ModeTUI 是当前行式终端 REPL 的兼容模式名，保留给后续真正的 TUI 实现。
+	// ModeTUI 是全屏人类终端工作台模式。
 	ModeTUI = "tui"
 )
 

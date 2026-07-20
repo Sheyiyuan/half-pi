@@ -2,6 +2,7 @@ package wss_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -16,6 +17,15 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
 )
+
+func TestConnectAndRegisterContextHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := wss.NewClient("ws://127.0.0.1:1/ws").ConnectAndRegisterContext(ctx, faceCredentials("cancelled"))
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("ConnectAndRegisterContext error = %v", err)
+	}
+}
 
 const (
 	testToken = "00112233445566778899aabbccddeeff"

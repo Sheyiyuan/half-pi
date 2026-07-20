@@ -2,6 +2,7 @@
 package wss
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -50,7 +51,15 @@ func NewClient(serverURL string) *Client { return &Client{url: serverURL} }
 
 // Connect 与服务器建立 WebSocket 连接。
 func (c *Client) Connect() (*websocket.Conn, error) {
-	conn, _, err := websocket.DefaultDialer.Dial(c.url, nil)
+	return c.ConnectContext(context.Background())
+}
+
+// ConnectContext 与服务器建立可由 context 取消的 WebSocket 连接。
+func (c *Client) ConnectContext(ctx context.Context) (*websocket.Conn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, c.url, nil)
 	return conn, err
 }
 
@@ -66,15 +75,37 @@ type SessionConn struct {
 
 // ConnectAndRegister 连接服务端并完成 version 2 四步挑战握手。
 func (c *Client) ConnectAndRegister(credentials Credentials) (*SessionConn, error) {
+	return c.ConnectAndRegisterContext(context.Background(), credentials)
+}
+
+// ConnectAndRegisterContext 连接服务端并完成可由 context 取消的 version 2 四步挑战握手。
+func (c *Client) ConnectAndRegisterContext(ctx context.Context, credentials Credentials) (*SessionConn, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if err := validateCredentials(credentials); err != nil {
 		return nil, err
 	}
-	conn, err := c.Connect()
+	conn, err := c.ConnectContext(ctx)
 	if err != nil {
 		return nil, err
 	}
+	cancelWatchDone := make(chan struct{})
+	stopCancelWatch := context.AfterFunc(ctx, func() {
+		_ = conn.Close()
+		close(cancelWatchDone)
+	})
+	stopWatching := func() {
+		if !stopCancelWatch() {
+			<-cancelWatchDone
+		}
+	}
 	fail := func(err error) (*SessionConn, error) {
 		_ = conn.Close()
+		stopWatching()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, ctxErr
+		}
 		return nil, err
 	}
 	conn.SetReadLimit(MaxFrameSize)
@@ -171,6 +202,11 @@ func (c *Client) ConnectAndRegister(credentials Credentials) (*SessionConn, erro
 	registeredEnv.Payload = registeredPayload
 	_ = conn.SetReadDeadline(time.Time{})
 	_ = conn.SetWriteDeadline(time.Time{})
+	stopWatching()
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		_ = conn.Close()
+		return nil, ctxErr
+	}
 	return &SessionConn{
 		Conn: conn, Session: session, inCipher: inCipher, outCipher: outCipher,
 		registered: registeredEnv,

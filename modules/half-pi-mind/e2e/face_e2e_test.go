@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
+
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
@@ -192,7 +194,7 @@ func TestFaceAlphaRealProcessE2E(t *testing.T) {
 	awaitAccepted(t, faceA, taskRequestID, protocol.FaceOperationChat)
 	taskApproval := awaitApproval(t, faceC, taskRequestID, "exec_command")
 	resolveApproval(t, faceC, "resolve-background", taskApproval.ApprovalID)
-	runningTask := awaitTaskStatus(t, faceB, taskApproval.RunID, protocol.TaskRunning)
+	runningTask := awaitTaskStatus(t, faceB, conversationID, taskApproval.RunID, protocol.TaskRunning)
 	if runningTask.TaskID != taskApproval.RunID {
 		t.Fatalf("background task ID = %q, run ID = %q", runningTask.TaskID, taskApproval.RunID)
 	}
@@ -235,12 +237,20 @@ func TestFaceAlphaRealProcessE2E(t *testing.T) {
 	}
 
 	writeFaceConfig(t, fixture.faceConfig["face-tui"], ready.WSURL, fixture.credentials["face-tui"], "tui")
-	tui := startTestProcess(t, "face-tui", binaries.face, fixture.workDir, fixture.home, "--config", fixture.faceConfig["face-tui"])
-	if _, err := fmt.Fprintf(tui.stdin, "/open %s\n", conversationID); err != nil {
+	tui := startTTYTestProcess(t, "face-tui", binaries.face, fixture.workDir, fixture.home, "--config", fixture.faceConfig["face-tui"])
+	awaitOutputContains(t, tui, "ready")
+	if _, err := fmt.Fprintf(tui.stdin, "/open %s\r", conversationID); err != nil {
 		t.Fatalf("write TUI command: %v", err)
 	}
-	awaitOutputContains(t, tui, simpleAnswer, markerAnswer, cancelAnswer, taskAnswer)
-	if err := tui.closeInputAndWait(); err != nil {
+	awaitOutputContains(t, tui, taskAnswer)
+	if _, err := fmt.Fprint(tui.stdin, strings.Repeat("\x1b[5~", 32)); err != nil {
+		t.Fatalf("scroll TUI history: %v", err)
+	}
+	awaitOutputContains(t, tui, simpleAnswer)
+	if _, err := fmt.Fprint(tui.stdin, "\x03\r"); err != nil {
+		t.Fatalf("request TUI exit: %v", err)
+	}
+	if err := tui.wait(processWaitTimeout); err != nil {
 		t.Fatalf("stop TUI: %v\n%s", err, tui.diagnostics())
 	}
 
@@ -703,13 +713,37 @@ func cancelRun(t *testing.T, face *faceClient, requestID, conversationID, runID 
 	requireSuccessfulResult(t, result, protocol.FaceOperationRunCancel)
 }
 
-func awaitTaskStatus(t *testing.T, face *faceClient, taskID string, status protocol.TaskStatus) protocol.TaskSummary {
+func awaitTaskStatus(
+	t *testing.T,
+	face *faceClient,
+	conversationID, taskID string,
+	status protocol.TaskStatus,
+) protocol.TaskSummary {
 	t.Helper()
-	event := awaitEvent(t, face, protocol.FaceEventTaskChanged, func(event protocol.FaceEvent) bool {
-		data, err := protocol.StrictDecode[protocol.TaskSummary](event.Data)
-		return err == nil && data.TaskID == taskID && data.Status == status
-	})
-	return decodeEventData[protocol.TaskSummary](t, event)
+	deadline := time.Now().Add(faceMessageTimeout)
+	for attempt := 1; time.Now().Before(deadline); attempt++ {
+		requestID := fmt.Sprintf("wait-task-%s-%d", status, attempt)
+		face.send(t, protocol.TypeFaceTaskGet, protocol.FaceTaskGet{
+			RequestID: requestID, ConversationID: conversationID, TaskID: taskID,
+		})
+		awaitAccepted(t, face, requestID, protocol.FaceOperationTaskGet)
+		result := awaitResult(t, face, requestID)
+		if result.Status == protocol.FaceResultFailed && result.ErrorCode == protocol.FaceErrorTaskStale {
+			time.Sleep(25 * time.Millisecond)
+			continue
+		}
+		requireSuccessfulResult(t, result, protocol.FaceOperationTaskGet)
+		data, err := protocol.StrictDecode[protocol.TaskGetResult](result.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if data.Task.Status == status {
+			return data.Task
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("task %s did not reach status %s", taskID, status)
+	return protocol.TaskSummary{}
 }
 
 func reconcileTask(t *testing.T, face *faceClient, conversationID, taskID string) protocol.TaskSummary {
@@ -760,8 +794,9 @@ func awaitOutputContains(t *testing.T, process *testProcess, values ...string) {
 		}
 		line, err := process.stdout.next(remaining)
 		if err != nil {
-			t.Fatalf("read %s output: %v\n%s", process.name, err, process.diagnostics())
+			t.Fatalf("read %s output with %v still pending: %v\n%s", process.name, pending, err, process.diagnostics())
 		}
+		line = ansi.Strip(line)
 		for value := range pending {
 			if strings.Contains(line, value) {
 				delete(pending, value)

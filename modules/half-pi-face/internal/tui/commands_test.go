@@ -1,102 +1,66 @@
 package tui
 
 import (
-	"encoding/json"
 	"testing"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 )
 
-func TestCommandsProduceValidatedOfficialPayloads(t *testing.T) {
-	term, conn, _ := newTestTerminal(t)
-	term.active = "conversation-1"
-	commands := []struct {
-		input string
-		typ   string
-	}{
-		{"/list", protocol.TypeFaceConversationList},
-		{"/create Project Alpha", protocol.TypeFaceConversationCreate},
-		{"/open conversation-2", protocol.TypeFaceConversationSnapshot},
-		{"/snapshot", protocol.TypeFaceConversationSnapshot},
-		{"/rename Renamed", protocol.TypeFaceConversationRename},
-		{"hello Mind", protocol.TypeFaceChat},
-		{"/cancel", protocol.TypeFaceChatCancel},
-		{"/approve approval-1 allow_once reviewed", protocol.TypeFaceApprovalResolve},
-		{"/hands", protocol.TypeFaceHandList},
-		{"/hand hand-1", protocol.TypeFaceHandGet},
-		{"/run run-1", protocol.TypeFaceRunGet},
-		{"/run-cancel run-1", protocol.TypeFaceRunCancel},
-		{"/tasks", protocol.TypeFaceTaskList},
-		{"/task task-1", protocol.TypeFaceTaskGet},
-		{"/task-log task-1 12 128", protocol.TypeFaceTaskLog},
-		{"/task-cancel task-1", protocol.TypeFaceTaskCancel},
+func TestCommandRegistryParsesQuotesAndDrivesCompletion(t *testing.T) {
+	model, _ := readyModel(t)
+	parsed, err := model.commands.Parse(`/rename "Project Alpha"`)
+	if err != nil || parsed.Spec.Name != "rename" || len(parsed.Args) != 1 || parsed.Args[0] != "Project Alpha" {
+		t.Fatalf("parsed = %+v, %v", parsed, err)
 	}
-	requestIDs := make(map[string]struct{}, len(commands))
-	for _, test := range commands {
-		if err := term.handleInput(test.input); err != nil {
-			t.Fatalf("handleInput(%q): %v", test.input, err)
-		}
-		env := nextSent(t, conn)
-		if env.Type != test.typ || env.SessionID != "" || env.Seq != 0 {
-			t.Fatalf("handleInput(%q) sent %+v", test.input, env)
-		}
-		if err := protocol.ValidateFacePayload(env.Type, env.Payload); err != nil {
-			t.Fatalf("handleInput(%q) payload: %v", test.input, err)
-		}
-		var request struct {
-			RequestID string `json:"request_id"`
-		}
-		if err := json.Unmarshal(env.Payload, &request); err != nil {
-			t.Fatal(err)
-		}
-		if request.RequestID == "" {
-			t.Fatalf("handleInput(%q) omitted request_id", test.input)
-		}
-		if _, exists := requestIDs[request.RequestID]; exists {
-			t.Fatalf("duplicate request_id %q", request.RequestID)
-		}
-		requestIDs[request.RequestID] = struct{}{}
+	completion := model.commands.Complete(model, "/tas")
+	if len(completion) == 0 || completion[0].Insert != "/task " {
+		t.Fatalf("completion = %#v", completion)
+	}
+	if _, err := model.commands.Parse(`/rename "unterminated`); err == nil {
+		t.Fatal("unterminated command was accepted")
 	}
 }
 
-func TestCancelUsesLastChatFromActiveConversation(t *testing.T) {
-	term, conn, _ := newTestTerminal(t)
-	term.active = "conversation-a"
-	if err := term.chat("hello"); err != nil {
-		t.Fatal(err)
-	}
-	chat := nextSent(t, conn)
-	request, err := protocol.DecodePayload[protocol.FaceChat](&chat)
-	if err != nil {
-		t.Fatal(err)
-	}
-	term.active = "conversation-b"
-	if err := term.cancelChat(""); err == nil {
-		t.Fatal("cancel used a Chat from a different conversation")
-	}
-	term.active = "conversation-a"
-	if err := term.cancelChat(""); err != nil {
-		t.Fatal(err)
-	}
-	cancel := nextSent(t, conn)
-	payload, err := protocol.DecodePayload[protocol.FaceChatCancel](&cancel)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if payload.TargetRequestID != request.RequestID || payload.ConversationID != "conversation-a" {
-		t.Fatalf("cancel payload = %+v", payload)
+func TestBracketedPasteNeverExecutesCommand(t *testing.T) {
+	model, connection := readyModel(t)
+	message := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/quit"), Paste: true}
+	updated, _ := model.Update(message)
+	if updated.(*Model).composer.Value() != "/quit" || len(connection.sent) != 0 {
+		t.Fatalf("paste executed: value=%q sent=%d", updated.(*Model).composer.Value(), len(connection.sent))
 	}
 }
 
-func TestCommandsRejectInvalidArguments(t *testing.T) {
-	term, _, _ := newTestTerminal(t)
-	term.active = "conversation-1"
-	for _, input := range []string{
-		"/create", "/open", "/rename", "/approve approval-1 invalid", "/task-log", "/task-log task-1 -1",
-		"/task-log task-1 0 0", "/unknown",
-	} {
-		if err := term.handleInput(input); err == nil {
-			t.Fatalf("handleInput(%q) succeeded", input)
-		}
+func TestEnterExecutesCompleteCommandWithCompletionVisible(t *testing.T) {
+	model, connection := readyModel(t)
+	conversationID := "conversation-1"
+	conversation := newConversation(conversationID)
+	conversation.Summary = validSummary(conversationID)
+	model.conversations[conversationID] = conversation
+	model.conversationOrder = []string{conversationID}
+	model.idSource = sequenceIDSource(t, "subscribe-open", "snapshot-open")
+	model.composer.SetValue("/open " + conversationID)
+	model.completion = []Completion{{Label: conversationID, Insert: conversationID}}
+
+	_, cmd := model.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	runCommand(t, cmd)
+	if len(connection.sent) != 1 || connection.sent[0].Type != protocol.TypeFaceSubscribe {
+		t.Fatalf("Enter sent %#v", connection.sent)
+	}
+	if model.composer.Value() != "" {
+		t.Fatalf("composer was not cleared: %q", model.composer.Value())
+	}
+
+	cmd = model.applyAccepted(protocol.FaceAccepted{
+		RequestID: "subscribe-open", Operation: protocol.FaceOperationSubscribe,
+	})
+	runCommand(t, cmd)
+	if len(connection.sent) != 2 || connection.sent[1].Type != protocol.TypeFaceConversationSnapshot {
+		t.Fatalf("subscribe acceptance sent %#v", connection.sent)
+	}
+	snapshot, err := protocol.DecodePayload[protocol.FaceConversationSnapshot](&connection.sent[1])
+	if err != nil || snapshot.ConversationID != conversationID {
+		t.Fatalf("snapshot request = %+v, %v", snapshot, err)
 	}
 }

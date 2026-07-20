@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/creack/pty"
 )
 
 const processWaitTimeout = 15 * time.Second
@@ -139,6 +141,31 @@ func startTestProcess(t *testing.T, name, binary, dir, home string, args ...stri
 	}()
 	go func() {
 		err := cmd.Wait()
+		_ = process.stdin.Close()
+		process.waitMu.Lock()
+		process.waitErr = err
+		process.waitMu.Unlock()
+		close(process.done)
+	}()
+	t.Cleanup(func() { process.forceStop() })
+	return process
+}
+
+func startTTYTestProcess(t *testing.T, name, binary, dir, home string, args ...string) *testProcess {
+	t.Helper()
+	cmd := exec.Command(binary, args...)
+	cmd.Dir = dir
+	cmd.Env = append(environmentWithHome(home), "TERM=xterm-256color", "COLORTERM=truecolor")
+	terminal, err := pty.StartWithSize(cmd, &pty.Winsize{Rows: 30, Cols: 120})
+	if err != nil {
+		t.Fatalf("start %s in PTY: %v", name, err)
+	}
+	process := &testProcess{
+		name: name, cmd: cmd, stdin: terminal, stdout: newLineOutput(terminal), done: make(chan struct{}),
+	}
+	go func() {
+		err := cmd.Wait()
+		_ = terminal.Close()
 		process.waitMu.Lock()
 		process.waitErr = err
 		process.waitMu.Unlock()

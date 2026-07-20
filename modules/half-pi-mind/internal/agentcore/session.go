@@ -3,6 +3,7 @@ package agentcore
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
@@ -22,7 +23,7 @@ func (c *Core) saveSessionLocked() error {
 	if store == nil || sessionID == "" {
 		return nil
 	}
-	// 自动命名：取第一条用户消息，截断到 60 字符
+	// 自动命名只处理仍未命名的会话，显式名称始终优先。
 	sess, err := store.GetSession(sessionID)
 	if err != nil {
 		return fmt.Errorf("save session: get session: %w", err)
@@ -30,11 +31,7 @@ func (c *Core) saveSessionLocked() error {
 	if sess != nil && sess.Name == "" && len(c.history) > 0 {
 		for _, m := range c.history {
 			if m.Role == llm.RoleUser {
-				name := []rune(m.Content)
-				if len(name) > 60 {
-					name = name[:60]
-				}
-				if err := store.UpdateSessionName(sessionID, string(name)); err != nil {
+				if err := store.UpdateSessionName(sessionID, automaticConversationName(m.Content)); err != nil {
 					return fmt.Errorf("save session: auto-name: %w", err)
 				}
 				break
@@ -55,6 +52,14 @@ func (c *Core) saveSessionLocked() error {
 	c.persistedSeq += len(newMessages)
 	c.notifySessionChanged()
 	return nil
+}
+
+func automaticConversationName(content string) string {
+	name := []rune(strings.Join(strings.Fields(content), " "))
+	if len(name) <= 48 {
+		return string(name)
+	}
+	return string(name[:48]) + "..."
 }
 
 // llmMsgToStore 将 LLM 消息转为持久化格式，ToolCalls 序列化为 JSON。

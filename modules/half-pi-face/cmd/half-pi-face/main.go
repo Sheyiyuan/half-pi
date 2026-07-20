@@ -9,6 +9,8 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/mattn/go-isatty"
+
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-face/internal/client"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-face/internal/config"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-face/internal/headless"
@@ -71,16 +73,27 @@ func run(ctx context.Context, args []string, input io.Reader, output, logs io.Wr
 	if err := cfg.Validate(); err != nil {
 		return err
 	}
-	conn, err := client.Dial(cfg)
-	if err != nil {
-		return err
-	}
+	dialer := client.NewDialer(cfg)
 	switch cfg.Face.Mode {
 	case config.ModeHeadless:
+		conn, err := dialer.Connect(ctx)
+		if err != nil {
+			return err
+		}
 		return headless.Run(ctx, conn, input, output)
 	case config.ModeTUI:
-		return tui.Run(ctx, conn, input, output)
+		inputFile, inputOK := input.(*os.File)
+		outputFile, outputOK := output.(*os.File)
+		if !inputOK || !outputOK || !isTerminal(inputFile) || !isTerminal(outputFile) {
+			return fmt.Errorf("TUI mode requires interactive terminal stdin/stdout; use --mode headless for pipes")
+		}
+		return tui.Run(ctx, dialer, inputFile, outputFile)
 	default:
 		return fmt.Errorf("unsupported Face mode %q", cfg.Face.Mode)
 	}
+}
+
+func isTerminal(file *os.File) bool {
+	fd := file.Fd()
+	return isatty.IsTerminal(fd) || isatty.IsCygwinTerminal(fd)
 }

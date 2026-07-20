@@ -399,7 +399,7 @@ func TestSaveSessionWithStore(t *testing.T) {
 	}
 	// SetStore 会从 DB 加载历史（空），这里手动填入测试数据
 	core.history = []llm.Message{
-		{Role: llm.RoleUser, Content: "hello world this is a very long first message that should be truncated"},
+		{Role: llm.RoleUser, Content: "  hello\n world\tthis is a very long first message that should be truncated after forty eight runes  "},
 	}
 
 	// SaveSession should auto-name from first user message
@@ -411,12 +411,45 @@ func TestSaveSessionWithStore(t *testing.T) {
 	if sess.Name == "" {
 		t.Error("session should have been auto-named")
 	}
-	if len([]rune(sess.Name)) > 60 {
-		t.Errorf("auto-name too long: %d chars", len([]rune(sess.Name)))
+	if len([]rune(sess.Name)) != 51 || !strings.HasSuffix(sess.Name, "...") || strings.ContainsAny(sess.Name, "\n\t") {
+		t.Errorf("auto-name = %q", sess.Name)
 	}
 
 	msgs, _ := db.GetMessages(sessionID)
 	if len(msgs) != 1 {
 		t.Errorf("expected 1 message, got %d", len(msgs))
+	}
+}
+
+func TestAutomaticConversationName(t *testing.T) {
+	if got := automaticConversationName("  first\n\tmessage  "); got != "first message" {
+		t.Fatalf("short name = %q", got)
+	}
+	if got := automaticConversationName(strings.Repeat("界", 49)); got != strings.Repeat("界", 48)+"..." {
+		t.Fatalf("long name = %q", got)
+	}
+}
+
+func TestSaveSessionDoesNotReplaceExplicitName(t *testing.T) {
+	db, err := store.New(t.TempDir() + "/named.db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	group, _ := db.UpsertGroup(t.TempDir())
+	if err := db.CreateSessionNamed(group.ID, "named-session", "Explicit name"); err != nil {
+		t.Fatal(err)
+	}
+	core, _ := New(&stubLLM{}, &stubExecutor{})
+	if err := core.SetStore(db, "named-session"); err != nil {
+		t.Fatal(err)
+	}
+	core.history = []llm.Message{{Role: llm.RoleUser, Content: "replacement"}}
+	if err := core.SaveSession(); err != nil {
+		t.Fatal(err)
+	}
+	session, _ := db.GetSession("named-session")
+	if session.Name != "Explicit name" {
+		t.Fatalf("explicit name = %q", session.Name)
 	}
 }
