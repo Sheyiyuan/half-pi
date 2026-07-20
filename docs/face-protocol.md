@@ -1,6 +1,6 @@
 # Face 接入与统一协议设计
 
-> Face 核心 wire contract、身份凭据、四步挑战握手、应用层加密和后台 task 协议以本文及 [`ai-face-protocol.md`](ai-face-protocol.md) 为准。归档的 [`face-core-closure-plan.md`](archived/face-core-closure-plan.md) 记录历史 v1 实施，已被 v2 安全升级替代。
+> Face 核心 wire contract、身份凭据、四步挑战握手、应用层加密和后台 task 协议以本文及 [`ai-face-protocol.md`](ai-face-protocol.md) 为准。全屏人类终端的产品与实施规格见 [`face-tui-design.md`](face-tui-design.md)。归档的 [`face-core-closure-plan.md`](archived/face-core-closure-plan.md) 记录历史 v1 实施，已被 v2 安全升级替代。
 
 ## 状态
 
