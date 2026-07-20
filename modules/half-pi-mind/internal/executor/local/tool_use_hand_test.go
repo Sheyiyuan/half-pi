@@ -38,6 +38,7 @@ func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 		t.Fatalf("ConnectAndRegister: %v", err)
 	}
 	defer session.Conn.Close()
+	waitForTestHand(t, h, "remote-hand")
 
 	runs := remoteexec.NewRegistry()
 	authority := remoteexec.NewAuthority(h, runs, nil)

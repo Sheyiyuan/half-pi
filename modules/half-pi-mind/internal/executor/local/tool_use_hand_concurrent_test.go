@@ -38,6 +38,7 @@ func TestUseHandConcurrentRunsDoNotCrossDeliver(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Conn.Close()
+	waitForTestHand(t, h, "parallel-hand")
 	runs := remoteexec.NewRegistry()
 	authority := remoteexec.NewAuthority(h, runs, nil)
 	h.OnMessage(func(peer *hub.Peer, msg protocol.Envelope) {

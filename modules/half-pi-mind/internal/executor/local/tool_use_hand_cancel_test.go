@@ -57,6 +57,7 @@ func TestRequestRemoteCancelSendsRPCAndMarksTimeout(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Conn.Close()
+	waitForTestHand(t, h, "cancel-hand")
 
 	runs := remoteexec.NewRegistry()
 	authority := remoteexec.NewAuthority(h, runs, nil)
@@ -131,6 +132,7 @@ func TestRequestRemoteCancelStillSendsWhenAuditFails(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Conn.Close()
+	waitForTestHand(t, h, "audit-hand")
 
 	auditor := &toggledAuditor{fail: make(chan bool, 1)}
 	runs := remoteexec.NewRegistry(auditor)
@@ -202,6 +204,7 @@ func TestUseHandTimeoutSendsCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer session.Conn.Close()
+	waitForTestHand(t, h, "timeout-hand")
 
 	runs := remoteexec.NewRegistry()
 	authority := remoteexec.NewAuthority(h, runs, nil)
@@ -237,6 +240,7 @@ func TestUseHandTimeoutSendsCancel(t *testing.T) {
 		resultCh <- tool.Execute(WithRemoteBridge(ctx, bridge), args)
 	}()
 
+	_ = session.Conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	rpcEnv, err := session.Read()
 	if err != nil {
 		t.Fatal(err)
@@ -254,6 +258,7 @@ func TestUseHandTimeoutSendsCancel(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	_ = session.Conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	cancelEnv, err := session.Read()
 	if err != nil {
 		t.Fatal(err)
