@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"sort"
 	"sync"
 	"time"
@@ -35,6 +36,14 @@ type requestRecord struct {
 	ctx             context.Context
 	cancel          context.CancelFunc
 	origin          *connection
+	streamResponses []streamResponseState
+	streamSeq       int64
+	streamBytes     int
+}
+
+type streamResponseState struct {
+	content  string
+	complete bool
 }
 
 type requestAdmission struct {
@@ -85,6 +94,12 @@ func (r *chatRegistry) beginChat(identity protocol.FaceIdentity, request protoco
 	if existing := r.requests[key]; existing != nil {
 		return replayRequest(existing, protocol.FaceOperationChat, digest)
 	}
+	for _, existing := range r.requests {
+		if existing.operation == protocol.FaceOperationChat && existing.conversationID == request.ConversationID &&
+			existing.key.requestID == request.RequestID {
+			return requestAdmission{code: protocol.FaceErrorRequestConflict, message: "request ID is already used in this conversation"}
+		}
+	}
 	if r.active[request.ConversationID] != nil {
 		return requestAdmission{code: protocol.FaceErrorBusy, message: "conversation already has an active Chat", retryable: true}
 	}
@@ -101,6 +116,105 @@ func (r *chatRegistry) beginChat(identity protocol.FaceIdentity, request protoco
 	r.requests[key] = record
 	r.active[request.ConversationID] = record
 	return requestAdmission{record: record}
+}
+
+func (r *chatRegistry) appendStreamText(record *requestRecord, responseIndex int, delta string) (int64, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.requests[record.key] != record || record.terminal {
+		return 0, fmt.Errorf("Chat stream is no longer active")
+	}
+	if responseIndex <= 0 || responseIndex > len(record.streamResponses)+1 {
+		return 0, fmt.Errorf("response index is not contiguous")
+	}
+	if responseIndex == len(record.streamResponses)+1 {
+		record.streamResponses = append(record.streamResponses, streamResponseState{})
+	}
+	response := &record.streamResponses[responseIndex-1]
+	if response.complete {
+		return 0, fmt.Errorf("response is already complete")
+	}
+	if delta == "" || record.streamBytes > protocol.MaxFaceChatStreamBytes-len(delta) {
+		return 0, fmt.Errorf("Chat stream exceeds %d bytes", protocol.MaxFaceChatStreamBytes)
+	}
+	offset := int64(len(response.content))
+	response.content += delta
+	record.streamBytes += len(delta)
+	return offset, nil
+}
+
+func (r *chatRegistry) emitStreamChunk(record *requestRecord, responseIndex int, offset int64, delta string) (protocol.FaceChatDelta, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.requests[record.key] != record || record.terminal {
+		return protocol.FaceChatDelta{}, fmt.Errorf("Chat stream is no longer active")
+	}
+	if responseIndex <= 0 || responseIndex > len(record.streamResponses) || delta == "" || len(delta) > protocol.MaxFaceChatDeltaBytes {
+		return protocol.FaceChatDelta{}, fmt.Errorf("invalid Chat stream chunk")
+	}
+	response := record.streamResponses[responseIndex-1]
+	if offset < 0 || offset > int64(len(response.content))-int64(len(delta)) || response.content[offset:offset+int64(len(delta))] != delta {
+		return protocol.FaceChatDelta{}, fmt.Errorf("Chat stream chunk does not match retained content")
+	}
+	if record.streamSeq >= protocol.MaxFaceChatStreamChunks {
+		return protocol.FaceChatDelta{}, fmt.Errorf("Chat stream exceeds %d chunks", protocol.MaxFaceChatStreamChunks)
+	}
+	record.streamSeq++
+	return protocol.FaceChatDelta{
+		ConversationID: record.conversationID, RequestID: record.key.requestID,
+		ResponseIndex: responseIndex, Seq: record.streamSeq, Offset: offset, Delta: delta,
+	}, nil
+}
+
+func (r *chatRegistry) completeStreamResponse(record *requestRecord, responseIndex int, content string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.requests[record.key] != record || record.terminal || responseIndex <= 0 || responseIndex > len(record.streamResponses)+1 {
+		return fmt.Errorf("Chat stream response is unavailable")
+	}
+	if responseIndex == len(record.streamResponses)+1 {
+		record.streamResponses = append(record.streamResponses, streamResponseState{})
+	}
+	response := &record.streamResponses[responseIndex-1]
+	if response.complete || response.content != content {
+		return fmt.Errorf("Chat stream response content mismatch")
+	}
+	response.complete = true
+	return nil
+}
+
+func (r *chatRegistry) streamSnapshot(conversationID, requestID string) (protocol.ChatStreamGetResult, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pruneLocked(time.Now().UTC())
+	for _, record := range r.requests {
+		if record.operation != protocol.FaceOperationChat || record.conversationID != conversationID || record.key.requestID != requestID {
+			continue
+		}
+		result := protocol.ChatStreamGetResult{
+			TargetRequestID: requestID, LastSeq: record.streamSeq,
+			Responses: make([]protocol.ChatStreamResponse, len(record.streamResponses)),
+			Terminal:  record.terminal,
+		}
+		for index, response := range record.streamResponses {
+			result.Responses[index] = protocol.ChatStreamResponse{
+				ResponseIndex: index + 1, Content: response.content, Complete: response.complete,
+			}
+		}
+		if record.terminal {
+			result.Status = record.result.Status
+		}
+		return result, true
+	}
+	return protocol.ChatStreamGetResult{}, false
+}
+
+func streamEndLocked(record *requestRecord, result protocol.FaceResult) protocol.FaceChatStreamEnd {
+	return protocol.FaceChatStreamEnd{
+		ConversationID: record.conversationID, RequestID: record.key.requestID,
+		LastSeq: record.streamSeq, ResponseCount: len(record.streamResponses),
+		Complete: result.Status == protocol.FaceResultSucceeded, Status: result.Status,
+	}
 }
 
 func (r *chatRegistry) beginCancel(identity protocol.FaceIdentity, request protocol.FaceChatCancel, digest [sha256.Size]byte, origin *connection) cancelAdmission {

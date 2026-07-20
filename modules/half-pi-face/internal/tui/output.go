@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 )
@@ -22,6 +23,13 @@ func (t *terminal) handleEnvelope(env protocol.Envelope) error {
 		}
 		if accepted.Operation == protocol.FaceOperationSubscribe {
 			delete(t.pending, accepted.RequestID)
+			if t.hasFeature(protocol.FaceFeatureChatStreamResume) {
+				for _, requestID := range pending.recoverChatIDs {
+					if err := t.recoverChat(pending.recoverConversationID, requestID); err != nil {
+						return err
+					}
+				}
+			}
 		}
 		t.line("accepted %s (%s)", accepted.Operation, safeText(accepted.RequestID))
 	case protocol.TypeFaceError:
@@ -31,6 +39,12 @@ func (t *terminal) handleEnvelope(env protocol.Envelope) error {
 			return fmt.Errorf("Mind sent an uncorrelated error response")
 		}
 		delete(t.pending, faceError.RequestID)
+		if pending.operation == protocol.FaceOperationCapabilitiesGet && faceError.Code == protocol.FaceErrorInvalidRequest {
+			return nil
+		}
+		if pending.operation == protocol.FaceOperationChatStreamGet && pending.targetRequestID != "" {
+			t.stream(pending.targetRequestID).recovering = false
+		}
 		t.line("request %s: %s (%s)", safeText(faceError.RequestID), safeText(faceError.Message), faceError.Code)
 	case protocol.TypeFaceResult:
 		result, _ := protocol.DecodePayload[protocol.FaceResult](&env)
@@ -39,6 +53,9 @@ func (t *terminal) handleEnvelope(env protocol.Envelope) error {
 			return fmt.Errorf("Mind sent an uncorrelated result response")
 		}
 		delete(t.pending, result.RequestID)
+		if pending.operation == protocol.FaceOperationChatStreamGet && result.Status != protocol.FaceResultSucceeded && pending.targetRequestID != "" {
+			t.stream(pending.targetRequestID).recovering = false
+		}
 		if result.Status == protocol.FaceResultSucceeded && len(result.Data) > 0 {
 			if err := protocol.ValidateFaceResultData(pending.operation, result.Data); err != nil {
 				return fmt.Errorf("Mind sent invalid result data: %s", safeText(err.Error()))
@@ -54,29 +71,104 @@ func (t *terminal) handleEnvelope(env protocol.Envelope) error {
 		}
 		delete(t.pending, snapshot.RequestID)
 		t.active = snapshot.Snapshot.ConversationID
+		recoverChatIDs := make([]string, 0, len(snapshot.Snapshot.PendingChats))
 		for _, chat := range snapshot.Snapshot.PendingChats {
 			t.lastChat[t.active] = chat.RequestID
+			recoverChatIDs = append(recoverChatIDs, chat.RequestID)
 		}
 		t.renderSnapshot(snapshot.Snapshot)
-		return t.subscribe(t.active)
+		return t.subscribe(t.active, recoverChatIDs...)
 	case protocol.TypeFaceEvent:
 		event, _ := protocol.DecodePayload[protocol.FaceEvent](&env)
 		if event.ConversationID != "" && event.ConversationID != t.active {
 			return nil
 		}
 		return t.renderEvent(event)
+	case protocol.TypeFaceChatDelta:
+		delta, _ := protocol.DecodePayload[protocol.FaceChatDelta](&env)
+		if delta.ConversationID != t.active {
+			return nil
+		}
+		return t.applyChatDelta(delta)
+	case protocol.TypeFaceChatStreamEnd:
+		end, _ := protocol.DecodePayload[protocol.FaceChatStreamEnd](&env)
+		if end.ConversationID == t.active {
+			stream := t.stream(end.RequestID)
+			stream.terminal = true
+			t.line("chat %s stream ended  status=%s", safeText(end.RequestID), end.Status)
+			if end.LastSeq != stream.lastSeq && t.hasFeature(protocol.FaceFeatureChatStreamResume) {
+				return t.recoverChat(end.ConversationID, end.RequestID)
+			}
+			if !stream.recovering {
+				pending, isOrigin := t.pending[end.RequestID]
+				if !isOrigin || pending.operation != protocol.FaceOperationChat {
+					delete(t.streams, end.RequestID)
+				}
+			}
+		}
+	case protocol.TypeFaceRunProgress:
+		progress, _ := protocol.DecodePayload[protocol.FaceRunProgress](&env)
+		if progress.ConversationID == t.active {
+			t.line("run %s %s[%d]: %s", safeText(progress.RunID), progress.Kind, progress.Seq, safeText(progress.Data))
+		}
 	}
 	return nil
 }
 
 func (t *terminal) renderResult(operation protocol.FaceOperation, result protocol.FaceResult) error {
 	if result.Status != protocol.FaceResultSucceeded {
+		if operation == protocol.FaceOperationChat {
+			delete(t.streams, result.RequestID)
+		}
 		t.line("request %s %s: %s (%s)", safeText(result.RequestID), result.Status, safeText(result.Error), result.ErrorCode)
 		return nil
 	}
 	switch operation {
 	case protocol.FaceOperationChat:
-		t.line("assistant: %s", safeText(result.Content))
+		stream := t.streams[result.RequestID]
+		if stream == nil || len(stream.responses) == 0 {
+			t.line("assistant: %s", safeText(result.Content))
+		} else {
+			finalIndex := 0
+			for responseIndex := range stream.responses {
+				if responseIndex > finalIndex {
+					finalIndex = responseIndex
+				}
+			}
+			final := stream.responses[finalIndex]
+			if final == result.Content {
+				t.line("assistant complete")
+			} else {
+				t.line("assistant final: %s", safeText(result.Content))
+			}
+			delete(t.streams, result.RequestID)
+		}
+	case protocol.FaceOperationCapabilitiesGet:
+		data, err := decodeData[protocol.FaceCapabilitiesResult](result.Data)
+		if err != nil {
+			return err
+		}
+		if t.features == nil {
+			t.features = make(map[protocol.FaceFeature]struct{})
+		}
+		if t.scopes == nil {
+			t.scopes = make(map[protocol.FaceScope]struct{})
+		}
+		for _, feature := range data.Features {
+			t.features[feature] = struct{}{}
+		}
+		for _, scope := range data.Identity.Scopes {
+			t.scopes[scope] = struct{}{}
+		}
+		if t.active != "" {
+			return t.subscribe(t.active)
+		}
+	case protocol.FaceOperationChatStreamGet:
+		data, err := decodeData[protocol.ChatStreamGetResult](result.Data)
+		if err != nil {
+			return err
+		}
+		return t.installChatStream(data)
 	case protocol.FaceOperationConversationList:
 		data, err := decodeData[protocol.ConversationListResult](result.Data)
 		if err != nil {
@@ -102,6 +194,17 @@ func (t *terminal) renderResult(operation protocol.FaceOperation, result protoco
 			return err
 		}
 		t.line("renamed conversation to %s", safeText(data.Conversation.Name))
+	case protocol.FaceOperationConversationMessages:
+		data, err := decodeData[protocol.ConversationMessagesResult](result.Data)
+		if err != nil {
+			return err
+		}
+		for _, message := range data.Messages {
+			t.line("%d %s: %s", message.Seq, safeText(message.Role), safeText(message.Content))
+		}
+		if data.HasMore {
+			t.line("more messages before seq %d", data.NextBeforeSeq)
+		}
 	case protocol.FaceOperationHandList:
 		data, err := decodeData[protocol.HandListResult](result.Data)
 		if err != nil {
@@ -157,6 +260,55 @@ func (t *terminal) renderResult(operation protocol.FaceOperation, result protoco
 		t.renderTask(data.Task)
 	default:
 		t.line("request %s succeeded: %s", safeText(result.RequestID), safeText(result.Content))
+	}
+	return nil
+}
+
+func (t *terminal) applyChatDelta(delta protocol.FaceChatDelta) error {
+	stream := t.stream(delta.RequestID)
+	if stream.recovering {
+		stream.buffered = append(stream.buffered, delta)
+		return nil
+	}
+	content := stream.responses[delta.ResponseIndex]
+	if delta.Seq != stream.lastSeq+1 || delta.Offset != int64(len(content)) {
+		stream.buffered = append(stream.buffered, delta)
+		return t.recoverChat(delta.ConversationID, delta.RequestID)
+	}
+	stream.responses[delta.ResponseIndex] = content + delta.Delta
+	stream.lastSeq = delta.Seq
+	t.line("assistant[%d]: %s", delta.ResponseIndex, safeText(delta.Delta))
+	return nil
+}
+
+func (t *terminal) installChatStream(snapshot protocol.ChatStreamGetResult) error {
+	stream := t.stream(snapshot.TargetRequestID)
+	stream.responses = make(map[int]string, len(snapshot.Responses))
+	for _, response := range snapshot.Responses {
+		stream.responses[response.ResponseIndex] = response.Content
+		if response.Content != "" {
+			t.line("assistant[%d] recovered: %s", response.ResponseIndex, safeText(response.Content))
+		}
+	}
+	stream.lastSeq = snapshot.LastSeq
+	stream.terminal = snapshot.Terminal
+	stream.recovering = false
+	buffered := stream.buffered
+	stream.buffered = nil
+	sort.Slice(buffered, func(i, j int) bool { return buffered[i].Seq < buffered[j].Seq })
+	for _, delta := range buffered {
+		if delta.Seq <= stream.lastSeq {
+			continue
+		}
+		if err := t.applyChatDelta(delta); err != nil {
+			return err
+		}
+	}
+	if stream.terminal && !stream.recovering {
+		pending, isOrigin := t.pending[snapshot.TargetRequestID]
+		if !isOrigin || pending.operation != protocol.FaceOperationChat {
+			delete(t.streams, snapshot.TargetRequestID)
+		}
 	}
 	return nil
 }

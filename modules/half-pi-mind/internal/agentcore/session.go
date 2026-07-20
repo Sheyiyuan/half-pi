@@ -41,9 +41,18 @@ func (c *Core) saveSessionLocked() error {
 			}
 		}
 	}
-	if err := store.ReplaceMessages(sessionID, llmMsgToStore(c.history)); err != nil {
-		return fmt.Errorf("save session: replace messages: %w", err)
+	if c.persistedMessages > len(c.history) {
+		return fmt.Errorf("save session: persisted message count exceeds history")
 	}
+	newMessages := llmMsgToStore(c.history[c.persistedMessages:])
+	for i := range newMessages {
+		newMessages[i].Seq = c.persistedSeq + i + 1
+	}
+	if err := store.AppendMessages(sessionID, c.persistedSeq, newMessages); err != nil {
+		return fmt.Errorf("save session: append messages: %w", err)
+	}
+	c.persistedMessages = len(c.history)
+	c.persistedSeq += len(newMessages)
 	c.notifySessionChanged()
 	return nil
 }
@@ -56,6 +65,7 @@ func llmMsgToStore(msgs []llm.Message) []store.Message {
 		result[i] = store.Message{
 			Role:      string(m.Role),
 			Content:   m.Content,
+			RequestID: m.RequestID,
 			ToolID:    m.ToolID,
 			ToolCalls: string(tcJSON),
 			Seq:       i + 1,
@@ -75,6 +85,7 @@ func storeMsgToLLM(msgs []store.Message) []llm.Message {
 		result[i] = llm.Message{
 			Role:      llm.Role(m.Role),
 			Content:   m.Content,
+			RequestID: m.RequestID,
 			ToolID:    m.ToolID,
 			ToolCalls: toolCalls,
 		}

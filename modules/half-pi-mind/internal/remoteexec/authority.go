@@ -23,14 +23,30 @@ type Authority struct {
 	Registry *Registry
 	bus      *events.EventBus
 
-	pendingMu sync.Mutex
-	pending   map[string]*pendingCall
-	orderedMu sync.Mutex
+	pendingMu        sync.Mutex
+	pending          map[string]*pendingCall
+	orderedMu        sync.Mutex
+	progressMu       sync.RWMutex
+	progressObserver func(ProgressObservation)
+}
+
+// ProgressObservation 是已通过来源、状态和限额校验的 foreground/run 进度。
+type ProgressObservation struct {
+	Run      Run
+	Progress protocol.RPCProgress
+	Gap      bool
 }
 
 // NewAuthority 创建远程执行权威。Hub 回调由 Mind dispatcher 统一安装。
 func NewAuthority(h *hub.Hub, registry *Registry, bus *events.EventBus) *Authority {
 	return &Authority{Hub: h, Registry: registry, bus: bus, pending: make(map[string]*pendingCall)}
+}
+
+// OnProgress 设置结构化进度观察者。观察者必须快速返回且不得回调 Authority。
+func (a *Authority) OnProgress(observer func(ProgressObservation)) {
+	a.progressMu.Lock()
+	a.progressObserver = observer
+	a.progressMu.Unlock()
 }
 
 // HandleHandConnect 处理已认证 Hand 上线。
@@ -259,12 +275,20 @@ type ToolProgressEventData struct {
 
 func (a *Authority) publishProgress(progress protocol.RPCProgress, gap bool) {
 	run, ok := a.Registry.Snapshot(progress.RunID)
-	if !ok || a.bus == nil {
+	if !ok {
 		return
 	}
-	a.bus.PublishSync(events.New(run.SessionID, "remoteexec", events.LevelInfo, events.TypeToolProgress, progress.Data).WithData(
-		ToolProgressEventData{RunID: progress.RunID, Seq: progress.Seq, Kind: progress.Kind, Data: progress.Data, Gap: gap},
-	))
+	a.progressMu.RLock()
+	observer := a.progressObserver
+	a.progressMu.RUnlock()
+	if observer != nil {
+		observer(ProgressObservation{Run: run, Progress: progress, Gap: gap})
+	}
+	if a.bus != nil {
+		a.bus.PublishSync(events.New(run.SessionID, "remoteexec", events.LevelInfo, events.TypeToolProgress, progress.Data).WithData(
+			ToolProgressEventData{RunID: progress.RunID, Seq: progress.Seq, Kind: progress.Kind, Data: progress.Data, Gap: gap},
+		))
+	}
 }
 
 func (a *Authority) deliverPending(peer *hub.Peer, id string, msg protocol.Envelope) {

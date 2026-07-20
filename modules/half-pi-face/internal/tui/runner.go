@@ -33,12 +33,26 @@ type terminal struct {
 	active   string
 	lastChat map[string]string
 	pending  map[string]pendingRequest
+	features map[protocol.FaceFeature]struct{}
+	scopes   map[protocol.FaceScope]struct{}
+	streams  map[string]*chatStreamView
 	prompted bool
 }
 
 type pendingRequest struct {
-	operation      protocol.FaceOperation
-	conversationID string
+	operation             protocol.FaceOperation
+	conversationID        string
+	targetRequestID       string
+	recoverConversationID string
+	recoverChatIDs        []string
+}
+
+type chatStreamView struct {
+	responses  map[int]string
+	lastSeq    int64
+	recovering bool
+	buffered   []protocol.FaceChatDelta
+	terminal   bool
 }
 
 // Run 启动人类终端 Face。
@@ -58,9 +72,14 @@ func Run(ctx context.Context, conn client.Connection, input io.Reader, output io
 	term := &terminal{
 		conn: conn, output: output,
 		lastChat: make(map[string]string), pending: make(map[string]pendingRequest),
+		features: make(map[protocol.FaceFeature]struct{}), scopes: make(map[protocol.FaceScope]struct{}),
+		streams: make(map[string]*chatStreamView),
 	}
 	term.line("Half-Pi Face connected as %s", safeText(registered.ClientID))
 	if err := term.listConversations(); err != nil {
+		return err
+	}
+	if err := term.getCapabilities(); err != nil {
 		return err
 	}
 	term.prompt()

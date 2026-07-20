@@ -19,6 +19,7 @@ const (
 type Message struct {
 	Role      Role
 	Content   string     // 纯文本，暂不支持多模态
+	RequestID string     // 仅用于本地持久化和 Face 关联，不发送给 provider
 	ToolID    string     // 当 Role == RoleTool 时设置
 	ToolCalls []ToolCall // 当 Role == RoleAssistant 且 LLM 返回了工具调用时设置
 }

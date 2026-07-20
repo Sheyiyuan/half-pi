@@ -41,8 +41,12 @@ func (g *Gateway) handleChat(state *connection, identity protocol.FaceIdentity, 
 
 func (g *Gateway) runChat(record *requestRecord, actor *conversation.Actor, content string) {
 	requestID := record.key.requestID
+	stream := newChatStreamWriter(g, record)
 	ctx := requestctx.WithRequestID(record.ctx, requestID)
 	ctx = agentcore.WithChatHooks(ctx, agentcore.ChatHooks{
+		RequestID:         requestID,
+		TextDelta:         stream.Write,
+		ResponseCompleted: stream.Complete,
 		ToolCalled: func(call agentcore.ChatToolCall) {
 			g.publishChatEvent(record.conversationID, requestID, protocol.FaceEventChatToolCalled,
 				"Chat called a tool", protocol.FaceEventLevelInfo, protocol.ChatToolCalledEventData{
@@ -57,8 +61,12 @@ func (g *Gateway) runChat(record *requestRecord, actor *conversation.Actor, cont
 		},
 	})
 	reply, err := actor.Core().Chat(ctx, content)
+	if closeErr := stream.Close(); err == nil && closeErr != nil {
+		err = closeErr
+	}
 	result := chatResult(record, reply, err)
 	result, origin, completed := g.chats.completeChat(record, result, func(finalResult protocol.FaceResult) {
+		g.publishChatStreamEnd(streamEndLocked(record, finalResult))
 		eventType, message, level, data := chatTerminalEvent(finalResult)
 		g.publishChatEvent(record.conversationID, requestID, eventType, message, level, data)
 	})

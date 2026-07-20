@@ -18,11 +18,27 @@ type ChatToolResult struct {
 	Success bool
 }
 
+// ChatTextDelta 是一次 provider response 中的用户可见文本增量。
+type ChatTextDelta struct {
+	ResponseIndex int
+	Delta         string
+}
+
+// ChatResponse 是一次完整 provider response 的可见边界。
+type ChatResponse struct {
+	ResponseIndex int
+	Content       string
+	HasToolCalls  bool
+}
+
 // ChatHooks 接收不依赖 debug 开关的结构化 Chat 生命周期回调。
 // 回调必须快速返回，且不得重新进入同一个 Core。
 type ChatHooks struct {
-	ToolCalled    func(ChatToolCall)
-	ToolCompleted func(ChatToolResult)
+	RequestID         string
+	TextDelta         func(ChatTextDelta) error
+	ResponseCompleted func(ChatResponse) error
+	ToolCalled        func(ChatToolCall)
+	ToolCompleted     func(ChatToolResult)
 }
 
 type chatHooksKey struct{}

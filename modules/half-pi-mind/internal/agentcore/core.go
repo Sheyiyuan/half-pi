@@ -18,23 +18,25 @@ import (
 
 // Core 是 agent core 的主体。
 type Core struct {
-	llm            llm.Provider
-	exec           executor.ToolExecutor
-	history        []llm.Message
-	Bus            *events.EventBus // Mind 的事件总线，nil 时不发事件
-	skills         *skill.Store
-	store          *store.Store
-	sessionID      string
-	Debug          bool
-	Mode           string // "normal" | "trust" | "yolo"
-	approver       Approver
-	autoAllow      map[string]bool // 本会话自动放行的工具
-	autoDeny       map[string]bool // 本会话自动拒绝的工具
-	activeHand     string          // 当前会话的默认 Hand ID
-	chatMu         sync.Mutex
-	stateMu        sync.RWMutex
-	policy         *security.Policy
-	sessionChanged func()
+	llm               llm.Provider
+	exec              executor.ToolExecutor
+	history           []llm.Message
+	persistedMessages int
+	persistedSeq      int
+	Bus               *events.EventBus // Mind 的事件总线，nil 时不发事件
+	skills            *skill.Store
+	store             *store.Store
+	sessionID         string
+	Debug             bool
+	Mode              string // "normal" | "trust" | "yolo"
+	approver          Approver
+	autoAllow         map[string]bool // 本会话自动放行的工具
+	autoDeny          map[string]bool // 本会话自动拒绝的工具
+	activeHand        string          // 当前会话的默认 Hand ID
+	chatMu            sync.Mutex
+	stateMu           sync.RWMutex
+	policy            *security.Policy
+	sessionChanged    func()
 }
 
 // SetSessionChangeObserver 设置持久化 conversation 状态变化回调。
@@ -168,6 +170,12 @@ func (c *Core) SetStore(s *store.Store, sessionID string) error {
 	c.policy.Mode = modeToSecurityMode(session.Mode)
 	c.activeHand = session.ActiveHand
 	c.history = storeMsgToLLM(msgs)
+	c.persistedMessages = len(msgs)
+	if len(msgs) > 0 {
+		c.persistedSeq = msgs[len(msgs)-1].Seq
+	} else {
+		c.persistedSeq = 0
+	}
 	return nil
 }
 

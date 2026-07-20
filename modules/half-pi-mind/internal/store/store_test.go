@@ -165,7 +165,7 @@ func TestGetMessageCount(t *testing.T) {
 		t.Errorf("empty session count = %d, want 0", count)
 	}
 
-	s.SaveMessages("s-count", []Message{
+	s.AppendMessages("s-count", 0, []Message{
 		{Role: "user", Content: "a", Seq: 1},
 		{Role: "assistant", Content: "b", Seq: 2},
 	})
@@ -176,54 +176,6 @@ func TestGetMessageCount(t *testing.T) {
 	}
 	if count != 2 {
 		t.Errorf("count = %d, want 2", count)
-	}
-}
-
-func TestReplaceMessages(t *testing.T) {
-	s := newTestStore(t)
-	g, _ := s.UpsertGroup("/tmp/test-project")
-	s.CreateSession(g.ID, "s-replace")
-
-	// Initial save
-	s.SaveMessages("s-replace", []Message{
-		{Role: "user", Content: "old", Seq: 1},
-	})
-
-	// Replace
-	err := s.ReplaceMessages("s-replace", []Message{
-		{Role: "user", Content: "new-1", Seq: 1},
-		{Role: "assistant", Content: "new-2", Seq: 2},
-	})
-	if err != nil {
-		t.Fatalf("ReplaceMessages: %v", err)
-	}
-
-	msgs, _ := s.GetMessages("s-replace")
-	if len(msgs) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(msgs))
-	}
-	if msgs[0].Content != "new-1" || msgs[1].Content != "new-2" {
-		t.Error("replace didn't update messages")
-	}
-}
-
-func TestReplaceMessagesEmpty(t *testing.T) {
-	s := newTestStore(t)
-	g, _ := s.UpsertGroup("/tmp/test-project")
-	s.CreateSession(g.ID, "s-replace-empty")
-
-	s.SaveMessages("s-replace-empty", []Message{
-		{Role: "user", Content: "old", Seq: 1},
-	})
-
-	err := s.ReplaceMessages("s-replace-empty", nil)
-	if err != nil {
-		t.Fatalf("ReplaceMessages with nil: %v", err)
-	}
-
-	msgs, _ := s.GetMessages("s-replace-empty")
-	if len(msgs) != 0 {
-		t.Errorf("expected 0 messages after replace with nil, got %d", len(msgs))
 	}
 }
 
@@ -282,8 +234,8 @@ func TestSaveAndGetMessages(t *testing.T) {
 		{Role: "assistant", Content: "hi there", Seq: 2},
 		{Role: "tool", Content: "result", ToolID: "call_1", Seq: 3},
 	}
-	if err := s.SaveMessages("session-1", msgs); err != nil {
-		t.Fatalf("SaveMessages: %v", err)
+	if err := s.AppendMessages("session-1", 0, msgs); err != nil {
+		t.Fatalf("AppendMessages: %v", err)
 	}
 
 	got, err := s.GetMessages("session-1")
@@ -333,16 +285,16 @@ func TestGetLastSeq(t *testing.T) {
 	}
 
 	// With messages
-	s.SaveMessages("session-1", []Message{
+	s.AppendMessages("session-1", 0, []Message{
 		{Role: "user", Content: "a", Seq: 1},
-		{Role: "user", Content: "b", Seq: 5},
+		{Role: "user", Content: "b", Seq: 2},
 	})
 	seq, err = s.GetLastSeq("session-1")
 	if err != nil {
 		t.Fatalf("GetLastSeq: %v", err)
 	}
-	if seq != 5 {
-		t.Errorf("last seq = %d, want 5", seq)
+	if seq != 2 {
+		t.Errorf("last seq = %d, want 2", seq)
 	}
 }
 
@@ -352,10 +304,10 @@ func TestMessagesIsolatedBySession(t *testing.T) {
 	s.CreateSession(g.ID, "session-1")
 	s.CreateSession(g.ID, "session-2")
 
-	s.SaveMessages("session-1", []Message{
+	s.AppendMessages("session-1", 0, []Message{
 		{Role: "user", Content: "session 1 msg", Seq: 1},
 	})
-	s.SaveMessages("session-2", []Message{
+	s.AppendMessages("session-2", 0, []Message{
 		{Role: "user", Content: "session 2 msg", Seq: 1},
 	})
 
@@ -390,7 +342,7 @@ func TestDateTimeParsing(t *testing.T) {
 		t.Error("session CreatedAt should not be zero")
 	}
 
-	s.SaveMessages("ts-session", []Message{
+	s.AppendMessages("ts-session", 0, []Message{
 		{Role: "user", Content: "test", Seq: 1},
 	})
 	msgs, _ := s.GetMessages("ts-session")

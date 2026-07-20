@@ -126,6 +126,7 @@ func TestCanonicalFaceScopesAcceptsCompleteSet(t *testing.T) {
 		protocol.FaceScopeSessionsWrite,
 		protocol.FaceScopeRunsRead,
 		protocol.FaceScopeRunsCancel,
+		protocol.FaceScopeRunsOutput,
 		protocol.FaceScopeApprove,
 		protocol.FaceScopeHandsRead,
 		protocol.FaceScopeTasksRead,

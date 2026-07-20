@@ -19,9 +19,8 @@ import (
 )
 
 const (
-	defaultOutboundQueueSize = 128
-	handQueryTimeout         = 10 * time.Second
-	taskQueryTimeout         = 10 * time.Second
+	handQueryTimeout = 10 * time.Second
+	taskQueryTimeout = 10 * time.Second
 )
 
 // Config 是 Face Gateway 的进程级依赖。
@@ -54,10 +53,11 @@ type Gateway struct {
 }
 
 type connection struct {
-	peer   *hub.Peer
-	ctx    context.Context
-	cancel context.CancelFunc
-	queue  chan protocol.Envelope
+	peer     *hub.Peer
+	ctx      context.Context
+	cancel   context.CancelFunc
+	queue    chan protocol.Envelope
+	outbound *outboundScheduler
 
 	mu         sync.Mutex
 	closed     bool
@@ -71,6 +71,7 @@ type connection struct {
 type subscription struct {
 	conversations map[string]struct{}
 	events        map[protocol.FaceEventType]struct{}
+	transients    map[protocol.FaceTransientType]struct{}
 }
 
 // New 创建 Face Gateway 并连接结构化 domain 变化源。
@@ -97,6 +98,7 @@ func New(config Config) (*Gateway, error) {
 	config.Conversations.OnChange(gateway.PublishConversationChanged)
 	config.Approvals.OnChange(gateway.PublishApprovalRequested, gateway.PublishApprovalFinished)
 	config.Authority.Registry.OnChange(gateway.PublishRemoteRunChanged)
+	config.Authority.OnProgress(gateway.PublishRunProgress)
 	config.Tasks.OnChange(gateway.PublishTaskChanged)
 	return gateway, nil
 }
@@ -157,6 +159,9 @@ func (g *Gateway) HandleFaceDisconnect(peer *hub.Peer) {
 	state.closed = true
 	state.mu.Unlock()
 	state.cancel()
+	if state.outbound != nil {
+		state.outbound.close()
+	}
 }
 
 func (g *Gateway) connection(peer *hub.Peer) *connection {
@@ -168,7 +173,7 @@ func (g *Gateway) connection(peer *hub.Peer) *connection {
 	ctx, cancel := context.WithCancel(context.Background())
 	state := &connection{
 		peer: peer, ctx: ctx, cancel: cancel,
-		queue: make(chan protocol.Envelope, g.queueSize),
+		outbound: newOutboundScheduler(g.queueSize),
 	}
 	g.connections[peer] = state
 	go g.sendLoop(state)
@@ -176,6 +181,18 @@ func (g *Gateway) connection(peer *hub.Peer) *connection {
 }
 
 func (g *Gateway) sendLoop(state *connection) {
+	if state.outbound != nil {
+		for {
+			env, ok := state.outbound.pop(state.ctx)
+			if !ok {
+				return
+			}
+			if err := g.hub.SendPeerContext(state.ctx, state.peer, env); err != nil {
+				g.hub.RemovePeer(state.peer)
+				return
+			}
+		}
+	}
 	for {
 		select {
 		case <-state.ctx.Done():
@@ -200,6 +217,14 @@ func (g *Gateway) enqueueLocked(state *connection, env protocol.Envelope) bool {
 	if state.closed || state.slow {
 		return false
 	}
+	if state.outbound != nil {
+		if state.outbound.enqueue(env, false) {
+			return true
+		}
+		state.slow = true
+		go g.hub.RemovePeer(state.peer)
+		return false
+	}
 	select {
 	case state.queue <- env:
 		return true
@@ -210,12 +235,35 @@ func (g *Gateway) enqueueLocked(state *connection, env protocol.Envelope) bool {
 	}
 }
 
+func (g *Gateway) enqueueTransientLocked(state *connection, env protocol.Envelope) bool {
+	if state.closed || state.slow {
+		return false
+	}
+	if state.outbound != nil {
+		return state.outbound.enqueue(env, true)
+	}
+	select {
+	case state.queue <- env:
+		return true
+	default:
+		return false
+	}
+}
+
 func (g *Gateway) sendPayload(state *connection, typ string, payload any) bool {
 	env, err := protocol.NewEnvelope("", typ, payload)
 	if err != nil || protocol.ValidateFacePayload(typ, env.Payload) != nil {
 		return false
 	}
 	return g.enqueue(state, *env)
+}
+
+func (g *Gateway) sendTransientPayloadLocked(state *connection, typ string, payload any) bool {
+	env, err := protocol.NewEnvelope("", typ, payload)
+	if err != nil || protocol.ValidateFacePayload(typ, env.Payload) != nil {
+		return false
+	}
+	return g.enqueueTransientLocked(state, *env)
 }
 
 func (g *Gateway) sendError(state *connection, meta protocol.FaceCommandMeta, code protocol.FaceErrorCode, message string, retryable bool) {

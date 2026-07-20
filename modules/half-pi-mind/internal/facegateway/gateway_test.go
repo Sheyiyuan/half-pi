@@ -260,7 +260,7 @@ func TestSnapshotRestoresRunsAndTaskScope(t *testing.T) {
 	if err := fixture.store.CreateSessionNamed(fixture.conversations.GroupID(), conversationID, "Snapshot"); err != nil {
 		t.Fatal(err)
 	}
-	if err := fixture.store.SaveMessages(conversationID, []store.Message{{Role: "user", Content: "hello", Seq: 1}}); err != nil {
+	if err := fixture.store.AppendMessages(conversationID, 0, []store.Message{{Role: "user", Content: "hello", Seq: 1}}); err != nil {
 		t.Fatal(err)
 	}
 	standalone := remoteexec.NewRegistry(fixture.store)

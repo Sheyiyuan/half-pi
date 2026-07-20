@@ -109,8 +109,9 @@ func (s *Store) migrate() error {
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
 			session_id  TEXT NOT NULL,
 			role        TEXT NOT NULL,
-			content     TEXT NOT NULL DEFAULT '',
-			tool_id     TEXT NOT NULL DEFAULT '',
+				content     TEXT NOT NULL DEFAULT '',
+				request_id  TEXT NOT NULL DEFAULT '',
+				tool_id     TEXT NOT NULL DEFAULT '',
 			tool_calls  TEXT NOT NULL DEFAULT '',
 			seq         INTEGER NOT NULL,
 			created_at  TEXT NOT NULL DEFAULT (datetime('now')),
@@ -243,6 +244,12 @@ func (s *Store) migrate() error {
 	}
 	if err := s.addColumnIfNotExists("sessions", "updated_at", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate session updated_at: %w", err)
+	}
+	if err := s.addColumnIfNotExists("messages", "request_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate message request ID: %w", err)
+	}
+	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq)`); err != nil {
+		return fmt.Errorf("migrate message sequence uniqueness: %w", err)
 	}
 	if _, err := s.db.Exec(`UPDATE sessions SET updated_at = created_at WHERE updated_at = ''`); err != nil {
 		return fmt.Errorf("backfill session updated_at: %w", err)

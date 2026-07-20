@@ -39,6 +39,21 @@ func TestServiceExpandsProfiles(t *testing.T) {
 			t.Fatalf("observer scopes = %v, want %v", observer, want)
 		}
 	}
+	operator, err := ExpandProfile(ProfileOperator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	contains := func(scopes []protocol.FaceScope, target protocol.FaceScope) bool {
+		for _, scope := range scopes {
+			if scope == target {
+				return true
+			}
+		}
+		return false
+	}
+	if contains(observer, protocol.FaceScopeRunsOutput) || !contains(operator, protocol.FaceScopeRunsOutput) {
+		t.Fatalf("run output scope: observer=%v operator=%v", observer, operator)
+	}
 	if _, err := ExpandProfile("admin"); err == nil {
 		t.Fatal("unknown profile accepted")
 	}

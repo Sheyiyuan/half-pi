@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
@@ -58,19 +59,19 @@ func toolsToDefs(tools []executor.Tool) []llm.ToolDef {
 func (c *Core) Chat(ctx context.Context, input string) (reply string, err error) {
 	c.chatMu.Lock()
 	defer c.chatMu.Unlock()
-	defer func() {
-		if saveErr := c.saveSessionLocked(); saveErr != nil {
-			err = saveErr
-		}
-	}()
-
-	c.history = append(c.history, llm.Message{
-		Role:    llm.RoleUser,
-		Content: input,
-	})
 	hooks := chatHooksFromContext(ctx)
 
+	c.history = append(c.history, llm.Message{
+		Role:      llm.RoleUser,
+		Content:   input,
+		RequestID: hooks.RequestID,
+	})
+	if err := c.saveSessionLocked(); err != nil {
+		return "", err
+	}
+
 	for step := 0; step < maxToolCallSteps; step++ {
+		responseIndex := step + 1
 		c.stateMu.RLock()
 		mode, skills, debug := c.Mode, c.skills, c.Debug
 		c.stateMu.RUnlock()
@@ -86,20 +87,43 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 			Tools:    toolsToDefs(c.exec.Tools()),
 		}
 
-		resp, err := c.llm.Chat(ctx, req)
+		var streamed strings.Builder
+		resp, err := llm.ChatWithStreaming(ctx, c.llm, req, func(delta string) error {
+			if hooks.TextDelta != nil {
+				if err := hooks.TextDelta(ChatTextDelta{ResponseIndex: responseIndex, Delta: delta}); err != nil {
+					return err
+				}
+			}
+			streamed.WriteString(delta)
+			return nil
+		})
 		if err != nil {
 			return "", fmt.Errorf("LLM call failed: %w", err)
+		}
+		if streamed.String() != resp.Content {
+			return "", fmt.Errorf("LLM stream content mismatch")
+		}
+		if hooks.ResponseCompleted != nil {
+			if err := hooks.ResponseCompleted(ChatResponse{
+				ResponseIndex: responseIndex, Content: resp.Content, HasToolCalls: len(resp.ToolCalls) > 0,
+			}); err != nil {
+				return "", fmt.Errorf("complete LLM stream response: %w", err)
+			}
 		}
 
 		if len(resp.ToolCalls) == 0 {
 			c.history = append(c.history, llm.Message{
-				Role:    llm.RoleAssistant,
-				Content: resp.Content,
+				Role:      llm.RoleAssistant,
+				Content:   resp.Content,
+				RequestID: hooks.RequestID,
 			})
+			if err := c.saveSessionLocked(); err != nil {
+				return "", err
+			}
 			return resp.Content, nil
 		}
 
-		assistantMsg := llm.Message{Role: llm.RoleAssistant, Content: resp.Content}
+		assistantMsg := llm.Message{Role: llm.RoleAssistant, Content: resp.Content, RequestID: hooks.RequestID}
 		for _, tc := range resp.ToolCalls {
 			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, llm.ToolCall{
 				ID: tc.ID, Name: tc.Name, Args: tc.Args,
@@ -147,10 +171,14 @@ func (c *Core) Chat(ctx context.Context, input string) (reply string, err error)
 			}
 
 			c.history = append(c.history, llm.Message{
-				Role:    llm.RoleTool,
-				ToolID:  tc.ID,
-				Content: output,
+				Role:      llm.RoleTool,
+				ToolID:    tc.ID,
+				Content:   output,
+				RequestID: hooks.RequestID,
 			})
+		}
+		if err := c.saveSessionLocked(); err != nil {
+			return "", err
 		}
 	}
 

@@ -19,6 +19,10 @@ func (g *Gateway) handleCommand(state *connection, identity protocol.FaceIdentit
 		g.handleChat(state, identity, env)
 	case protocol.TypeFaceChatCancel:
 		g.handleChatCancel(state, identity, env)
+	case protocol.TypeFaceChatStreamGet:
+		g.handleChatStreamGet(state, identity, env)
+	case protocol.TypeFaceCapabilitiesGet:
+		g.handleCapabilitiesGet(state, identity, env)
 	case protocol.TypeFaceConversationList:
 		g.handleConversationList(state, identity, env)
 	case protocol.TypeFaceConversationCreate:
@@ -27,6 +31,8 @@ func (g *Gateway) handleCommand(state *connection, identity protocol.FaceIdentit
 		g.handleConversationSnapshot(state, identity, env)
 	case protocol.TypeFaceConversationRename:
 		g.handleConversationRename(state, identity, env)
+	case protocol.TypeFaceConversationMessages:
+		g.handleConversationMessages(state, identity, env)
 	case protocol.TypeFaceSubscribe:
 		g.handleSubscribe(state, identity, env)
 	case protocol.TypeFaceApprovalResolve:
@@ -54,6 +60,48 @@ func (g *Gateway) handleCommand(state *connection, identity protocol.FaceIdentit
 		}
 		g.sendError(state, meta, protocol.FaceErrorInternal, "Face operation is not implemented", false)
 	}
+}
+
+func (g *Gateway) handleCapabilitiesGet(state *connection, identity protocol.FaceIdentity, env protocol.Envelope) {
+	request, _ := protocol.DecodePayload[protocol.FaceCapabilitiesGet](&env)
+	meta := protocol.FaceCommandMeta{RequestID: request.RequestID}
+	if !g.sendAccepted(state, meta, protocol.FaceOperationCapabilitiesGet, 0) {
+		return
+	}
+	g.sendResult(state, meta, protocol.FaceOperationCapabilitiesGet, protocol.FaceCapabilitiesResult{
+		Revision: protocol.FaceProtocolRevision,
+		Identity: identity,
+		Features: []protocol.FaceFeature{
+			protocol.FaceFeatureChatStream,
+			protocol.FaceFeatureChatStreamResume,
+			protocol.FaceFeatureRunProgress,
+			protocol.FaceFeatureMessagePaging,
+		},
+		Limits: protocol.FaceProtocolLimits{
+			MaxChatContentBytes: protocol.MaxFaceChatContentBytes,
+			MaxChatDeltaBytes:   protocol.MaxFaceChatDeltaBytes,
+			MaxChatStreamBytes:  protocol.MaxFaceChatStreamBytes,
+			MaxChatStreamChunks: protocol.MaxFaceChatStreamChunks,
+			MaxMessageListLimit: protocol.MaxFaceMessageListLimit,
+		},
+	})
+}
+
+func (g *Gateway) handleChatStreamGet(state *connection, identity protocol.FaceIdentity, env protocol.Envelope) {
+	request, _ := protocol.DecodePayload[protocol.FaceChatStreamGet](&env)
+	meta := protocol.FaceCommandMeta{RequestID: request.RequestID, ConversationID: request.ConversationID}
+	if !g.requireScope(state, identity, meta, protocol.FaceScopeSessionsRead) || !g.requireConversation(state, meta) {
+		return
+	}
+	if !g.sendAccepted(state, meta, protocol.FaceOperationChatStreamGet, 0) {
+		return
+	}
+	result, ok := g.chats.streamSnapshot(request.ConversationID, request.TargetRequestID)
+	if !ok {
+		g.sendFailedResult(state, meta, protocol.FaceResultFailed, protocol.FaceErrorInvalidRequest, "Chat stream is unavailable")
+		return
+	}
+	g.sendResult(state, meta, protocol.FaceOperationChatStreamGet, result)
 }
 
 func (g *Gateway) handleConversationList(state *connection, identity protocol.FaceIdentity, env protocol.Envelope) {
@@ -161,6 +209,34 @@ func (g *Gateway) handleConversationSnapshot(state *connection, identity protoco
 		return
 	}
 	g.sendPayload(state, protocol.TypeFaceSnapshot, payload)
+}
+
+func (g *Gateway) handleConversationMessages(state *connection, identity protocol.FaceIdentity, env protocol.Envelope) {
+	request, _ := protocol.DecodePayload[protocol.FaceConversationMessages](&env)
+	meta := protocol.FaceCommandMeta{RequestID: request.RequestID, ConversationID: request.ConversationID}
+	if !g.requireScope(state, identity, meta, protocol.FaceScopeSessionsRead) || !g.requireConversation(state, meta) {
+		return
+	}
+	if !g.sendAccepted(state, meta, protocol.FaceOperationConversationMessages, 0) {
+		return
+	}
+	limit := request.Limit
+	if limit == 0 {
+		limit = protocol.DefaultFaceMessageListLimit
+	}
+	messages, hasMore, err := g.store.GetMessagesBefore(request.ConversationID, request.BeforeSeq, limit)
+	if err != nil {
+		g.sendFailedResult(state, meta, protocol.FaceResultFailed, protocol.FaceErrorInternal, "conversation messages failed")
+		return
+	}
+	result := protocol.ConversationMessagesResult{Messages: make([]protocol.FaceMessage, 0, len(messages)), HasMore: hasMore}
+	for _, message := range messages {
+		result.Messages = append(result.Messages, projectMessage(message))
+	}
+	if hasMore && len(result.Messages) > 0 {
+		result.NextBeforeSeq = result.Messages[0].Seq
+	}
+	g.sendResult(state, meta, protocol.FaceOperationConversationMessages, result)
 }
 
 func (g *Gateway) handleSubscribe(state *connection, identity protocol.FaceIdentity, env protocol.Envelope) {
@@ -379,6 +455,7 @@ func (g *Gateway) validateSubscription(identity protocol.FaceIdentity, request p
 	filter := subscription{
 		conversations: make(map[string]struct{}, len(request.ConversationIDs)),
 		events:        make(map[protocol.FaceEventType]struct{}, len(request.EventTypes)),
+		transients:    make(map[protocol.FaceTransientType]struct{}, len(request.TransientTypes)),
 	}
 	for _, conversationID := range request.ConversationIDs {
 		session, err := g.store.GetSession(conversationID)
@@ -397,7 +474,25 @@ func (g *Gateway) validateSubscription(identity protocol.FaceIdentity, request p
 		}
 		filter.events[eventType] = struct{}{}
 	}
+	for _, transient := range request.TransientTypes {
+		scope := transientScope(transient)
+		if scope != "" && !hasScope(identity, scope) {
+			return subscription{}, protocol.FaceErrorForbidden, "transient stream scope is required"
+		}
+		filter.transients[transient] = struct{}{}
+	}
 	return filter, "", ""
+}
+
+func transientScope(transient protocol.FaceTransientType) protocol.FaceScope {
+	switch transient {
+	case protocol.FaceTransientChatDelta:
+		return protocol.FaceScopeSessionsRead
+	case protocol.FaceTransientRunProgress:
+		return protocol.FaceScopeRunsOutput
+	default:
+		return ""
+	}
 }
 
 func eventScope(eventType protocol.FaceEventType) protocol.FaceScope {
@@ -424,7 +519,8 @@ func commandScope(messageType string) protocol.FaceScope {
 	switch messageType {
 	case protocol.TypeFaceChat, protocol.TypeFaceChatCancel:
 		return protocol.FaceScopeChat
-	case protocol.TypeFaceConversationList, protocol.TypeFaceConversationSnapshot:
+	case protocol.TypeFaceChatStreamGet, protocol.TypeFaceConversationList, protocol.TypeFaceConversationSnapshot,
+		protocol.TypeFaceConversationMessages:
 		return protocol.FaceScopeSessionsRead
 	case protocol.TypeFaceConversationCreate, protocol.TypeFaceConversationRename:
 		return protocol.FaceScopeSessionsWrite

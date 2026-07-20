@@ -111,6 +111,25 @@ func (g *Gateway) PublishRemoteRunChanged(run remoteexec.Run) {
 	g.publishConversationVersion(run.SessionID, version)
 }
 
+// PublishRunProgress 投影已接纳 foreground run 的 stdout/stderr 增量。
+func (g *Gateway) PublishRunProgress(observation remoteexec.ProgressObservation) {
+	if observation.Run.ID == "" || observation.Run.SessionID == "" || observation.Run.DurableTask ||
+		protocol.IsTerminalRunStatus(observation.Run.Status) {
+		return
+	}
+	payload := protocol.FaceRunProgress{
+		ConversationID: observation.Run.SessionID,
+		RequestID:      observation.Run.Metadata.RequestID,
+		RunID:          observation.Progress.RunID,
+		Seq:            observation.Progress.Seq,
+		Kind:           observation.Progress.Kind,
+		Data:           observation.Progress.Data,
+		Gap:            observation.Gap,
+	}
+	g.publishTransient(protocol.FaceTransientRunProgress, protocol.FaceScopeRunsOutput,
+		payload.ConversationID, protocol.TypeFaceRunProgress, payload)
+}
+
 // PublishTaskChanged 发布后台任务 best-known 状态变化。
 func (g *Gateway) PublishTaskChanged(task remoteexec.Task) {
 	if task.TaskID == "" || task.SessionID == "" {

@@ -86,16 +86,34 @@ func TestFaceAlphaRealProcessE2E(t *testing.T) {
 	faceC := startHeadlessFace(t, binaries.face, fixture.workDir, fixture.home, fixture.faceConfig["face-c"], "face-c")
 
 	conversationID := createConversation(t, faceA)
+	capabilityRequestID := "capabilities-a"
+	faceA.send(t, protocol.TypeFaceCapabilitiesGet, protocol.FaceCapabilitiesGet{RequestID: capabilityRequestID})
+	awaitAccepted(t, faceA, capabilityRequestID, protocol.FaceOperationCapabilitiesGet)
+	capabilityResult := awaitResult(t, faceA, capabilityRequestID)
+	requireSuccessfulResult(t, capabilityResult, protocol.FaceOperationCapabilitiesGet)
+	capabilities, err := protocol.StrictDecode[protocol.FaceCapabilitiesResult](capabilityResult.Data)
+	if err != nil || capabilities.Revision != protocol.FaceProtocolRevision || len(capabilities.Features) != 4 {
+		t.Fatalf("Face capabilities = %+v, %v", capabilities, err)
+	}
 	requestSnapshot(t, faceA, "snapshot-a-initial", conversationID)
-	subscribe(t, faceA, "subscribe-a-initial", conversationID, nil)
+	subscribe(t, faceA, "subscribe-a-initial", conversationID, nil,
+		protocol.FaceTransientChatDelta, protocol.FaceTransientRunProgress)
 	requestSnapshot(t, faceB, "snapshot-b-initial", conversationID)
-	subscribe(t, faceB, "subscribe-b", conversationID, nil)
+	subscribe(t, faceB, "subscribe-b", conversationID, nil,
+		protocol.FaceTransientChatDelta, protocol.FaceTransientRunProgress)
 	subscribe(t, faceC, "subscribe-c-approvals", conversationID, []protocol.FaceEventType{
 		protocol.FaceEventApprovalRequested, protocol.FaceEventApprovalResolved,
 	})
 
 	simpleResult := runChat(t, faceA, simpleRequestID, conversationID, simplePrompt)
 	requireChatResult(t, simpleResult, simpleAnswer)
+	requireChatStream(t, faceA, simpleRequestID, simpleAnswer, 1)
+	requireChatStream(t, faceB, simpleRequestID, simpleAnswer, 1)
+	streamSnapshot := getChatStream(t, faceB, "stream-simple", conversationID, simpleRequestID)
+	if !streamSnapshot.Terminal || streamSnapshot.Status != protocol.FaceResultSucceeded ||
+		len(streamSnapshot.Responses) != 1 || streamSnapshot.Responses[0].Content != simpleAnswer {
+		t.Fatalf("simple stream snapshot = %+v", streamSnapshot)
+	}
 	faceA.stop(t)
 
 	persisted := requestSnapshot(t, faceB, "snapshot-b-persisted", conversationID)
@@ -114,7 +132,8 @@ func TestFaceAlphaRealProcessE2E(t *testing.T) {
 	if conflict.Code != protocol.FaceErrorRequestConflict || conflict.Retryable {
 		t.Fatalf("conflicting Chat response = %+v", conflict)
 	}
-	subscribe(t, faceA, "subscribe-a-marker", conversationID, nil)
+	subscribe(t, faceA, "subscribe-a-marker", conversationID, nil,
+		protocol.FaceTransientChatDelta, protocol.FaceTransientRunProgress)
 
 	faceA.send(t, protocol.TypeFaceChat, protocol.FaceChat{
 		RequestID: markerRequestID, ConversationID: conversationID, Content: markerPrompt,
@@ -125,6 +144,7 @@ func TestFaceAlphaRealProcessE2E(t *testing.T) {
 	forbiddenResolve(t, faceB, markerApproval.ApprovalID)
 	resolveApproval(t, faceC, "resolve-marker", markerApproval.ApprovalID)
 	markerChanged := awaitRunStatus(t, faceB, markerApproval.RunID, protocol.RunSucceeded)
+	requireChatStream(t, faceB, markerRequestID, markerAnswer, 4)
 	awaitChatCompleted(t, faceB, markerRequestID)
 	markerBytes, err := os.ReadFile(filepath.Join(fixture.workDir, "remote-marker.txt"))
 	if err != nil || string(markerBytes) != "written by process e2e" {
@@ -141,7 +161,8 @@ func TestFaceAlphaRealProcessE2E(t *testing.T) {
 	})
 	replayedMarker := awaitResult(t, faceA, markerRequestID)
 	requireChatResult(t, replayedMarker, markerAnswer)
-	subscribe(t, faceA, "subscribe-a-cancel", conversationID, nil)
+	subscribe(t, faceA, "subscribe-a-cancel", conversationID, nil,
+		protocol.FaceTransientChatDelta, protocol.FaceTransientRunProgress)
 
 	faceA.send(t, protocol.TypeFaceChat, protocol.FaceChat{
 		RequestID: cancelRequestID, ConversationID: conversationID, Content: cancelPrompt,
@@ -150,6 +171,12 @@ func TestFaceAlphaRealProcessE2E(t *testing.T) {
 	cancelApproval := awaitApproval(t, faceC, cancelRequestID, "exec_command")
 	resolveApproval(t, faceC, "resolve-cancel", cancelApproval.ApprovalID)
 	awaitRunStatus(t, faceB, cancelApproval.RunID, protocol.RunRunning)
+	progress := awaitPayload(t, faceB, protocol.TypeFaceRunProgress, func(value protocol.FaceRunProgress) bool {
+		return value.RunID == cancelApproval.RunID
+	})
+	if progress.Kind != protocol.ProgressStdout || !strings.Contains(progress.Data, "process-progress") {
+		t.Fatalf("foreground run progress = %+v", progress)
+	}
 	cancelRun(t, faceA, "cancel-running-run", conversationID, cancelApproval.RunID)
 	cancelChanged := awaitRunStatus(t, faceB, cancelApproval.RunID, protocol.RunCancelled)
 	cancelChatResult := awaitResult(t, faceA, cancelRequestID)
@@ -196,6 +223,15 @@ func TestFaceAlphaRealProcessE2E(t *testing.T) {
 	backgroundRunView := getRun(t, faceA, "get-background-run", conversationID, taskApproval.RunID)
 	if backgroundRunView.RunID != terminalTask.TaskID || backgroundRunView.Status != protocol.RunSucceeded {
 		t.Fatalf("background run view = %+v, task = %+v", backgroundRunView, terminalTask)
+	}
+	messagePage := getConversationMessages(t, faceA, "messages-final", conversationID, 0, protocol.MaxFaceMessageListLimit)
+	if messagePage.HasMore || len(messagePage.Messages) != len(finalSnapshot.Messages) {
+		t.Fatalf("message page = %d messages, snapshot = %d, more=%t", len(messagePage.Messages), len(finalSnapshot.Messages), messagePage.HasMore)
+	}
+	for _, message := range messagePage.Messages {
+		if (message.Content == simplePrompt || message.Content == simpleAnswer) && message.RequestID != simpleRequestID {
+			t.Fatalf("simple message request binding = %+v", message)
+		}
 	}
 
 	writeFaceConfig(t, fixture.faceConfig["face-tui"], ready.WSURL, fixture.credentials["face-tui"], "tui")
@@ -257,12 +293,12 @@ func prepareProcessFixture(t *testing.T, root string) processFixture {
 	faceScopes := map[string][]protocol.FaceScope{
 		"face-a": {
 			protocol.FaceScopeChat, protocol.FaceScopeSessionsRead, protocol.FaceScopeSessionsWrite,
-			protocol.FaceScopeRunsRead, protocol.FaceScopeRunsCancel, protocol.FaceScopeHandsRead,
+			protocol.FaceScopeRunsRead, protocol.FaceScopeRunsCancel, protocol.FaceScopeRunsOutput, protocol.FaceScopeHandsRead,
 			protocol.FaceScopeTasksRead,
 		},
 		"face-b": {
 			protocol.FaceScopeChat, protocol.FaceScopeSessionsRead, protocol.FaceScopeRunsRead,
-			protocol.FaceScopeHandsRead, protocol.FaceScopeTasksRead,
+			protocol.FaceScopeRunsOutput, protocol.FaceScopeHandsRead, protocol.FaceScopeTasksRead,
 		},
 		"face-c":   {protocol.FaceScopeSessionsRead, protocol.FaceScopeApprove},
 		"face-tui": {protocol.FaceScopeSessionsRead},
@@ -336,7 +372,9 @@ func scriptedFixture() string {
 	fixture := map[string]any{
 		"version": 1,
 		"steps": []any{
-			scriptStep("user", simplePrompt, "", map[string]any{"content": simpleAnswer}),
+			scriptStep("user", simplePrompt, "", map[string]any{
+				"content": simpleAnswer, "deltas": []string{"persisted ", "answer"},
+			}),
 			scriptStep("user", markerPrompt, "", toolResponse("list-hands", "list_hands", map[string]any{})),
 			scriptStep("tool", "", "list-hands", toolResponse("hand-info", "get_hand_info", map[string]any{"hand_id": handID})),
 			scriptStep("tool", "", "hand-info", toolResponse("marker-write", "use_hand", map[string]any{
@@ -346,7 +384,7 @@ func scriptedFixture() string {
 			scriptStep("tool", "", "marker-write", map[string]any{"content": markerAnswer}),
 			scriptStep("user", cancelPrompt, "", toolResponse("cancel-run", "use_hand", map[string]any{
 				"hand_id": handID, "tool": "exec_command", "confirm": true, "timeout_ms": 60000,
-				"args": map[string]any{"command": "sleep 30"},
+				"args": map[string]any{"command": "printf process-progress; sleep 30"},
 			})),
 			scriptStep("tool", "", "cancel-run", map[string]any{"content": cancelAnswer}),
 			scriptStep("user", taskPrompt, "", toolResponse("background-run", "use_hand", map[string]any{
@@ -477,10 +515,17 @@ func requestSnapshot(t *testing.T, face *faceClient, requestID, conversationID s
 	return snapshot
 }
 
-func subscribe(t *testing.T, face *faceClient, requestID, conversationID string, eventTypes []protocol.FaceEventType) {
+func subscribe(
+	t *testing.T,
+	face *faceClient,
+	requestID, conversationID string,
+	eventTypes []protocol.FaceEventType,
+	transientTypes ...protocol.FaceTransientType,
+) {
 	t.Helper()
 	face.send(t, protocol.TypeFaceSubscribe, protocol.FaceSubscribe{
 		RequestID: requestID, ConversationIDs: []string{conversationID}, EventTypes: eventTypes,
+		TransientTypes: transientTypes,
 	})
 	awaitAccepted(t, face, requestID, protocol.FaceOperationSubscribe)
 }
@@ -499,6 +544,70 @@ func requireChatResult(t *testing.T, result protocol.FaceResult, content string)
 	if result.Status != protocol.FaceResultSucceeded || result.Content != content || len(result.Data) != 0 {
 		t.Fatalf("Chat result = %+v, want content %q", result, content)
 	}
+}
+
+func requireChatStream(t *testing.T, face *faceClient, requestID, content string, responseCount int) {
+	t.Helper()
+	var reconstructed strings.Builder
+	var lastSeq int64
+	for reconstructed.Len() < len(content) {
+		delta := awaitPayload(t, face, protocol.TypeFaceChatDelta, func(value protocol.FaceChatDelta) bool {
+			return value.RequestID == requestID
+		})
+		if delta.ResponseIndex < 1 || delta.ResponseIndex > responseCount {
+			t.Fatalf("Chat delta response index = %d, response count = %d", delta.ResponseIndex, responseCount)
+		}
+		if delta.Seq != lastSeq+1 || delta.Offset != int64(reconstructed.Len()) {
+			t.Fatalf("Chat delta ordering = seq %d offset %d, want seq %d offset %d", delta.Seq, delta.Offset, lastSeq+1, reconstructed.Len())
+		}
+		lastSeq = delta.Seq
+		reconstructed.WriteString(delta.Delta)
+		if reconstructed.Len() > len(content) || !strings.HasPrefix(content, reconstructed.String()) {
+			t.Fatalf("Chat delta content = %q, want prefix of %q", reconstructed.String(), content)
+		}
+	}
+	end := awaitPayload(t, face, protocol.TypeFaceChatStreamEnd, func(value protocol.FaceChatStreamEnd) bool {
+		return value.RequestID == requestID
+	})
+	if reconstructed.String() != content || end.LastSeq != lastSeq || end.ResponseCount != responseCount ||
+		!end.Complete || end.Status != protocol.FaceResultSucceeded {
+		t.Fatalf("Chat stream = content %q end %+v, want content %q last seq %d responses %d", reconstructed.String(), end, content, lastSeq, responseCount)
+	}
+}
+
+func getChatStream(t *testing.T, face *faceClient, requestID, conversationID, targetRequestID string) protocol.ChatStreamGetResult {
+	t.Helper()
+	face.send(t, protocol.TypeFaceChatStreamGet, protocol.FaceChatStreamGet{
+		RequestID: requestID, ConversationID: conversationID, TargetRequestID: targetRequestID,
+	})
+	awaitAccepted(t, face, requestID, protocol.FaceOperationChatStreamGet)
+	result := awaitResult(t, face, requestID)
+	requireSuccessfulResult(t, result, protocol.FaceOperationChatStreamGet)
+	data, err := protocol.StrictDecode[protocol.ChatStreamGetResult](result.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func getConversationMessages(
+	t *testing.T,
+	face *faceClient,
+	requestID, conversationID string,
+	beforeSeq, limit int,
+) protocol.ConversationMessagesResult {
+	t.Helper()
+	face.send(t, protocol.TypeFaceConversationMessages, protocol.FaceConversationMessages{
+		RequestID: requestID, ConversationID: conversationID, BeforeSeq: beforeSeq, Limit: limit,
+	})
+	awaitAccepted(t, face, requestID, protocol.FaceOperationConversationMessages)
+	result := awaitResult(t, face, requestID)
+	requireSuccessfulResult(t, result, protocol.FaceOperationConversationMessages)
+	data, err := protocol.StrictDecode[protocol.ConversationMessagesResult](result.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 func requireSnapshotContents(t *testing.T, snapshot protocol.ConversationSnapshot, contents ...string) {

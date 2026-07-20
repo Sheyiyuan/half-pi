@@ -38,6 +38,8 @@ func (t *terminal) handleInput(raw string) error {
 		return t.openConversation(argument)
 	case "/snapshot":
 		return t.openConversation(t.active)
+	case "/messages":
+		return t.listMessages(argument)
 	case "/rename":
 		if argument == "" {
 			return fmt.Errorf("usage: /rename <name>")
@@ -83,6 +85,15 @@ func (t *terminal) handleInput(raw string) error {
 	}
 }
 
+func (t *terminal) getCapabilities() error {
+	requestID, err := t.nextRequestID()
+	if err != nil {
+		return err
+	}
+	return t.send(requestID, protocol.TypeFaceCapabilitiesGet,
+		protocol.FaceCapabilitiesGet{RequestID: requestID}, protocol.FaceOperationCapabilitiesGet)
+}
+
 func (t *terminal) listConversations() error {
 	requestID, err := t.nextRequestID()
 	if err != nil {
@@ -114,14 +125,104 @@ func (t *terminal) openConversation(conversationID string) error {
 		protocol.FaceOperationConversationSnapshot)
 }
 
-func (t *terminal) subscribe(conversationID string) error {
+func (t *terminal) subscribe(conversationID string, recoverChatIDs ...string) error {
 	requestID, err := t.nextRequestID()
 	if err != nil {
 		return err
 	}
-	return t.send(requestID, protocol.TypeFaceSubscribe,
-		protocol.FaceSubscribe{RequestID: requestID, ConversationIDs: []string{conversationID}},
-		protocol.FaceOperationSubscribe)
+	transients := make([]protocol.FaceTransientType, 0, 2)
+	if t.hasFeature(protocol.FaceFeatureChatStream) && t.hasScope(protocol.FaceScopeSessionsRead) {
+		transients = append(transients, protocol.FaceTransientChatDelta)
+	}
+	if t.hasFeature(protocol.FaceFeatureRunProgress) && t.hasScope(protocol.FaceScopeRunsOutput) {
+		transients = append(transients, protocol.FaceTransientRunProgress)
+	}
+	if err := t.send(requestID, protocol.TypeFaceSubscribe,
+		protocol.FaceSubscribe{RequestID: requestID, ConversationIDs: []string{conversationID}, TransientTypes: transients},
+		protocol.FaceOperationSubscribe); err != nil {
+		return err
+	}
+	pending := t.pending[requestID]
+	pending.recoverConversationID = conversationID
+	pending.recoverChatIDs = append([]string(nil), recoverChatIDs...)
+	t.pending[requestID] = pending
+	return nil
+}
+
+func (t *terminal) listMessages(argument string) error {
+	if t.active == "" {
+		return fmt.Errorf("open a conversation first")
+	}
+	parts := strings.Fields(argument)
+	if len(parts) > 2 {
+		return fmt.Errorf("usage: /messages [before_seq] [limit]")
+	}
+	before, limit := 0, 0
+	var err error
+	if len(parts) > 0 {
+		before, err = strconv.Atoi(parts[0])
+		if err != nil {
+			return fmt.Errorf("invalid message sequence")
+		}
+	}
+	if len(parts) > 1 {
+		limit, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return fmt.Errorf("invalid message limit")
+		}
+	}
+	requestID, err := t.nextRequestID()
+	if err != nil {
+		return err
+	}
+	return t.send(requestID, protocol.TypeFaceConversationMessages, protocol.FaceConversationMessages{
+		RequestID: requestID, ConversationID: t.active, BeforeSeq: before, Limit: limit,
+	}, protocol.FaceOperationConversationMessages)
+}
+
+func (t *terminal) recoverChat(conversationID, targetRequestID string) error {
+	stream := t.stream(targetRequestID)
+	if stream.recovering {
+		return nil
+	}
+	stream.recovering = true
+	requestID, err := t.nextRequestID()
+	if err != nil {
+		stream.recovering = false
+		return err
+	}
+	if err := t.send(requestID, protocol.TypeFaceChatStreamGet, protocol.FaceChatStreamGet{
+		RequestID: requestID, ConversationID: conversationID, TargetRequestID: targetRequestID,
+	}, protocol.FaceOperationChatStreamGet); err != nil {
+		stream.recovering = false
+		return err
+	}
+	pending := t.pending[requestID]
+	pending.targetRequestID = targetRequestID
+	t.pending[requestID] = pending
+	return nil
+}
+
+func (t *terminal) hasFeature(feature protocol.FaceFeature) bool {
+	_, ok := t.features[feature]
+	return ok
+}
+
+func (t *terminal) hasScope(scope protocol.FaceScope) bool {
+	_, ok := t.scopes[scope]
+	return ok
+}
+
+func (t *terminal) stream(requestID string) *chatStreamView {
+	if t.streams == nil {
+		t.streams = make(map[string]*chatStreamView)
+	}
+	stream := t.streams[requestID]
+	if stream == nil {
+		stream = &chatStreamView{responses: make(map[int]string)}
+		t.streams[requestID] = stream
+	}
+	return stream
 }
 
 func (t *terminal) renameConversation(name string) error {
@@ -306,7 +407,7 @@ func (t *terminal) cancelTask(taskID string) error {
 }
 
 func (t *terminal) renderHelp() {
-	t.line("/list  /create <name>  /open <conversation_id>  /snapshot  /rename <name>")
+	t.line("/list  /create <name>  /open <conversation_id>  /snapshot  /messages [before] [limit]  /rename <name>")
 	t.line("/hands  /hand <id>  /run <id>  /run-cancel <id>")
 	t.line("/tasks  /task <id>  /task-log <id> [offset] [limit]  /task-cancel <id>")
 	t.line("/approve <id> <allow_once|deny_once|allow_session|deny_session> [reason]")

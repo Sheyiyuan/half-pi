@@ -31,6 +31,7 @@ type Run struct {
 	ProgressSeq    int64
 	ProgressBytes  int64
 	ProgressEvents int
+	DurableTask    bool
 
 	done    chan struct{}
 	waiters int
@@ -144,6 +145,9 @@ func (r *Registry) createForPeer(id, sessionID, handID, connectionID, tool strin
 	run := &Run{
 		ID: id, SessionID: sessionID, HandID: handID, ConnectionID: connectionID, Tool: tool,
 		Status: protocol.RunCreated, CreatedAt: time.Now(), Metadata: metadata, done: make(chan struct{}),
+	}
+	if task != nil {
+		run.DurableTask = true
 	}
 	if r.auditor != nil {
 		auditRun := AuditRun{

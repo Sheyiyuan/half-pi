@@ -80,46 +80,6 @@ func (s *Store) GetMessageCount(sessionID string) (int, error) {
 	return count, nil
 }
 
-// ReplaceMessages deletes all messages in a session and inserts new ones in a single transaction.
-func (s *Store) ReplaceMessages(sessionID string, messages []Message) error {
-	if sessionID == "" {
-		return fmt.Errorf("sessionID cannot be empty")
-	}
-	tx, err := s.db.Begin()
-	if err != nil {
-		return fmt.Errorf("begin tx: %w", err)
-	}
-	defer tx.Rollback()
-
-	if _, err := tx.Exec(`DELETE FROM messages WHERE session_id = ?`, sessionID); err != nil {
-		return fmt.Errorf("delete messages: %w", err)
-	}
-
-	if len(messages) > 0 {
-		stmt, err := tx.Prepare(
-			`INSERT INTO messages (session_id, role, content, tool_id, tool_calls, seq) VALUES (?, ?, ?, ?, ?, ?)`,
-		)
-		if err != nil {
-			return fmt.Errorf("prepare: %w", err)
-		}
-		defer stmt.Close()
-
-		for _, m := range messages {
-			if _, err := stmt.Exec(sessionID, m.Role, m.Content, m.ToolID, m.ToolCalls, m.Seq); err != nil {
-				return fmt.Errorf("insert message: %w", err)
-			}
-		}
-	}
-	result, err := tx.Exec(`UPDATE sessions SET updated_at = datetime('now') WHERE id = ?`, sessionID)
-	if err != nil {
-		return fmt.Errorf("touch session: %w", err)
-	}
-	if err := requireSessionUpdated(result, sessionID); err != nil {
-		return err
-	}
-	return tx.Commit()
-}
-
 func getSession(db *sql.DB, id string) (*Session, error) {
 	row := db.QueryRow(
 		`SELECT id, group_id, name, description, soul_path, mode, active_hand, created_at, updated_at

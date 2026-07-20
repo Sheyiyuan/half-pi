@@ -16,6 +16,7 @@ var validFaceScopes = map[protocol.FaceScope]struct{}{
 	protocol.FaceScopeSessionsWrite: {},
 	protocol.FaceScopeRunsRead:      {},
 	protocol.FaceScopeRunsCancel:    {},
+	protocol.FaceScopeRunsOutput:    {},
 	protocol.FaceScopeApprove:       {},
 	protocol.FaceScopeHandsRead:     {},
 	protocol.FaceScopeTasksRead:     {},

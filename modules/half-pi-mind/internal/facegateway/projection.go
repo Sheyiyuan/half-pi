@@ -71,10 +71,7 @@ func (g *Gateway) snapshot(identity protocol.FaceIdentity, conversationID string
 		snapshot.PendingApprovals = pending
 	}
 	for _, message := range messages {
-		snapshot.Messages = append(snapshot.Messages, protocol.FaceMessage{
-			ID: message.ID, Role: message.Role, Content: message.Content,
-			ToolID: message.ToolID, Seq: message.Seq, CreatedAt: message.CreatedAt,
-		})
+		snapshot.Messages = append(snapshot.Messages, projectMessage(message))
 	}
 	if hasScope(identity, protocol.FaceScopeTasksRead) {
 		tasks, err := g.tasks.List(conversationID)
@@ -85,6 +82,13 @@ func (g *Gateway) snapshot(identity protocol.FaceIdentity, conversationID string
 		snapshot.TaskHistoryLimit = protocol.DefaultFaceTaskHistoryLimit
 	}
 	return snapshot, nil
+}
+
+func projectMessage(message store.Message) protocol.FaceMessage {
+	return protocol.FaceMessage{
+		ID: message.ID, Role: message.Role, Content: message.Content, RequestID: message.RequestID,
+		ToolID: message.ToolID, Seq: message.Seq, CreatedAt: message.CreatedAt,
+	}
 }
 
 func (g *Gateway) activeRuns(conversationID string) ([]protocol.RemoteRunSummary, error) {

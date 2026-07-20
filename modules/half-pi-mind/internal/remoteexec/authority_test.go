@@ -185,6 +185,10 @@ func TestAuthorityPublishesOnlyAcceptedProgress(t *testing.T) {
 	writer := &authorityEventWriter{}
 	bus.Subscribe(writer)
 	authority := NewAuthority(hub.New(), registry, bus)
+	var observations []ProgressObservation
+	authority.OnProgress(func(observation ProgressObservation) {
+		observations = append(observations, observation)
+	})
 	createSentRun(t, registry, "progress-run", "hand-1")
 	peer := &hub.Peer{ID: "hand-1", Type: hub.PeerHand}
 	early, _ := protocol.NewEnvelope("", protocol.TypeRPCProgress, protocol.RPCProgress{
@@ -228,6 +232,10 @@ func TestAuthorityPublishesOnlyAcceptedProgress(t *testing.T) {
 	}
 	if gapped.Seq != 3 || !gapped.Gap || gapped.Data != "data" {
 		t.Fatalf("gapped event data = %+v", gapped)
+	}
+	if len(observations) != 2 || observations[0].Progress.Seq != 1 || observations[0].Gap ||
+		observations[1].Progress.Seq != 3 || !observations[1].Gap || observations[1].Run.ID != "progress-run" {
+		t.Fatalf("progress observations = %+v", observations)
 	}
 }
 

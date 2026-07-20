@@ -129,6 +129,7 @@ func ExpandProfile(profile string) ([]protocol.FaceScope, error) {
 			protocol.FaceScopeSessionsWrite,
 			protocol.FaceScopeRunsRead,
 			protocol.FaceScopeRunsCancel,
+			protocol.FaceScopeRunsOutput,
 			protocol.FaceScopeApprove,
 			protocol.FaceScopeHandsRead,
 			protocol.FaceScopeTasksRead,

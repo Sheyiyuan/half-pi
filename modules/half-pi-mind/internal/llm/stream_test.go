@@ -141,6 +141,43 @@ func TestStreamingCallbackErrorStopsProvider(t *testing.T) {
 	}
 }
 
+func TestStreamingRequestHonorsContextCancellation(t *testing.T) {
+	requestStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "text/event-stream")
+		writer.WriteHeader(http.StatusOK)
+		writer.(http.Flusher).Flush()
+		close(requestStarted)
+		<-request.Context().Done()
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		_, err := ChatWithStreaming(ctx, NewOpenAI(server.URL, "secret", "model"), &LLMRequest{}, nil)
+		result <- err
+	}()
+	<-requestStarted
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled stream error = %v", err)
+	}
+}
+
+func TestStreamingProviderErrorBodyIsBounded(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadGateway)
+		_, _ = io.WriteString(writer, strings.Repeat("sensitive", maxProviderErrorBody))
+	}))
+	defer server.Close()
+
+	_, err := ChatWithStreaming(context.Background(), NewOpenAI(server.URL, "secret", "model"), &LLMRequest{}, nil)
+	if err == nil || !strings.Contains(err.Error(), "response body exceeded limit") || strings.Contains(err.Error(), "sensitive") {
+		t.Fatalf("bounded provider error = %v", err)
+	}
+}
+
 func TestChatWithStreamingSyncFallback(t *testing.T) {
 	provider := &syncOnlyProvider{response: LLMResponse{Content: "complete"}}
 	var deltas []string
