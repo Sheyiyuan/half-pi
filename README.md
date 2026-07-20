@@ -243,9 +243,11 @@ make lint        # golangci-lint
 | 文档 | 内容 |
 | --- | --- |
 | [`docs/face-protocol.md`](docs/face-protocol.md) | Face 正式协议、鉴权、快照、审批与事件投影 |
+| [`docs/face-streaming-protocol.md`](docs/face-streaming-protocol.md) | Face 流式传输、背压、恢复与终态语义 |
 | [`docs/ai-face-protocol.md`](docs/ai-face-protocol.md) | AI/Headless Face 客户端接入指南 |
 | [`docs/remote-execution-closed-loop.md`](docs/remote-execution-closed-loop.md) | Mind → Hand 远程执行闭环架构 |
 | [`docs/mind-management-cli.md`](docs/mind-management-cli.md) | Mind 本地管理 CLI、在线 IPC 与离线管理 |
+| [`docs/README.md`](docs/README.md) | 完整文档索引、归档入口与维护约定 |
 | [`AGENTS.md`](AGENTS.md) | 项目规范、约定与进度追踪 |
 
 ### 许可

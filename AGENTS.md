@@ -307,11 +307,13 @@ make test         # 运行全部 5 个模块的测试
 - WinBoat Windows 11 Pro 原生验收已通过：七组 race 测试、named pipe handle DACL、`LockFileEx`、run/lock DACL、离线创建、在线 CRUD 和 Hub-disabled 管理链路均成功
 
 ##### 设计文档
+- `docs/README.md` — 当前文档索引、归档入口与维护约定
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
+- `docs/face-streaming-protocol.md` — Face revision 2 流式传输、背压、恢复和终态语义
 - `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（客户端、Mind runtime 与进程 E2E 可用）
 - `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
 - `docs/mind-management-cli.md` — Mind 本地管理 CLI、在线 IPC、离线 Store 与状态锁设计/实现记录
-- `docs/archived/README.md` — 已完成或被替代设计的归档索引
+- `docs/archived/README.md` — 已完成、被替代或仅供决策追溯的设计文档索引
 
 #### ⏳ 待完成
 - [ ] Skill → 工作区集成（SessionGroup 过滤）

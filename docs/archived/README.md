@@ -1,15 +1,6 @@
 # 已归档设计文档
 
-本目录保存已经完成、被后续设计取代或仅用于追溯决策的文档。它们不是当前实施入口；现行协议和待实现设计以 `docs/` 根目录中的活动文档为准。
-
-## 当前文档
-
-| 文档 | 用途 |
-|---|---|
-| [`../face-protocol.md`](../face-protocol.md) | Face 正式协议与 Alpha runtime 设计 |
-| [`../ai-face-protocol.md`](../ai-face-protocol.md) | AI/Headless Face 接入指南 |
-| [`../remote-execution-closed-loop.md`](../remote-execution-closed-loop.md) | Mind → Hand 远程执行闭环架构 |
-| [`../mind-management-cli.md`](../mind-management-cli.md) | 待实现的 Mind 本地管理 CLI、IPC 与离线管理设计 |
+本目录保存已经完成、被后续设计取代或仅用于追溯决策的文档。它们不是当前实施入口；现行协议、接入指南和运维说明见 [`docs/README.md`](../README.md)。
 
 ## 归档目录
 
@@ -25,5 +16,6 @@
 | [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md) | 远程执行 Phase 0-5 实施与验收已经完成 |
 | [`face-core-closure-plan.md`](face-core-closure-plan.md) | Face wire、身份与加密收口实施已经完成 |
 | [`next-development-plan.md`](next-development-plan.md) | Face Alpha P0-P4 与远程执行 R0-R3 收尾已经完成 |
+| [`face-tui-design.md`](face-tui-design.md) | 全屏 Face TUI 的 T1-T4 产品与实施规格已经落地 |
 
-归档文档中的阶段性限制和未来时态应按其历史时间点理解；当前能力声明以活动文档和仓库代码为准。
+归档文档中的阶段性限制和未来时态应按其历史时间点理解；当前能力声明以活动文档和仓库代码为准。Windows ConPTY、macOS PTY 等尚未完成的发布环境验收继续由 [`AGENTS.md`](../../AGENTS.md) 跟踪，不会使已完成的实施规格重新成为活动文档。
