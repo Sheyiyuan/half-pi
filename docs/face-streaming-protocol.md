@@ -320,9 +320,9 @@ face.result
 | Gateway | `modules/half-pi-mind/internal/facegateway/chat_stream.go`、`chat_registry.go`、`commands.go` |
 | Transport | `modules/half-pi-mind/internal/facegateway/outbound.go`、`gateway.go` |
 | Run | `modules/half-pi-mind/internal/remoteexec/authority.go`、`registry.go` |
-| Terminal Face | `modules/half-pi-face/internal/tui/runner.go`、`commands.go`、`output.go` |
+| Terminal Face | `modules/half-pi-face/internal/tui/app.go`、`reducer.go`、`requests.go`、`view.go` |
 
-Headless Face 继续严格透传所有正式 server message；terminal Face 在注册后查询 capability，只在服务端声明 feature 且当前 identity 具有对应 scope 时订阅瞬时流。
+Headless Face 继续严格透传所有正式 server message；全屏 terminal Face 在注册后查询 capability，只在服务端声明 feature 且当前 identity 具有对应 scope 时订阅瞬时流。
 
 ## 15. 验收矩阵
 

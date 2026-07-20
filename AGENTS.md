@@ -286,6 +286,14 @@ make test         # 运行全部 5 个模块的测试
 - 真实进程 E2E 使用动态端口、临时 HOME/SQLite/工作目录和 Scripted LLM，构建并运行 `-race` Mind/Hand/Face 二进制
 - E2E 覆盖多 Face 持久化恢复、request replay/conflict、run-bound 审批、远程取消、后台 task 对账、终端 REPL 一致性与脱敏审计
 
+##### Face 全屏 TUI
+- Bubble Tea 单 reducer 全屏工作台，支持 Wide/Standard/Compact/Short 响应式布局、alternate screen、稳定 chat viewport 和多行 composer
+- 默认本地新对话草稿，首次发送自动执行 create → subscribe → snapshot → Chat；delta 原地聚合，终态使用 Glamour Markdown
+- conversation picker、独立草稿、消息分页、输入历史搜索、typed command registry、补全、palette 与键鼠路由
+- Approvals/Runs/Tasks/Hands 权限感知 Activity；审批默认 deny once，foreground progress 与 durable task log 严格分离
+- Connector 持有凭据，连接按 generation 隔离并自动退避重连；Chat 使用原 request ID replay，非幂等 mutation 只对账不自动重发
+- `mode=tui` 非交互 stdin/stdout 明确失败并提示 `--mode headless`；旧行式 renderer 已删除，Headless JSONL 保持兼容
+
 ##### Mind 本地管理 CLI
 - `half-pi-mind config init|path|validate|show`
 - `half-pi-mind face add|list|remove`，支持 `--scopes` 或 `--profile observer|operator`
@@ -306,10 +314,10 @@ make test         # 运行全部 5 个模块的测试
 - `docs/archived/README.md` — 已完成或被替代设计的归档索引
 
 #### ⏳ 待完成
-- [ ] 真正的全屏交互式 Face TUI（当前人类终端 Face 为行式 REPL）
 - [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
 - [ ] Windows 原生凭据/config/database ACL 发布环境验收
+- [ ] Windows ConPTY 与 macOS PTY 的全屏 TUI 原生发布验收
 
 ---
 
@@ -454,3 +462,4 @@ make test         # 运行全部 5 个模块的测试
 1. 实现 `/compact` 上下文压缩
 2. 完成 Skill → 工作区集成
 3. 在发布环境验收 Windows 凭据/config/database ACL
+4. 完成 Windows ConPTY 与 macOS PTY 的全屏 TUI 原生发布验收

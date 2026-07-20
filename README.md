@@ -74,8 +74,7 @@
   - [x] Unix 杀进程组，Windows Job Object 杀进程树
   - [x] 自动重连，指数退避
 - [x] **你在哪她就在哪，如影随形**——同一个 Mind 支持多个 Face 同时在线
-  - [x] 终端 Face（行式交互）——当前可用的远程人类入口
-  - [ ] 全屏交互式 TUI——更完整的终端工作台
+  - [x] 全屏交互式 TUI——响应式聊天、审批、run/task、恢复与鼠标操作
   - [x] Headless JSONL——适合 AI 客户端和自动化接入
   - [ ] WebUI——浏览器就是你的 Face
   - [ ] IM Bot——微信、QQ、Telegram 都能叫她
@@ -140,12 +139,13 @@ LLM_DEEPSEEK_API_KEY="sk-xxx" ./bin/half-pi-mind
 ./bin/half-pi-face --server ws://127.0.0.1:15707/ws --token <face-token> --application-key <face-key> --id terminal --mode tui
 ```
 
-终端 Face 中先创建 conversation，再直接输入消息：
+终端 Face 会直接打开本地新对话草稿。输入第一条消息后，它会自动创建、订阅并恢复 conversation：
 
 ```
-/create first-chat
 读取 my-pc 上的 README.md，并告诉我项目当前状态
 ```
+
+`--mode tui` 要求 stdin/stdout 都是交互式终端；管道和 Agent 集成使用 `--mode headless`。
 
 Face 和 Hand 都可以把 `127.0.0.1` 换成 Mind 的远程真实地址。
 
@@ -161,7 +161,7 @@ Face 和 Hand 都可以把 `127.0.0.1` 换成 Mind 的远程真实地址。
 flowchart LR
     subgraph Faces["Faces · 无状态交互入口"]
         Web["Web / 浏览器"]
-        TUI["终端 REPL"]
+        TUI["全屏终端工作台"]
         IM["IM / 手机"]
         Agent["无头 Agent"]
     end
@@ -193,7 +193,7 @@ modules/
 ├── gateway-core/   # WebSocket 协议、会话、Hub 和加密原语
 ├── half-pi-core/   # 工具、执行器、安全策略和事件系统
 ├── half-pi-mind/   # LLM、会话、技能、存储和设备调度
-├── half-pi-face/   # Headless JSONL 与终端交互入口
+├── half-pi-face/   # Headless JSONL 与全屏终端工作台
 └── half-pi-hand/   # 远程执行节点
 ```
 

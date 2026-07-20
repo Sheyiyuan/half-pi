@@ -1,10 +1,10 @@
 # Face 全屏 TUI 设计
 
-> 状态：设计完成，待实现。本文定义 `half-pi-face` 人类终端模式的产品行为、技术选型、状态模型、响应式布局、输入系统、流式渲染、鼠标与触控边界，以及分阶段验收标准。现有 Headless JSONL 客户端和 Face wire protocol 保持不变。
+> 状态：T1-T4 已实现。Linux 构建、race、reducer、布局和输入测试已通过；Windows ConPTY 与 macOS PTY 原生发布矩阵仍需在对应平台验收。现有 Headless JSONL 客户端和 Face wire protocol 保持不变。
 
 ## 1. 背景
 
-当前 `face.mode = "tui"` 实际运行的是行式 REPL。它已经证明正式 Face 协议可以完成 conversation、Chat、审批、run 和 task 工作流，但不适合作为最终人类界面：
+实现前的 `face.mode = "tui"` 实际运行的是行式 REPL。它证明了正式 Face 协议可以完成 conversation、Chat、审批、run 和 task 工作流，但不适合作为最终人类界面：
 
 - 启动后停留在 `no conversation`，用户必须理解并手动输入 conversation ID。
 - `accepted`、`chat.started`、`conversation.changed` 和 request ID 等协议细节直接进入主输出。
@@ -14,6 +14,8 @@
 - 鼠标、响应式布局、多行编辑、输入历史和命令补全均不存在。
 
 新 TUI 必须被视为独立产品层。协议消息只更新 UI 状态，不能直接打印到终端。
+
+当前实现位于 `modules/half-pi-face/internal/tui/`。`app.go` 是唯一可见状态 reducer，`network.go` 只产生带 connection generation 的 Bubble Tea 消息，`requests.go` 复用并预校验正式 DTO，`view.go` 负责固定矩形与终态 Markdown 渲染。`--mode tui` 对非 TTY stdin/stdout 明确失败；`--mode headless` 保持单连接严格 JSONL。
 
 ## 2. 目标
 

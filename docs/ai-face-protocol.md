@@ -2,7 +2,7 @@
 
 ## 状态
 
-本文面向 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1-P4 Face runtime、应用协议 revision 2 流式增强、JSONL Headless 客户端和共用协议的人类终端 REPL 已实现并通过 race 测试。当前可使用 capability、conversation/Hand/run/task 查询、快照、消息分页、订阅、可恢复 Chat 流、foreground run progress、Chat/cancel、异步审批和 run/task cancel；真实 Mind/Hand/Headless/终端 REPL 进程级 E2E 已完成。真正的全屏交互式 TUI 尚未实现。
+本文面向 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1-P4 Face runtime、应用协议 revision 2 流式增强、JSONL Headless 客户端和共用协议的全屏人类终端工作台已实现。当前可使用 capability、conversation/Hand/run/task 查询、快照、消息分页、订阅、可恢复 Chat 流、foreground run progress、Chat/cancel、异步审批和 run/task cancel。Headless 行为保持严格 JSONL；TUI 只消费相同的正式 `face.*` 协议，不存在 UI 专用旁路。
 
 v2 握手已在 WinBoat Windows 11 Pro AMD64 原生运行 gateway/Mind race 测试及 Mind/Hand/Face 进程链路，验证 encrypted `registered`、双 peer 在线、撤销断连和输出秘密扫描；Windows `386/amd64/arm64` 交叉编译同时通过。更新后的官方 `scripts/test-windows.ps1 -PrebuiltDir` 使用当前源码执行，11 组测试全部 PASS 且 stderr 为空。
 
