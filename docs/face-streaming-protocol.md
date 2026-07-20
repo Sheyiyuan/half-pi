@@ -1,6 +1,6 @@
 # Face 流式协议与可恢复传输设计
 
-> 状态：实施中。本文定义 Half-Pi Face 流式传输的目标协议、状态机、背压、恢复、持久化和验收要求。现有 v2 四步加密握手保持不变；本文只演进注册完成后的 Face 应用协议。
+> 状态：已实现（2026-07-20）。本文定义 Half-Pi Face 流式传输的正式协议、状态机、背压、恢复、持久化和验收要求。现有 v2 四步加密握手保持不变；本文只演进注册完成后的 Face 应用协议。
 
 ## 1. 目标
 
@@ -309,16 +309,20 @@ face.result
 - 所有字符串执行 UTF-8、字节上限和枚举校验；客户端渲染前仍需移除 C0/C1/ANSI 控制字符。
 - 日志不得记录 delta 正文、工具参数、token、application key 或 SSE 原始错误 body。受保护 debug 日志也只记录长度、序号和稳定错误类别。
 
-## 14. 实施阶段
+## 14. 实现映射
 
-1. Protocol：DTO、枚举、验证、capability、订阅和分页 contract。
-2. Provider：公共 SSE decoder，OpenAI/Anthropic/Gemini 原生流，Scripted fixture。
-3. Core/Store：response hook、append-only 消息、request binding、稳定分页。
-4. Gateway：stream registry、聚合、多 Face 广播、stream.get、终止屏障。
-5. Transport：双级 scheduler、byte/item 限额、slow Face 隔离。
-6. Run：Authority progress hook、scope 和 `face.run.progress` 投影。
-7. Clients：Headless 严格透传；terminal Face 流式渲染并以 result 校正。
-8. Verification：protocol/provider/core/store/gateway/client race、真实加密进程 E2E、慢连接/断线/重连/多 Face/工具循环测试。
+| 层 | 主要实现 |
+|---|---|
+| Protocol | `modules/gateway-core/protocol/face.go`、`face_validate.go` |
+| Provider | `modules/half-pi-mind/internal/llm/sse.go`、`openai.go`、`anthropic.go`、`gemini.go` |
+| Core | `modules/half-pi-mind/internal/agentcore/chat.go`、`chat_hooks.go` |
+| Store | `modules/half-pi-mind/internal/store/message.go`、`store.go` |
+| Gateway | `modules/half-pi-mind/internal/facegateway/chat_stream.go`、`chat_registry.go`、`commands.go` |
+| Transport | `modules/half-pi-mind/internal/facegateway/outbound.go`、`gateway.go` |
+| Run | `modules/half-pi-mind/internal/remoteexec/authority.go`、`registry.go` |
+| Terminal Face | `modules/half-pi-face/internal/tui/runner.go`、`commands.go`、`output.go` |
+
+Headless Face 继续严格透传所有正式 server message；terminal Face 在注册后查询 capability，只在服务端声明 feature 且当前 identity 具有对应 scope 时订阅瞬时流。
 
 ## 15. 验收矩阵
 
@@ -333,3 +337,24 @@ face.result
 - 旧客户端未协商 transient 时只收到原有五类 Face server message。
 - message ID、seq、created_at 在后续 Chat 后保持稳定；分页无重复、无跳项。
 - `go test -race -count=1 ./...` 覆盖全部五个模块，并通过真实 v2 加密链路秘密扫描。
+
+## 16. 兼容与运维
+
+- 旧 Face 不发送 `transient_types`，因此不会收到新增瞬时消息；原有 command、response 和 event 行为保持不变。
+- 新 Face 连接旧 Mind 时，`face.capabilities.get` 返回 `invalid_request` 后退回非流式模式，连接无需重建。
+- 不修改 v2 握手、`registered` 或密钥派生，Hand 与未升级 Face 不需要同步升级密码学实现。
+- SQLite 启动迁移为消息增加 `request_id` 和稳定 `(session_id, seq)` 唯一约束，保留既有消息，不重写 ID、seq 或时间。
+- 单 Chat 可恢复文本上限 2 MiB/2048 chunk；单连接 transient 队列上限 128 项/512 KiB，总队列上限 256 项/8 MiB。达到 Chat 硬上限时 Chat 明确失败；瞬时队列满只产生可检测缺口。
+- durable task 输出仍以 Hand 日志和 `face.task.log` 为权威，不进入 foreground progress 推送。
+- 排障优先检查 capability、identity scopes、`stream.end`、最终 `face.result` 和消息分页；不得依赖 delta 正文日志，因为正文按安全要求不记录。
+
+验证命令：
+
+```bash
+cd modules/gateway-core && go test -race -count=1 ./...
+cd modules/half-pi-core && go test -race -count=1 ./...
+cd modules/half-pi-mind && go test -race -count=1 ./...
+cd modules/half-pi-face && go test -race -count=1 ./...
+cd modules/half-pi-hand && go test -race -count=1 ./...
+make build
+```

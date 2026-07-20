@@ -4,11 +4,11 @@
 
 ## 状态
 
-Face Alpha P0-P4 runtime 已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、有序队列、Chat/cancel、异步审批、run/task cancel 以及结构化事件；Headless JSONL 与人类终端 Face 已通过真实 Mind/Hand/Face 进程级 E2E。AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。
+Face Alpha P0-P4 runtime 和应用协议 revision 2 流式增强已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、分级有界队列、可恢复 Chat 流、run progress、Chat/cancel、异步审批、run/task cancel 以及结构化事件；Headless JSONL 与人类终端 Face 已通过真实 Mind/Hand/Face 进程级 E2E。流式细节见 [`face-streaming-protocol.md`](face-streaming-protocol.md)，AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。
 
 2026-07-19 的 v2 安全升级已通过 Unix 五模块 race/E2E、Windows `386/amd64/arm64` 交叉编译，以及 WinBoat Windows 11 Pro AMD64 原生 protocol/wss/hub/dispatcher race 测试和 Mind/Hand/Face 进程链路。原生链路验证 version 2 encrypted `registered`、Face/Hand 同时在线、凭据撤销立即断连和日志秘密扫描；更新后的官方 `scripts/test-windows.ps1 -PrebuiltDir` 使用当前源码运行，11 组测试全部 PASS 且 stderr 为空。
 
-当前正式 command runtime 支持 Chat/cancel、conversation list/create/rename/snapshot、subscribe、approval resolve、Hand list/get、run get/cancel 和 task list/get/log/cancel。
+当前正式 command runtime 还支持 capability 查询、Chat 流恢复和 conversation 消息分页。
 
 ## 目标
 
@@ -190,8 +190,11 @@ Alpha 最小 scope：
 | `face:sessions:write` | 创建和重命名会话 |
 | `face:runs:read` | 查看远程执行 |
 | `face:runs:cancel` | 取消远程执行 |
+| `face:runs:output` | 订阅 foreground run stdout/stderr 增量 |
 | `face:approve` | 批准或拒绝操作 |
 | `face:hands:read` | 查看 Hand 与能力 |
+| `face:tasks:read` | 查看后台任务和日志 |
+| `face:tasks:cancel` | 取消后台任务，同时需要 `face:tasks:read` |
 
 约束：
 
@@ -221,10 +224,13 @@ Face 消息使用 `face.` 前缀，避免和 Hand RPC 混淆。
 ```text
 face.chat
 face.chat.cancel
+face.chat.stream.get
+face.capabilities.get
 face.conversation.list
 face.conversation.create
 face.conversation.snapshot
 face.conversation.rename
+face.conversation.messages
 face.subscribe
 face.approval.resolve
 face.run.get
@@ -245,7 +251,12 @@ face.result
 face.error
 face.snapshot
 face.event
+face.chat.delta
+face.chat.stream.end
+face.run.progress
 ```
+
+后三类是显式订阅的瞬时数据或其可靠终止屏障，不属于 `face.event`。`face.result.Content`、conversation snapshot/messages 和 run 终态始终是权威状态。
 
 `face.event` payload 中携带稳定的业务事件类型：
 
@@ -396,14 +407,17 @@ type ConversationSnapshot struct {
 
 ```go
 type FaceSubscribe struct {
-	RequestID       string   `json:"request_id"`
-	ConversationIDs []string `json:"conversation_ids,omitempty"`
-	EventTypes      []string `json:"event_types,omitempty"`
+	RequestID       string              `json:"request_id"`
+	ConversationIDs []string            `json:"conversation_ids,omitempty"`
+	EventTypes      []FaceEventType     `json:"event_types,omitempty"`
+	TransientTypes  []FaceTransientType `json:"transient_types,omitempty"`
 }
 ```
 
 - 空 conversation 列表表示订阅该身份可访问的全部会话。
 - 空事件类型表示订阅全部正式 Face Event，不包括内部 debug 日志。
+- 空瞬时类型表示不接收 Chat delta 或 run progress，保证旧客户端兼容。
+- `chat.delta` 要求 `face:sessions:read`；`run.progress` 要求 `face:runs:output`。
 - 订阅只影响增量事件，不改变 command response。
 - Face Gateway 必须先安装订阅，再返回 accepted，避免状态窗口丢失。
 
@@ -417,6 +431,8 @@ connect and authenticate
   → face.snapshot(version>=N)
   → consume face.event
 ```
+
+声明 `chat_stream_resume.v1` 的客户端在订阅安装后，对快照中的 pending Chat 调用 `face.chat.stream.get`，以 `last_seq` 为边界合并查询期间缓存的 delta。Chat 结束后改用 `face.conversation.messages` 读取 append-only 权威历史。完整算法和限额见 [`face-streaming-protocol.md`](face-streaming-protocol.md)。
 
 ## Face Event
 
@@ -537,10 +553,10 @@ Face Gateway 必须验证 run 属于该 identity 可访问的 conversation。取
 
 ### 背压
 
-- 每个连接使用固定容量队列。
-- command response、审批和终态事件不可静默丢弃。
-- debug 和可重建中间事件可优先丢弃，但应记录计数。
-- 关键事件无法入队时关闭慢连接，由客户端通过快照恢复。
+- 每个连接使用有界分级队列：可靠消息最多 256 项/8 MiB，transient 最多 128 项/512 KiB。
+- command response、审批、终态事件和 `face.chat.stream.end` 不可静默丢弃；入队前可驱逐 transient。
+- `face.chat.delta` 和 `face.run.progress` 队列满时只丢自身，客户端通过源 `seq` 检测缺口。
+- 可靠消息仍无法入队时关闭慢连接，由客户端通过 snapshot、stream.get 或 messages 恢复。
 - 慢 Face 不得阻塞 Chat、Authority 或其他 Face。
 
 ### 断线恢复
@@ -742,6 +758,16 @@ Face 重复发送相同 request_id 和 payload
 
 验收：人类 Face 和 Headless Face 对同一 conversation 观察到一致状态，不存在测试专用旁路。
 
+### F5：流式传输与稳定历史
+
+2026-07-20 已完成。
+
+- 实现三个真实 Provider 的 SSE 归一化、同步 fallback 和多轮 response 边界。
+- 实现多 Face Chat delta、可靠 stream end、活动流恢复与最终 result 校正。
+- 实现 foreground run progress、独立输出 scope 和 reliable/transient 出站调度。
+- 消息存储改为 append-only，增加 request binding 和稳定 seq 分页。
+- 真实进程 E2E 覆盖双 Face、发起端断线、工具循环、run progress、stream.get 和 messages。
+
 ## Alpha 完成定义
 
 - Web/TUI/Headless 中至少两个 Face 共用同一正式协议。
@@ -762,7 +788,6 @@ Face 重复发送相同 request_id 和 payload
 - 多用户组织、完整 RBAC、SSO。
 - 跨 Mind 联邦同步。
 - 离线 Face 写入和冲突合并。
-- Chat token 级流式输出。
 - 所有 IM 平台适配。
 - 将 EventBus 改造成分布式消息队列。
 

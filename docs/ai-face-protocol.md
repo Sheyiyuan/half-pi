@@ -2,7 +2,7 @@
 
 ## 状态
 
-本文面向 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1-P4 Face runtime、JSONL Headless 客户端和共用协议的人类终端 REPL 已实现并通过 race 测试。当前可使用 conversation/Hand/run/task 查询、快照、订阅、Chat/cancel、异步审批和 run/task cancel；真实 Mind/Hand/Headless/终端 REPL 进程级 E2E 已完成。真正的全屏交互式 TUI 尚未实现。
+本文面向 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1-P4 Face runtime、应用协议 revision 2 流式增强、JSONL Headless 客户端和共用协议的人类终端 REPL 已实现并通过 race 测试。当前可使用 capability、conversation/Hand/run/task 查询、快照、消息分页、订阅、可恢复 Chat 流、foreground run progress、Chat/cancel、异步审批和 run/task cancel；真实 Mind/Hand/Headless/终端 REPL 进程级 E2E 已完成。真正的全屏交互式 TUI 尚未实现。
 
 v2 握手已在 WinBoat Windows 11 Pro AMD64 原生运行 gateway/Mind race 测试及 Mind/Hand/Face 进程链路，验证 encrypted `registered`、双 peer 在线、撤销断连和输出秘密扫描；Windows `386/amd64/arm64` 交叉编译同时通过。更新后的官方 `scripts/test-windows.ps1 -PrebuiltDir` 使用当前源码执行，11 组测试全部 PASS 且 stderr 为空。
 
@@ -39,6 +39,7 @@ Face 注册使用 version 2 WebSocket 四步挑战握手，必须同时持有与
 | `face:sessions:write` | 创建和重命名 conversation |
 | `face:runs:read` | 查询远程执行 |
 | `face:runs:cancel` | 取消远程执行 |
+| `face:runs:output` | 订阅 foreground run stdout/stderr 增量 |
 | `face:approve` | 裁决审批 |
 | `face:hands:read` | 查看 Hand 和工具能力 |
 | `face:tasks:read` | 查询后台任务和日志 |
@@ -51,10 +52,13 @@ AI Face 发送：
 ```text
 face.chat
 face.chat.cancel
+face.chat.stream.get
+face.capabilities.get
 face.conversation.list
 face.conversation.create
 face.conversation.snapshot
 face.conversation.rename
+face.conversation.messages
 face.subscribe
 face.approval.resolve
 face.run.get
@@ -75,6 +79,9 @@ face.result
 face.error
 face.snapshot
 face.event
+face.chat.delta
+face.chat.stream.end
+face.run.progress
 ```
 
 客户端应使用 `protocol.ValidateFacePayload` 对收发测试夹具做严格结构验证。验证器拒绝未知字段、未知枚举、尾随 JSON 和在 Face payload 中出现的 `session_id`。权限、资源归属、幂等状态和审批是否过期属于运行时检查，不由协议验证器裁决。
@@ -88,7 +95,7 @@ face.event
 - 已接受的异步操作先返回 `face.accepted`，完成后恰好返回一个 `face.result`。
 - 鉴权、scope 或结构检查未通过时返回 `face.error`，不得先返回 accepted。
 
-当前同步查询也先返回 `face.accepted`，随后返回一个 `face.result`；snapshot 返回 accepted 后跟一个 `face.snapshot`；subscribe 在安装过滤器后以 accepted 完成。
+当前同步查询也先返回 `face.accepted`，随后返回一个 `face.result`；snapshot 返回 accepted 后跟一个 `face.snapshot`；subscribe 在安装过滤器后以 accepted 完成。`face.chat.delta` 与 `face.run.progress` 是可丢瞬时数据，`face.chat.stream.end` 是可靠屏障，它们都不替代最终 result/event。
 
 Chat 示例 payload：
 
@@ -134,6 +141,23 @@ authenticate
 ```
 
 Gateway 必须先安装订阅再返回 accepted。`FaceEvent.EventSeq` 只在当前连接内递增；断线后不得用它推断遗漏状态，应重新获取 snapshot。
+
+注册后先发送 `face.capabilities.get`。只有结果声明 `chat_stream.v1`、`chat_stream_resume.v1`、`run_progress.v1` 或 `message_pagination.v1` 后，客户端才使用对应消息；旧 Mind 返回 `invalid_request` 时继续使用原有非流式流程，不需要断开连接。
+
+`face.subscribe.transient_types` 可包含 `chat.delta` 和 `run.progress`。省略或传空数组表示不接收瞬时消息；Chat delta 需要 `face:sessions:read`，run progress 需要 `face:runs:output`。
+
+活动 Chat 的恢复顺序：
+
+```text
+subscribe transient streams
+  → accepted
+  → conversation.snapshot
+  → face.chat.stream.get for every pending Chat
+  → install snapshot at last_seq=S
+  → discard buffered seq<=S and append contiguous seq>S
+```
+
+delta 必须同时满足 Chat 内 `seq` 连续、当前 response 的 UTF-8 字节 `offset` 连续；否则停止直接追加并重新执行 `stream.get`。收到 `stream.end` 后仍以发起端的 `face.result.Content` 或 conversation messages 为最终校正值。完成后的长历史通过 `face.conversation.messages(before_seq, limit)` 向前分页，响应按 seq 升序，默认 100、最大 500。
 
 快照中的数组必须显式编码为空数组而不是 `null`：
 
@@ -205,10 +229,11 @@ stdin command 使用尚未 stamp 的 `protocol.Envelope`；客户端负责生成
 - AI Face 默认使用最小 scope；执行审批测试时使用独立身份和隔离 Hand。
 - 不发送原始工具参数、模型内部请求或未脱敏的工具结果到普通事件流。
 - 客户端必须限制消息和本地缓存大小，不能把事件流当作无限历史。
+- 客户端不得记录 Chat delta 正文、run 输出、原始 SSE 或工具参数；诊断只记录稳定类型、序号、长度和缺口状态。
 
 ## 验收状态与后续清单
 
-异步审批 Broker、run/task cancel 和 Face identity 审计已作为 P3 runtime 基线完成。2026-07-19 的真实进程 E2E 使用动态端口、临时 HOME/SQLite/工作目录和 Scripted LLM，验证同 principal replay/conflict、跨 Face 恢复、run-bound 审批、远程取消、后台 task 对账、终端 REPL 快照与 SQLite 脱敏审计。
+异步审批 Broker、run/task cancel 和 Face identity 审计已作为 P3 runtime 基线完成。2026-07-20 的真实进程 E2E 使用动态端口、临时 HOME/SQLite/工作目录和带 delta 的 Scripted LLM，验证同 principal replay/conflict、双 Face 流、发起端断线、stream.get、消息分页、foreground progress、run-bound 审批、远程取消、后台 task 对账、终端 REPL 与 SQLite 脱敏审计。
 
 后续协议增强项是 conversation 写命令等非 Chat command 的通用幂等 registry。
 
