@@ -68,12 +68,13 @@ func llmMsgToStore(msgs []llm.Message) []store.Message {
 	for i, m := range msgs {
 		tcJSON, _ := json.Marshal(m.ToolCalls)
 		result[i] = store.Message{
-			Role:      string(m.Role),
-			Content:   m.Content,
-			RequestID: m.RequestID,
-			ToolID:    m.ToolID,
-			ToolCalls: string(tcJSON),
-			Seq:       i + 1,
+			Role:              string(m.Role),
+			Content:           m.Content,
+			RequestID:         m.RequestID,
+			ToolID:            m.ToolID,
+			ToolCalls:         string(tcJSON),
+			CompactProjection: m.CompactProjection,
+			Seq:               i + 1,
 		}
 	}
 	return result
@@ -88,11 +89,12 @@ func storeMsgToLLM(msgs []store.Message) []llm.Message {
 			json.Unmarshal([]byte(m.ToolCalls), &toolCalls)
 		}
 		result[i] = llm.Message{
-			Role:      llm.Role(m.Role),
-			Content:   m.Content,
-			RequestID: m.RequestID,
-			ToolID:    m.ToolID,
-			ToolCalls: toolCalls,
+			Role:              llm.Role(m.Role),
+			Content:           m.Content,
+			RequestID:         m.RequestID,
+			ToolID:            m.ToolID,
+			ToolCalls:         toolCalls,
+			CompactProjection: m.CompactProjection,
 		}
 	}
 	return result

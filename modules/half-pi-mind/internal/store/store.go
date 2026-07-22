@@ -113,11 +113,56 @@ func (s *Store) migrate() error {
 				request_id  TEXT NOT NULL DEFAULT '',
 				tool_id     TEXT NOT NULL DEFAULT '',
 			tool_calls  TEXT NOT NULL DEFAULT '',
+			compact_projection TEXT NOT NULL DEFAULT '',
 			seq         INTEGER NOT NULL,
 			created_at  TEXT NOT NULL DEFAULT (datetime('now')),
 			FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, seq)`,
+		`CREATE TABLE IF NOT EXISTS context_summaries (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			parent_summary_id TEXT NOT NULL DEFAULT '',
+			supersedes_summary_id TEXT NOT NULL DEFAULT '',
+			from_seq INTEGER NOT NULL,
+			to_seq INTEGER NOT NULL,
+			summary TEXT NOT NULL,
+			summary_digest TEXT NOT NULL,
+			source_digest TEXT NOT NULL,
+			contract_digest TEXT NOT NULL,
+			provider_id TEXT NOT NULL,
+			model_id TEXT NOT NULL,
+			profile TEXT NOT NULL,
+			policy_version TEXT NOT NULL,
+			projection_version TEXT NOT NULL,
+			generation_mode TEXT NOT NULL,
+			generation_key TEXT NOT NULL DEFAULT '',
+			source_estimated_tokens INTEGER NOT NULL,
+			summary_estimated_tokens INTEGER NOT NULL,
+			input_tokens INTEGER NOT NULL,
+			output_tokens INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			UNIQUE(session_id, from_seq, to_seq, contract_digest),
+			FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_context_summaries_session_to
+			ON context_summaries(session_id, to_seq DESC)`,
+		`CREATE TABLE IF NOT EXISTS session_runtime (
+			session_id TEXT PRIMARY KEY,
+			active_summary_id TEXT NOT NULL DEFAULT '',
+			history_generation INTEGER NOT NULL DEFAULT 0,
+			compact_generation INTEGER NOT NULL DEFAULT 0,
+			history_view_generation INTEGER NOT NULL DEFAULT 0,
+			pending_compact INTEGER NOT NULL DEFAULT 0,
+			pending_compact_id TEXT NOT NULL DEFAULT '',
+			pending_attempt INTEGER NOT NULL DEFAULT 0,
+			pending_not_before INTEGER NOT NULL DEFAULT 0,
+			snapshot_version INTEGER NOT NULL DEFAULT 0,
+			updated_at INTEGER NOT NULL,
+			FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_session_runtime_pending
+			ON session_runtime(pending_compact, pending_not_before)`,
 		`CREATE TABLE IF NOT EXISTS hand_tokens (
 			id         INTEGER PRIMARY KEY AUTOINCREMENT,
 			label      TEXT NOT NULL,
@@ -302,6 +347,17 @@ func (s *Store) migrate() error {
 	}
 	if err := s.addColumnIfNotExists("messages", "request_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate message request ID: %w", err)
+	}
+	if err := s.addColumnIfNotExists("messages", "compact_projection", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate message compact projection: %w", err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO session_runtime (
+		session_id, history_generation, history_view_generation, snapshot_version, updated_at
+	) SELECT sessions.id, COALESCE(MAX(messages.seq), 0), COALESCE(MAX(messages.seq), 0),
+		COALESCE(MAX(messages.seq), 0), ?
+		FROM sessions LEFT JOIN messages ON messages.session_id = sessions.id
+		GROUP BY sessions.id ON CONFLICT(session_id) DO NOTHING`, time.Now().UTC().UnixMilli()); err != nil {
+		return fmt.Errorf("initialize session runtime: %w", err)
 	}
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_session_seq ON messages(session_id, seq)`); err != nil {
 		return fmt.Errorf("migrate message sequence uniqueness: %w", err)

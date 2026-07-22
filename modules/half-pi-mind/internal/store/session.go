@@ -27,12 +27,22 @@ func (s *Store) CreateSession(groupID, id string) error {
 
 // CreateSessionNamed 创建一个带可选名称的 conversation。
 func (s *Store) CreateSessionNamed(groupID, id, name string) error {
-	_, err := s.db.Exec(
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin create session: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(
 		`INSERT INTO sessions (id, group_id, name, created_at, updated_at)
 		 VALUES (?, ?, ?, datetime('now'), datetime('now'))`, id, groupID, name,
-	)
-	if err != nil {
+	); err != nil {
 		return fmt.Errorf("create session: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO session_runtime (session_id, updated_at) VALUES (?, ?)`, id, time.Now().UTC().UnixMilli()); err != nil {
+		return fmt.Errorf("create session runtime: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit create session: %w", err)
 	}
 	return nil
 }
@@ -65,11 +75,40 @@ func (s *Store) SetSessionMode(id, mode string) error {
 	default:
 		return fmt.Errorf("invalid session mode %q", mode)
 	}
-	result, err := s.db.Exec(`UPDATE sessions SET mode = ?, updated_at = datetime('now') WHERE id = ?`, mode, id)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin update session mode: %w", err)
+	}
+	defer tx.Rollback()
+	var current string
+	if err := tx.QueryRow(`SELECT mode FROM sessions WHERE id = ?`, id).Scan(&current); err != nil {
+		if err == sql.ErrNoRows {
+			return fmt.Errorf("session %q not found", id)
+		}
+		return fmt.Errorf("read session mode: %w", err)
+	}
+	if current == mode {
+		return nil
+	}
+	result, err := tx.Exec(`UPDATE sessions SET mode = ?, updated_at = datetime('now') WHERE id = ?`, mode, id)
 	if err != nil {
 		return fmt.Errorf("update session mode: %w", err)
 	}
-	return requireSessionUpdated(result, id)
+	if err := requireSessionUpdated(result, id); err != nil {
+		return err
+	}
+	result, err = tx.Exec(`UPDATE session_runtime SET history_view_generation = history_view_generation + 1,
+		snapshot_version = snapshot_version + 1, updated_at = ? WHERE session_id = ?`, time.Now().UTC().UnixMilli(), id)
+	if err != nil {
+		return fmt.Errorf("advance mode generation: %w", err)
+	}
+	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
+		return fmt.Errorf("advance mode generation: runtime unavailable")
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit session mode: %w", err)
+	}
+	return nil
 }
 
 // GetMessageCount returns the number of messages in a session.

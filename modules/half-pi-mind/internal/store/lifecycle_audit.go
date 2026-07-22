@@ -26,6 +26,61 @@ type OutboxRecord struct {
 	CreatedAt     time.Time
 }
 
+// LifecycleEvent 是可与业务状态同事务写入的脱敏 lifecycle outbox 事实。
+type LifecycleEvent struct {
+	ID            string
+	EventType     string
+	SchemaVersion int
+	TraceID       string
+	SpanID        string
+	SubjectID     string
+	Payload       json.RawMessage
+	OccurredAt    time.Time
+}
+
+const maxLifecyclePayloadBytes = 64 << 10
+
+// AppendLifecycleEvent 写入不依附 security decision 的通用脱敏 lifecycle 事实。
+func (s *Store) AppendLifecycleEvent(ctx context.Context, event LifecycleEvent) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin lifecycle event: %w", err)
+	}
+	defer tx.Rollback()
+	if err := insertLifecycleEvent(ctx, tx, event); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit lifecycle event: %w", err)
+	}
+	return nil
+}
+
+func insertLifecycleEvent(ctx context.Context, tx *sql.Tx, event LifecycleEvent) error {
+	if event.ID == "" || event.EventType == "" || event.SchemaVersion < 1 || event.TraceID == "" || event.SpanID == "" {
+		return fmt.Errorf("invalid lifecycle event identity")
+	}
+	if len(event.ID) > 128 || len(event.EventType) > 128 || len(event.TraceID) > 128 || len(event.SpanID) > 128 || len(event.SubjectID) > 128 {
+		return fmt.Errorf("lifecycle event identity exceeds limit")
+	}
+	if len(event.Payload) == 0 || len(event.Payload) > maxLifecyclePayloadBytes || !json.Valid(event.Payload) || event.Payload[0] != '{' {
+		return fmt.Errorf("lifecycle event payload must be a bounded JSON object")
+	}
+	occurredAt := event.OccurredAt
+	if occurredAt.IsZero() {
+		occurredAt = time.Now().UTC()
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO lifecycle_outbox (
+		id, event_type, schema_version, trace_id, span_id, subject_id, payload_redacted,
+		available_at, created_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.ID, event.EventType, event.SchemaVersion, event.TraceID, event.SpanID,
+		event.SubjectID, string(event.Payload), occurredAt.UnixMilli(), occurredAt.UnixMilli()); err != nil {
+		return fmt.Errorf("insert lifecycle outbox: %w", err)
+	}
+	return nil
+}
+
 // AppendSecurityDecision 原子保存安全决策及对应 outbox 事实。
 func (s *Store) AppendSecurityDecision(ctx context.Context, mutation corelifecycle.AuditMutation) error {
 	if mutation.EventID == "" || mutation.TraceID == "" || mutation.SpanID == "" || mutation.ActionKind == "" || mutation.Decision == "" {
@@ -75,13 +130,12 @@ func (s *Store) AppendSecurityDecision(ctx context.Context, mutation corelifecyc
 		mutation.ApprovalID, mutation.RunID, string(detailsJSON), createdAt.UnixMilli()); err != nil {
 		return fmt.Errorf("insert security decision: %w", err)
 	}
-	if _, err = tx.ExecContext(ctx, `INSERT INTO lifecycle_outbox (
-		id, event_type, schema_version, trace_id, span_id, subject_id, payload_redacted,
-		available_at, created_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		mutation.EventID, "security.decision", mutation.SchemaVersion, mutation.TraceID, mutation.SpanID,
-		mutation.ConversationID, string(payload), createdAt.UnixMilli(), createdAt.UnixMilli()); err != nil {
-		return fmt.Errorf("insert lifecycle outbox: %w", err)
+	if err = insertLifecycleEvent(ctx, tx, LifecycleEvent{
+		ID: mutation.EventID, EventType: "security.decision", SchemaVersion: mutation.SchemaVersion,
+		TraceID: mutation.TraceID, SpanID: mutation.SpanID, SubjectID: mutation.ConversationID,
+		Payload: payload, OccurredAt: createdAt,
+	}); err != nil {
+		return err
 	}
 	if err = tx.Commit(); err != nil {
 		return fmt.Errorf("commit security decision: %w", err)

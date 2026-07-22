@@ -17,11 +17,12 @@ const (
 
 // Message 是对话中的一轮。
 type Message struct {
-	Role      Role
-	Content   string     // 纯文本，暂不支持多模态
-	RequestID string     // 仅用于本地持久化和 Face 关联，不发送给 provider
-	ToolID    string     // 当 Role == RoleTool 时设置
-	ToolCalls []ToolCall // 当 Role == RoleAssistant 且 LLM 返回了工具调用时设置
+	Role              Role
+	Content           string     // 纯文本，暂不支持多模态
+	RequestID         string     // 仅用于本地持久化和 Face 关联，不发送给 provider
+	ToolID            string     // 当 Role == RoleTool 时设置
+	ToolCalls         []ToolCall // 当 Role == RoleAssistant 且 LLM 返回了工具调用时设置
+	CompactProjection string     // 仅用于本地 Compact 来源投影，不发送给 provider
 }
 
 // ToolDef 描述 LLM 可调用的工具。

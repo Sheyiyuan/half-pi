@@ -66,23 +66,15 @@ func TestSetMode(t *testing.T) {
 	if core.Mode != "review" {
 		t.Errorf("Mode = %q, want review", core.Mode)
 	}
-	if len(core.history) != 1 {
-		t.Fatalf("SetMode should append 1 message, got %d", len(core.history))
-	}
-	msg := core.history[0]
-	if msg.Role != llm.RoleSystem {
-		t.Errorf("role = %q, want system", msg.Role)
-	}
-	if !strings.Contains(msg.Content, "review") {
-		t.Errorf("content should mention mode, got %q", msg.Content)
+	if len(core.history) != 0 {
+		t.Fatalf("SetMode appended model-visible history: %#v", core.history)
 	}
 
-	// Second SetMode should append another message
 	if err := core.SetMode("yolo"); err != nil {
 		t.Fatal(err)
 	}
-	if len(core.history) != 2 {
-		t.Errorf("second SetMode should append, got %d messages", len(core.history))
+	if len(core.history) != 0 {
+		t.Errorf("second SetMode appended %d messages", len(core.history))
 	}
 }
 

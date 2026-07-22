@@ -96,7 +96,7 @@ func TestManagerCreateAndRestoreConversationState(t *testing.T) {
 		t.Fatalf("restored state = mode %q, hand %q", restored.Core().SecurityMode(), restored.Core().ActiveHand())
 	}
 	messages, err := db.GetMessages(id)
-	if err != nil || len(messages) != 3 || messages[1].Content != "hello" {
+	if err != nil || len(messages) != 2 || messages[0].Content != "hello" {
 		t.Fatalf("restored messages = %+v, err %v", messages, err)
 	}
 	session, err := db.GetSession(id)

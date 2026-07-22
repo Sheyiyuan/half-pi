@@ -87,7 +87,7 @@ func New(llmProvider llm.Provider, exec toolCatalog) (*Core, error) {
 	return core, nil
 }
 
-// SetMode 切换并持久化安全模式，同时在对话历史中记录。
+// SetMode 切换并持久化安全模式。
 func (c *Core) SetMode(mode string) error {
 	if !validSecurityMode(mode) {
 		return fmt.Errorf("invalid security mode %q", mode)
@@ -109,10 +109,6 @@ func (c *Core) SetMode(mode string) error {
 	policy := c.policy.Clone()
 	c.stateMu.Unlock()
 	c.authorizer.SetMode(mode, policy)
-	c.history = append(c.history, llm.Message{
-		Role:    llm.RoleSystem,
-		Content: fmt.Sprintf("安全模式已切换为: %s", mode),
-	})
 	c.notifySessionChanged()
 	return nil
 }
