@@ -123,12 +123,13 @@ const (
 
 // Result 是工具执行和安全交付的完整结果。
 type Result struct {
-	ExecutionOutcome ExecutionOutcome
-	DeliveryOutcome  lifecycle.Outcome
-	AuditDegraded    bool
-	Output           string
-	Data             any
-	ErrorCode        string
+	ExecutionOutcome  ExecutionOutcome
+	DeliveryOutcome   lifecycle.Outcome
+	AuditDegraded     bool
+	Output            string
+	Data              any
+	ErrorCode         string
+	CompactProjection CompactProjection
 }
 
 // ToolRuntime 是生产工具执行的统一入口。
@@ -208,7 +209,7 @@ func (rt *ToolRuntime) Registry() *lifecycle.LifecycleRegistry {
 func (rt *ToolRuntime) Execute(ctx context.Context, inv Invocation) Result {
 	prepared, terminal := rt.Prepare(ctx, inv)
 	if prepared == nil {
-		return terminal
+		return withCompactProjection(terminal)
 	}
 	return prepared.Execute(ctx)
 }
@@ -400,7 +401,7 @@ func (rt *ToolRuntime) finish(ctx context.Context, frozen FrozenInvocation, auth
 		result.Output = "tool execution may have completed, but its terminal audit could not be recorded"
 	}
 	rt.publishFinished(ctx, frozen, result)
-	return result
+	return withCompactProjection(result)
 }
 
 // Abort 在外部状态机尚未产生副作用时终止调用。
@@ -503,7 +504,26 @@ func (rt *ToolRuntime) executeTool(ctx context.Context, tool Tool, frozen Frozen
 		Output:           output,
 		Data:             toolResult.Data,
 		ErrorCode:        errorCode,
+		CompactProjection: CompactProjection{
+			ReasonCategory: toolResult.CompactReason,
+			CandidateFacts: append([]CompactFact(nil), toolResult.CompactFacts...),
+		},
 	}
+}
+
+func withCompactProjection(result Result) Result {
+	result.CompactProjection.OutputBytes = len(result.Output)
+	result.CompactProjection.OutputDigest = hashDigest([]byte(result.Output))
+	if result.CompactProjection.ReasonCategory == "" {
+		if result.ErrorCode != "" {
+			result.CompactProjection.ReasonCategory = result.ErrorCode
+		} else if result.ExecutionOutcome == ExecutionSucceeded {
+			result.CompactProjection.ReasonCategory = "succeeded"
+		} else {
+			result.CompactProjection.ReasonCategory = "failed"
+		}
+	}
+	return result
 }
 
 func (rt *ToolRuntime) transformInvocation(ctx context.Context, inv Invocation, tool Tool) (Invocation, error) {

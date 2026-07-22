@@ -2,6 +2,9 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"sort"
@@ -72,14 +75,22 @@ func matches(values []string, value string) bool {
 
 // Registration 描述一个 Hook 的注册信息。
 type Registration struct {
-	ID           string
-	Kind         HookKind
-	Phases       []Phase
-	Order        int
-	Timeout      time.Duration
-	FailureMode  FailureMode
-	Scope        ScopeFilter
-	Capabilities []Capability
+	ID             string
+	Kind           HookKind
+	Phases         []Phase
+	Order          int
+	Timeout        time.Duration
+	FailureMode    FailureMode
+	Scope          ScopeFilter
+	Capabilities   []Capability
+	ConfigRevision uint64
+}
+
+// RegistrySnapshot 是注册表在一个 revision 上的不可变规范视图。
+type RegistrySnapshot struct {
+	Revision      uint64
+	Registrations []Registration
+	Digest        string
 }
 
 // HasCapability 检查注册信息是否包含指定权限。
@@ -127,6 +138,7 @@ type LifecycleRegistry struct {
 	observerQueue chan observation
 	observerDrops atomic.Uint64
 	sequence      atomic.Int64
+	revision      atomic.Uint64
 	dispatchMu    sync.RWMutex
 	observerStop  chan struct{}
 	observerDone  chan struct{}
@@ -194,6 +206,7 @@ func (r *LifecycleRegistry) RegisterGuard(reg Registration, guard Guard) error {
 			return bindingLess(r.guards[phase][i].Registration, r.guards[phase][j].Registration)
 		})
 	}
+	r.revision.Add(1)
 	return nil
 }
 
@@ -212,6 +225,7 @@ func (r *LifecycleRegistry) RegisterTransformer(reg Registration, transformer Tr
 			return bindingLess(r.transformers[phase][i].Registration, r.transformers[phase][j].Registration)
 		})
 	}
+	r.revision.Add(1)
 	return nil
 }
 
@@ -230,6 +244,7 @@ func (r *LifecycleRegistry) RegisterObserver(reg Registration, observer Observer
 			return bindingLess(r.observers[phase][i].Registration, r.observers[phase][j].Registration)
 		})
 	}
+	r.revision.Add(1)
 	return nil
 }
 
@@ -248,7 +263,34 @@ func (r *LifecycleRegistry) RegisterAuditor(reg Registration, auditor Auditor) e
 			return bindingLess(r.auditors[phase][i].Registration, r.auditors[phase][j].Registration)
 		})
 	}
+	r.revision.Add(1)
 	return nil
+}
+
+// Snapshot 返回注册信息的深拷贝、单调 revision 和规范摘要。
+func (r *LifecycleRegistry) Snapshot() RegistrySnapshot {
+	r.mu.RLock()
+	registrations := make([]Registration, 0, len(r.registrations))
+	for _, registration := range r.registrations {
+		registrations = append(registrations, cloneRegistration(registration))
+	}
+	revision := r.revision.Load()
+	r.mu.RUnlock()
+	sort.Slice(registrations, func(i, j int) bool { return registrations[i].ID < registrations[j].ID })
+	encoded, _ := json.Marshal(registrations)
+	digest := sha256.Sum256(append([]byte("half-pi:lifecycle-registry:v1\x00"), encoded...))
+	return RegistrySnapshot{Revision: revision, Registrations: registrations, Digest: hex.EncodeToString(digest[:])}
+}
+
+func cloneRegistration(registration Registration) Registration {
+	registration.Phases = append([]Phase(nil), registration.Phases...)
+	registration.Capabilities = append([]Capability(nil), registration.Capabilities...)
+	registration.Scope.ConversationIDs = append([]string(nil), registration.Scope.ConversationIDs...)
+	registration.Scope.GroupIDs = append([]string(nil), registration.Scope.GroupIDs...)
+	registration.Scope.PrincipalIDs = append([]string(nil), registration.Scope.PrincipalIDs...)
+	registration.Scope.Sources = append([]string(nil), registration.Scope.Sources...)
+	registration.Scope.NodeIDs = append([]string(nil), registration.Scope.NodeIDs...)
+	return registration
 }
 
 // GuardBindingsForPhase 返回带运行策略的 Guard 快照。
@@ -347,6 +389,7 @@ func normalizeRegistration(reg Registration, kind HookKind) Registration {
 	}
 	reg.Phases = append([]Phase(nil), reg.Phases...)
 	reg.Capabilities = append([]Capability(nil), reg.Capabilities...)
+	reg.Scope = cloneRegistration(reg).Scope
 	return reg
 }
 

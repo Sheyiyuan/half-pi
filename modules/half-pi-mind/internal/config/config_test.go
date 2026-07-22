@@ -81,6 +81,40 @@ provider = "fixture"
 	}
 }
 
+func TestLoadAppliesDisabledCompactDefaults(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	content := `[llm]
+[[llm.providers]]
+name = "fixture"
+adapter = "scripted"
+script_path = "fixture.json"
+[[llm.models]]
+id = "fixture"
+provider = "fixture"
+context_window = 32768
+max_tokens = 2048
+`
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Compact.Enabled || cfg.Compact.Automatic || cfg.Compact.ProviderMarginTokens != 1024 ||
+		cfg.Compact.PolicyVersion != "compact-v1" || cfg.Compact.Profile != "default" {
+		t.Fatalf("compact defaults = %+v", cfg.Compact)
+	}
+	model, err := cfg.ResolveModel("fixture")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if model.ContextWindow != 32768 || model.MaxTokens != 2048 {
+		t.Fatalf("resolved token limits = %+v", model)
+	}
+}
+
 func TestResolveProviderDoesNotUseScriptPathToBypassCredentials(t *testing.T) {
 	for _, provider := range []ProviderCfg{
 		{Name: "scripted", Adapter: "scripted"},

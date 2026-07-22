@@ -3,6 +3,8 @@
 package skill
 
 import (
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,9 +32,17 @@ type Skill struct {
 
 // Store 管理已加载的技能。
 type Store struct {
-	skills map[string]*Skill
-	mu     sync.RWMutex
-	dir    string
+	skills   map[string]*Skill
+	mu       sync.RWMutex
+	dir      string
+	revision uint64
+}
+
+// Snapshot 是 Skill Store 在一个 revision 上的不可变规范视图。
+type Snapshot struct {
+	Revision uint64
+	Skills   []Skill
+	Digest   string
 }
 
 // LoadFromDir 扫描目录下所有 *.skill.md 文件并加载。
@@ -55,11 +65,12 @@ func (s *Store) Reload() error {
 }
 
 func (s *Store) reload() error {
-	s.skills = make(map[string]*Skill)
-
+	next := make(map[string]*Skill)
 	entries, err := os.ReadDir(s.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
+			s.skills = next
+			s.revision++
 			return nil
 		}
 		return fmt.Errorf("failed to read skill directory: %w", err)
@@ -74,8 +85,10 @@ func (s *Store) reload() error {
 		if parseErr != nil {
 			continue
 		}
-		s.skills[sk.Name] = sk
+		next[sk.Name] = sk
 	}
+	s.skills = next
+	s.revision++
 	return nil
 }
 
@@ -85,7 +98,8 @@ func (s *Store) List() []*Skill {
 	defer s.mu.RUnlock()
 	result := make([]*Skill, 0, len(s.skills))
 	for _, sk := range s.skills {
-		result = append(result, sk)
+		copy := cloneSkill(sk)
+		result = append(result, &copy)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].Name < result[j].Name
@@ -98,7 +112,48 @@ func (s *Store) Get(name string) (*Skill, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	sk, ok := s.skills[name]
-	return sk, ok
+	if !ok {
+		return nil, false
+	}
+	copy := cloneSkill(sk)
+	return &copy, true
+}
+
+// Snapshot 返回技能定义的深拷贝、单调 revision 和规范摘要。
+func (s *Store) Snapshot() Snapshot {
+	s.mu.RLock()
+	skills := make([]Skill, 0, len(s.skills))
+	for _, current := range s.skills {
+		skills = append(skills, cloneSkill(current))
+	}
+	revision := s.revision
+	s.mu.RUnlock()
+	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
+	type digestSkill struct {
+		Name, Description, Version, Author, Content string
+		Tags, Groups                                []string
+	}
+	digestSkills := make([]digestSkill, len(skills))
+	for i := range skills {
+		digestSkills[i] = digestSkill{
+			Name: skills[i].Name, Description: skills[i].Description,
+			Version: skills[i].Version, Author: skills[i].Author, Content: skills[i].Content,
+			Tags: append([]string(nil), skills[i].Tags...), Groups: append([]string(nil), skills[i].Groups...),
+		}
+	}
+	encoded, _ := json.Marshal(digestSkills)
+	digest := sha256.Sum256(append([]byte("half-pi:skill-store:v1\x00"), encoded...))
+	return Snapshot{Revision: revision, Skills: skills, Digest: fmt.Sprintf("%x", digest[:])}
+}
+
+func cloneSkill(skill *Skill) Skill {
+	if skill == nil {
+		return Skill{}
+	}
+	copy := *skill
+	copy.Tags = append([]string(nil), skill.Tags...)
+	copy.Groups = append([]string(nil), skill.Groups...)
+	return copy
 }
 
 // GetForGroup 按名称查询当前 SessionGroup 可见的技能。

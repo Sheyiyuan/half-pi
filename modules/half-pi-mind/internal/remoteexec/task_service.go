@@ -38,6 +38,10 @@ type TaskStore interface {
 	ListRemoteTasksBySession(string) ([]Task, error)
 }
 
+type protectionTaskStore interface {
+	ListRemoteProtectionTasks() ([]ProtectionSeed, error)
+}
+
 var (
 	// ErrTaskNotOwned 表示任务不属于当前会话。
 	ErrTaskNotOwned = fmt.Errorf("task is not owned by current session")
@@ -47,12 +51,14 @@ var (
 
 // TaskService 是进程级后台任务服务。
 type TaskService struct {
-	hub     *hub.Hub
-	pending func(string, time.Duration, *hub.Peer) (<-chan protocol.Envelope, func())
-	store   TaskStore
-	locksMu sync.Mutex
-	locks   map[string]*taskLock
-	changes observer.Hub[Task]
+	hub           *hub.Hub
+	pending       func(string, time.Duration, *hub.Peer) (<-chan protocol.Envelope, func())
+	store         TaskStore
+	locksMu       sync.Mutex
+	locks         map[string]*taskLock
+	changes       observer.Hub[Task]
+	protection    *ProtectionIndex
+	protectionErr error
 }
 
 // Subscribe 注册后台任务快照变化观察者。
@@ -67,10 +73,38 @@ type taskLock struct {
 
 // NewTaskService 创建共享后台任务服务。
 func NewTaskService(authority *Authority, store TaskStore) *TaskService {
-	return &TaskService{
+	service := &TaskService{
 		hub: authority.Hub, pending: authority.PendingPeerCall, store: store,
-		locks: make(map[string]*taskLock),
+		locks: make(map[string]*taskLock), protection: authority.Registry.ProtectionIndex(),
 	}
+	if source, ok := store.(protectionTaskStore); ok {
+		seeds, err := source.ListRemoteProtectionTasks()
+		if err != nil {
+			service.protectionErr = fmt.Errorf("load remote protection tasks: %w", err)
+		} else {
+			service.protection.seed(seeds)
+		}
+	}
+	return service
+}
+
+// ProtectionIndex 返回与 RemoteRun Registry 共享的远程工作保护索引。
+func (s *TaskService) ProtectionIndex() *ProtectionIndex {
+	if s == nil {
+		return nil
+	}
+	return s.protection
+}
+
+// ProtectionSnapshot 返回恢复完成的受保护工作快照；水合失败时 fail closed。
+func (s *TaskService) ProtectionSnapshot(sessionID string) (ProtectionSnapshot, error) {
+	if s == nil || s.protection == nil {
+		return ProtectionSnapshot{}, fmt.Errorf("remote protection index is unavailable")
+	}
+	if s.protectionErr != nil {
+		return ProtectionSnapshot{}, s.protectionErr
+	}
+	return s.protection.Snapshot(sessionID), nil
 }
 
 // CreateStartSnapshot 在发送后台 RPC 前持久化 stale 快照。
@@ -208,6 +242,7 @@ func (s *TaskService) markStale(task Task, message string) (Task, error) {
 }
 
 func (s *TaskService) notify(task Task) {
+	s.protection.observeTask(task)
 	s.changes.Publish(task)
 }
 

@@ -67,6 +67,33 @@ func (s *Store) ListRemoteTasksBySession(sessionID string) ([]remoteexec.Task, e
 	return tasks, rows.Err()
 }
 
+// ListRemoteProtectionTasks 返回重启后仍需保护的 durable task 与其原始 request 绑定。
+func (s *Store) ListRemoteProtectionTasks() ([]remoteexec.ProtectionSeed, error) {
+	rows, err := s.db.Query(`SELECT t.session_id, t.task_id, COALESCE(r.request_id, ''), t.created_at, t.stale
+		FROM remote_tasks t LEFT JOIN remote_runs r ON r.id = t.task_id
+		WHERE t.stale = 1 OR t.status NOT IN ('succeeded','failed','cancelled','timed_out','lost')
+		ORDER BY t.session_id, t.task_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list remote protection tasks: %w", err)
+	}
+	defer rows.Close()
+	var result []remoteexec.ProtectionSeed
+	for rows.Next() {
+		var seed remoteexec.ProtectionSeed
+		var stale bool
+		if err := rows.Scan(&seed.SessionID, &seed.Record.ID, &seed.Record.RequestID, &seed.Record.LegacyCreatedAt, &stale); err != nil {
+			return nil, fmt.Errorf("scan remote protection task: %w", err)
+		}
+		seed.Record.Kind = "task"
+		seed.Record.StateUnknown = stale
+		result = append(result, seed)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read remote protection tasks: %w", err)
+	}
+	return result, nil
+}
+
 // DeleteRemoteTask 删除指定任务元数据。
 func (s *Store) DeleteRemoteTask(taskID string) error {
 	result, err := s.db.Exec(`DELETE FROM remote_tasks WHERE task_id = ?`, taskID)

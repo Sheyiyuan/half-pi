@@ -415,6 +415,9 @@ func ValidateConfig(cfg *config.Config) error {
 		if _, ok := providers[model.Provider]; !ok {
 			return errorf("invalid_config", "model %q references missing provider %q", model.ID, model.Provider)
 		}
+		if model.ContextWindow < 0 || model.MaxTokens < 0 {
+			return errorf("invalid_config", "model %q token limits must not be negative", model.ID)
+		}
 		models[model.ID] = model
 	}
 	if _, ok := models[cfg.LLM.DefaultModel]; !ok {
@@ -422,6 +425,70 @@ func ValidateConfig(cfg *config.Config) error {
 	}
 	if models[cfg.LLM.DefaultModel].Provider != cfg.LLM.DefaultProvider {
 		return errorf("invalid_config", "default model %q does not use default provider %q", cfg.LLM.DefaultModel, cfg.LLM.DefaultProvider)
+	}
+	compact := cfg.Compact
+	if compact == (config.CompactCfg{}) {
+		compact = config.DefaultCompactCfg()
+	}
+	if compact.ProviderMarginTokens < 0 || compact.ReservedOutputTokens < 0 ||
+		compact.SummaryWarningNodes < 0 || compact.SummaryWarningBytes < 0 {
+		return errorf("invalid_config", "compact token margins and warning thresholds must not be negative")
+	}
+	if compact.LowWatermark < 0.20 || compact.HighWatermark > 0.95 || compact.LowWatermark >= compact.HighWatermark {
+		return errorf("invalid_config", "compact watermarks must satisfy 0.20 <= low < high <= 0.95")
+	}
+	if compact.MaxConcurrent < 1 || compact.MaxConcurrent > 16 {
+		return errorf("invalid_config", "compact.max_concurrent must be between 1 and 16")
+	}
+	if compact.RateLimitInitialBackoffMS < 1000 || compact.RateLimitInitialBackoffMS > 60_000 ||
+		compact.RateLimitMaxBackoffMS < 10_000 || compact.RateLimitMaxBackoffMS > 3_600_000 ||
+		compact.RateLimitInitialBackoffMS > compact.RateLimitMaxBackoffMS {
+		return errorf("invalid_config", "compact rate limit backoff is invalid")
+	}
+	mainModel := models[cfg.LLM.DefaultModel]
+	if mainModel.ContextWindow > 0 {
+		reserved := compact.ReservedOutputTokens
+		if reserved == 0 {
+			reserved = mainModel.MaxTokens
+		}
+		if reserved < 1 || reserved > mainModel.MaxTokens {
+			return errorf("invalid_config", "compact.reserved_output_tokens must resolve within the main model output limit")
+		}
+		if mainModel.ContextWindow <= reserved+compact.ProviderMarginTokens {
+			return errorf("invalid_config", "main model context_window leaves no input budget")
+		}
+		inputBudget := mainModel.ContextWindow - reserved - compact.ProviderMarginTokens
+		if int(float64(inputBudget)*compact.LowWatermark) >= int(float64(inputBudget)*compact.HighWatermark) ||
+			int(float64(inputBudget)*compact.HighWatermark) >= inputBudget {
+			return errorf("invalid_config", "compact watermarks do not produce strictly increasing limits")
+		}
+	}
+	if compact.Enabled {
+		if compact.Provider == "" || compact.Model == "" {
+			return errorf("invalid_config", "compact provider and model are required when enabled")
+		}
+		summaryModel, ok := models[compact.Model]
+		if !ok {
+			return errorf("invalid_config", "compact model %q is not defined", compact.Model)
+		}
+		if summaryModel.Provider != compact.Provider {
+			return errorf("invalid_config", "compact model %q does not use provider %q", compact.Model, compact.Provider)
+		}
+		if compact.TimeoutMS < 1000 || compact.TimeoutMS > 120_000 {
+			return errorf("invalid_config", "compact.timeout_ms must be between 1000 and 120000")
+		}
+		if compact.MaxTokens < 128 || compact.MaxTokens > summaryModel.MaxTokens {
+			return errorf("invalid_config", "compact.max_tokens must be between 128 and the summary model output limit")
+		}
+		if summaryModel.ContextWindow <= compact.MaxTokens+compact.ProviderMarginTokens {
+			return errorf("invalid_config", "compact model context_window leaves no input budget")
+		}
+		if compact.PolicyVersion != "compact-v1" || compact.Profile != "default" {
+			return errorf("invalid_config", "compact policy_version/profile is not supported")
+		}
+	}
+	if compact.Automatic && (!compact.Enabled || mainModel.ContextWindow == 0) {
+		return errorf("invalid_config", "compact.automatic requires enabled compact and a main model context_window")
 	}
 	if cfg.Security.Review.Enabled {
 		review := cfg.Security.Review

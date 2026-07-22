@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -123,13 +122,9 @@ func (p *anthropicProvider) Chat(ctx context.Context, req *LLMRequest) (*LLMResp
 	}
 	defer resp.Body.Close()
 
-	respBytes, err := io.ReadAll(resp.Body)
+	respBytes, err := readHTTPResponse(resp, req.ResponseByteLimit)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(respBytes))
+		return nil, err
 	}
 
 	return p.parseResponse(respBytes)
@@ -157,7 +152,8 @@ func (p *anthropicProvider) ChatStream(ctx context.Context, req *LLMRequest, onD
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, readProviderError(resp.Body))
+		_, err := readHTTPResponse(resp, 0)
+		return nil, err
 	}
 
 	result := &LLMResponse{}

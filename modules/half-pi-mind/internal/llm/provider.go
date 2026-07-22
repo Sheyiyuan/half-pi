@@ -47,6 +47,8 @@ type LLMRequest struct {
 	Tools       []ToolDef
 	Temperature float32
 	MaxTokens   int
+	// ResponseByteLimit 只在本地限制成功 HTTP 响应体，不序列化给 provider。
+	ResponseByteLimit int64
 }
 
 // LLMResponse 是内部响应格式。

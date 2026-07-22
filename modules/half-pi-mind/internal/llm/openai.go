@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"sort"
 	"strings"
@@ -144,15 +143,9 @@ func (p *openaiProvider) Chat(ctx context.Context, req *LLMRequest) (*LLMRespons
 	}
 	defer resp.Body.Close()
 
-	// 读取响应体
-	respBytes, err := io.ReadAll(resp.Body)
+	respBytes, err := readHTTPResponse(resp, req.ResponseByteLimit)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
-	}
-
-	// 检查 HTTP 状态码
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, string(respBytes))
+		return nil, err
 	}
 
 	// 解析响应
@@ -181,7 +174,8 @@ func (p *openaiProvider) ChatStream(ctx context.Context, req *LLMRequest, onDelt
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("API returned status %d: %s", resp.StatusCode, readProviderError(resp.Body))
+		_, err := readHTTPResponse(resp, 0)
+		return nil, err
 	}
 
 	result := &LLMResponse{}

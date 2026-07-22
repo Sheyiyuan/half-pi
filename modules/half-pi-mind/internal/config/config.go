@@ -15,8 +15,42 @@ import (
 type Config struct {
 	Server   ServerConfig   `toml:"server" json:"server"`
 	LLM      LLMConfig      `toml:"llm" json:"llm"`
+	Compact  CompactCfg     `toml:"compact" json:"compact"`
 	Security SecurityConfig `toml:"security" json:"security"`
 	Storage  StorageConfig  `toml:"storage" json:"storage"`
+}
+
+// CompactCfg 配置会话上下文压缩。缺少整个 section 时保持禁用并使用安全默认值。
+type CompactCfg struct {
+	Enabled                   bool    `toml:"enabled" json:"enabled"`
+	Automatic                 bool    `toml:"automatic" json:"automatic"`
+	Provider                  string  `toml:"provider" json:"provider"`
+	Model                     string  `toml:"model" json:"model"`
+	TimeoutMS                 int     `toml:"timeout_ms" json:"timeout_ms"`
+	MaxTokens                 int     `toml:"max_tokens" json:"max_tokens"`
+	HighWatermark             float64 `toml:"high_watermark" json:"high_watermark"`
+	LowWatermark              float64 `toml:"low_watermark" json:"low_watermark"`
+	ReservedOutputTokens      int     `toml:"reserved_output_tokens" json:"reserved_output_tokens"`
+	ProviderMarginTokens      int     `toml:"provider_margin_tokens" json:"provider_margin_tokens"`
+	MaxConcurrent             int     `toml:"max_concurrent" json:"max_concurrent"`
+	RateLimitInitialBackoffMS int     `toml:"rate_limit_initial_backoff_ms" json:"rate_limit_initial_backoff_ms"`
+	RateLimitMaxBackoffMS     int     `toml:"rate_limit_max_backoff_ms" json:"rate_limit_max_backoff_ms"`
+	SummaryWarningNodes       int     `toml:"summary_warning_nodes" json:"summary_warning_nodes"`
+	SummaryWarningBytes       int64   `toml:"summary_warning_bytes" json:"summary_warning_bytes"`
+	PolicyVersion             string  `toml:"policy_version" json:"policy_version"`
+	Profile                   string  `toml:"profile" json:"profile"`
+}
+
+// DefaultCompactCfg 返回第一版 Compact 的默认配置。
+func DefaultCompactCfg() CompactCfg {
+	return CompactCfg{
+		TimeoutMS: 30_000, MaxTokens: 2048,
+		HighWatermark: 0.80, LowWatermark: 0.60,
+		ProviderMarginTokens: 1024, MaxConcurrent: 1,
+		RateLimitInitialBackoffMS: 5000, RateLimitMaxBackoffMS: 300_000,
+		SummaryWarningNodes: 100, SummaryWarningBytes: 16 << 20,
+		PolicyVersion: "compact-v1", Profile: "default",
+	}
 }
 
 // SecurityConfig 配置内置安全组件。
@@ -57,14 +91,15 @@ type ProviderCfg struct {
 }
 
 type ModelCfg struct {
-	ID           string   `toml:"id" json:"id"`
-	Name         string   `toml:"name,omitempty" json:"name,omitempty"`
-	Provider     string   `toml:"provider" json:"provider"`
-	Capabilities []string `toml:"capabilities" json:"capabilities"`
-	MaxTokens    int      `toml:"max_tokens" json:"max_tokens"`
-	Temperature  float64  `toml:"temperature" json:"temperature"`
-	InputPrice   float64  `toml:"input_price_per_1k" json:"input_price_per_1k"`
-	OutputPrice  float64  `toml:"output_price_per_1k" json:"output_price_per_1k"`
+	ID            string   `toml:"id" json:"id"`
+	Name          string   `toml:"name,omitempty" json:"name,omitempty"`
+	Provider      string   `toml:"provider" json:"provider"`
+	Capabilities  []string `toml:"capabilities" json:"capabilities"`
+	ContextWindow int      `toml:"context_window" json:"context_window"`
+	MaxTokens     int      `toml:"max_tokens" json:"max_tokens"`
+	Temperature   float64  `toml:"temperature" json:"temperature"`
+	InputPrice    float64  `toml:"input_price_per_1k" json:"input_price_per_1k"`
+	OutputPrice   float64  `toml:"output_price_per_1k" json:"output_price_per_1k"`
 }
 
 type StorageConfig struct {
@@ -85,24 +120,25 @@ type ResolvedProvider struct {
 
 // ResolvedModel 是解析完成的模型信息。
 type ResolvedModel struct {
-	ID           string
-	Name         string // 实际传入 API 的模型名
-	Provider     string
-	Adapter      string // 适配器类型
-	Capabilities []string
-	MaxTokens    int
-	Temperature  float64
-	InputPrice   float64
-	OutputPrice  float64
-	Endpoint     string // 解析后的 API 端点
-	APIKey       string // 解析后的密钥
-	ScriptPath   string // Scripted adapter 的 fixture 路径
+	ID            string
+	Name          string // 实际传入 API 的模型名
+	Provider      string
+	Adapter       string // 适配器类型
+	Capabilities  []string
+	ContextWindow int
+	MaxTokens     int
+	Temperature   float64
+	InputPrice    float64
+	OutputPrice   float64
+	Endpoint      string // 解析后的 API 端点
+	APIKey        string // 解析后的密钥
+	ScriptPath    string // Scripted adapter 的 fixture 路径
 }
 
 // ── 配置加载 ──
 
 func Load(path string) (*Config, error) {
-	var cfg Config
+	cfg := Config{Compact: DefaultCompactCfg()}
 	if _, err := toml.DecodeFile(path, &cfg); err != nil {
 		return nil, fmt.Errorf("failed to parse config: %w", err)
 	}
@@ -166,18 +202,19 @@ func (c *Config) ResolveModel(id string) (*ResolvedModel, error) {
 	}
 
 	return &ResolvedModel{
-		ID:           model.ID,
-		Name:         name,
-		Provider:     model.Provider,
-		Adapter:      rp.Adapter,
-		Capabilities: model.Capabilities,
-		MaxTokens:    model.MaxTokens,
-		Temperature:  model.Temperature,
-		InputPrice:   model.InputPrice,
-		OutputPrice:  model.OutputPrice,
-		Endpoint:     rp.BaseURL,
-		APIKey:       rp.APIKey,
-		ScriptPath:   rp.ScriptPath,
+		ID:            model.ID,
+		Name:          name,
+		Provider:      model.Provider,
+		Adapter:       rp.Adapter,
+		Capabilities:  model.Capabilities,
+		ContextWindow: model.ContextWindow,
+		MaxTokens:     model.MaxTokens,
+		Temperature:   model.Temperature,
+		InputPrice:    model.InputPrice,
+		OutputPrice:   model.OutputPrice,
+		Endpoint:      rp.BaseURL,
+		APIKey:        rp.APIKey,
+		ScriptPath:    rp.ScriptPath,
 	}, nil
 }
 

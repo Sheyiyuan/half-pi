@@ -20,6 +20,28 @@ func TestRegister(t *testing.T) {
 	}
 }
 
+func TestRegisteredToolsSnapshotIsImmutableAndRevisioned(t *testing.T) {
+	before := RegisteredToolsSnapshot()
+	Register(Tool{
+		Name: "snapshot_tool", Description: "snapshot",
+		Parameters: &ObjectSchema{Properties: []PropertySchema{{Name: "path", Type: "string"}}, Required: []string{"path"}},
+	})
+	after := RegisteredToolsSnapshot()
+	if after.Revision != before.Revision+1 || after.Digest == before.Digest {
+		t.Fatalf("snapshot transition = before=%+v after=%+v", before, after)
+	}
+	for i := range after.Tools {
+		if after.Tools[i].Name == "snapshot_tool" {
+			after.Tools[i].Parameters.Properties[0].Name = "mutated"
+		}
+	}
+	again := RegisteredToolsSnapshot()
+	tool, ok := FindTool("snapshot_tool")
+	if !ok || tool.Parameters.Properties[0].Name != "path" || again.Digest != after.Digest {
+		t.Fatalf("tool snapshot was not immutable")
+	}
+}
+
 func TestFindTool(t *testing.T) {
 	Register(Tool{Name: "find_me", Description: "test find"})
 	Register(Tool{Name: "skip_me", Description: "test skip"})

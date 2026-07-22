@@ -119,6 +119,9 @@ func run(args []string, output, logs io.Writer) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("load config: %w", err)
 	}
+	if err := management.ValidateConfig(cfg); err != nil {
+		return fmt.Errorf("validate config: %w", err)
+	}
 
 	db, err := store.New(env.DBPath)
 	if err != nil {

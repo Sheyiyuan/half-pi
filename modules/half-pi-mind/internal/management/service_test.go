@@ -192,3 +192,56 @@ func TestValidateConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateCompactConfig(t *testing.T) {
+	valid := func() *config.Config {
+		return &config.Config{
+			Server: config.ServerConfig{Host: "127.0.0.1", Port: 15707},
+			LLM: config.LLMConfig{
+				DefaultProvider: "main", DefaultModel: "main-model",
+				Providers: []config.ProviderCfg{
+					{Name: "main", Adapter: "openai", BaseURL: "https://example.com/v1"},
+					{Name: "summary", Adapter: "openai", BaseURL: "https://example.com/v1"},
+				},
+				Models: []config.ModelCfg{
+					{ID: "main-model", Provider: "main", ContextWindow: 32768, MaxTokens: 2048},
+					{ID: "summary-model", Provider: "summary", ContextWindow: 16384, MaxTokens: 2048},
+				},
+			},
+			Compact: config.CompactCfg{
+				Enabled: true, Automatic: true, Provider: "summary", Model: "summary-model",
+				TimeoutMS: 30_000, MaxTokens: 1024, HighWatermark: .8, LowWatermark: .6,
+				ProviderMarginTokens: 1024, MaxConcurrent: 1,
+				RateLimitInitialBackoffMS: 5000, RateLimitMaxBackoffMS: 300_000,
+				SummaryWarningNodes: 100, SummaryWarningBytes: 16 << 20,
+				PolicyVersion: "compact-v1", Profile: "default",
+			},
+		}
+	}
+	if err := ValidateConfig(valid()); err != nil {
+		t.Fatalf("valid compact config rejected: %v", err)
+	}
+	tests := map[string]func(*config.Config){
+		"missing summary model": func(cfg *config.Config) { cfg.Compact.Model = "" },
+		"provider mismatch":     func(cfg *config.Config) { cfg.Compact.Provider = "main" },
+		"main budget":           func(cfg *config.Config) { cfg.LLM.Models[0].ContextWindow = 3000 },
+		"summary budget":        func(cfg *config.Config) { cfg.LLM.Models[1].ContextWindow = 2048 },
+		"watermarks":            func(cfg *config.Config) { cfg.Compact.LowWatermark = .9 },
+		"timeout":               func(cfg *config.Config) { cfg.Compact.TimeoutMS = 999 },
+		"max tokens":            func(cfg *config.Config) { cfg.Compact.MaxTokens = 64 },
+		"max concurrent":        func(cfg *config.Config) { cfg.Compact.MaxConcurrent = 17 },
+		"backoff":               func(cfg *config.Config) { cfg.Compact.RateLimitInitialBackoffMS = 999 },
+		"policy":                func(cfg *config.Config) { cfg.Compact.PolicyVersion = "future" },
+		"profile":               func(cfg *config.Config) { cfg.Compact.Profile = "verbose" },
+		"automatic disabled":    func(cfg *config.Config) { cfg.Compact.Enabled = false },
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			cfg := valid()
+			mutate(cfg)
+			if err := ValidateConfig(cfg); err == nil {
+				t.Fatal("invalid compact config accepted")
+			}
+		})
+	}
+}

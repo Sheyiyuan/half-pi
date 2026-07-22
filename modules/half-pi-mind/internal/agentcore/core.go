@@ -333,7 +333,11 @@ func (c *Core) executeToolWithMeta(ctx context.Context, name string, args json.R
 	result := runtime.Execute(ctx, executor.Invocation{
 		Meta: meta, Tool: name, Args: args, ForceUserApproval: forceApproval, Purpose: purpose,
 	})
-	toolResult := &executor.ToolResult{Data: result.Data}
+	toolResult := &executor.ToolResult{
+		Data: result.Data, CompactReason: result.CompactProjection.ReasonCategory,
+		CompactFacts:      append([]executor.CompactFact(nil), result.CompactProjection.CandidateFacts...),
+		CompactProjection: result.CompactProjection,
+	}
 	if result.ExecutionOutcome == executor.ExecutionSucceeded && result.DeliveryOutcome == corelifecycle.OutcomeSucceeded {
 		toolResult.Success = true
 		toolResult.Output = result.Output

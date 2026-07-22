@@ -86,10 +86,11 @@ func (r *Registry) ApplyProgressFrom(handID, connectionID string, msg protocol.R
 
 // Registry 按 run_id 原子管理远程执行状态。
 type Registry struct {
-	mu      sync.Mutex
-	runs    map[string]*Run
-	auditor Auditor
-	changes observer.Hub[Run]
+	mu         sync.Mutex
+	runs       map[string]*Run
+	auditor    Auditor
+	changes    observer.Hub[Run]
+	protection *ProtectionIndex
 }
 
 const (
@@ -99,11 +100,19 @@ const (
 
 // NewRegistry 创建空的远程执行注册表。
 func NewRegistry(auditor ...Auditor) *Registry {
-	registry := &Registry{runs: make(map[string]*Run)}
+	registry := &Registry{runs: make(map[string]*Run), protection: NewProtectionIndex()}
 	if len(auditor) > 0 {
 		registry.auditor = auditor[0]
 	}
 	return registry
+}
+
+// ProtectionIndex 返回 Registry 与 TaskService 共享的远程工作保护索引。
+func (r *Registry) ProtectionIndex() *ProtectionIndex {
+	if r == nil {
+		return nil
+	}
+	return r.protection
 }
 
 // Subscribe 注册 run 状态变化观察者。
@@ -262,5 +271,6 @@ func copyRun(run *Run) Run {
 }
 
 func (r *Registry) notifyLocked(run *Run) {
+	r.protection.observeRun(copyRun(run))
 	r.changes.Publish(copyRun(run))
 }

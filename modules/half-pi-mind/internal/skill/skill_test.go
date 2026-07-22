@@ -382,6 +382,36 @@ func writeSkillFile(t *testing.T, dir, name, content string) {
 	}
 }
 
+func TestSnapshotIsImmutableAndRevisioned(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillFile(t, dir, "one.skill.md", `---
+name: one
+description: One
+tags: [first]
+---
+Body.`)
+	store, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := store.Snapshot()
+	if first.Revision == 0 || len(first.Skills) != 1 || first.Digest == "" {
+		t.Fatalf("first snapshot = %+v", first)
+	}
+	first.Skills[0].Description = "mutated"
+	second := store.Snapshot()
+	if second.Skills[0].Description != "One" || second.Digest != first.Digest {
+		t.Fatalf("skill snapshot was not immutable: %+v", second)
+	}
+	if err := store.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	third := store.Snapshot()
+	if third.Revision != second.Revision+1 || third.Digest != second.Digest {
+		t.Fatalf("reload snapshot = %+v", third)
+	}
+}
+
 func contains(s, substr string) bool {
 	for i := 0; i <= len(s)-len(substr); i++ {
 		if s[i:i+len(substr)] == substr {

@@ -4,19 +4,45 @@ package executor
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 )
 
 // ToolResult 是工具执行结果。Output 是 LLM 可读的文本，Data 是供 Face 渲染的结构化数据。
 type ToolResult struct {
-	Success bool
-	Output  string
-	Data    any // 结构化输出，用于 Face 渲染（JSON 序列化）
-	Error   string
+	Success           bool
+	Output            string
+	Data              any // 结构化输出，用于 Face 渲染（JSON 序列化）
+	Error             string
+	CompactReason     string
+	CompactFacts      []CompactFact
+	CompactProjection CompactProjection
+}
+
+// CompactFact 是工具可提交给中央 Compact projector 的强类型候选事实。
+type CompactFact struct {
+	Kind      string
+	Path      string
+	HandID    string
+	RunID     string
+	TaskID    string
+	Tool      string
+	Status    string
+	ToolNames []string
+}
+
+// CompactProjection 绑定最终工具输出，并携带尚未由中央策略放行的候选事实。
+type CompactProjection struct {
+	OutputBytes    int
+	OutputDigest   string
+	ReasonCategory string
+	CandidateFacts []CompactFact
 }
 
 // Progress 是工具执行期间产生的可选增量信息。
@@ -209,9 +235,17 @@ func toolDecision(tool Tool, args json.RawMessage) (Decision, string) {
 // ── 全局注册表 ──
 
 var (
-	registryMu      sync.RWMutex
-	registeredTools []Tool
+	registryMu       sync.RWMutex
+	registeredTools  []Tool
+	registryRevision atomic.Uint64
 )
+
+// ToolRegistrySnapshot 是工具定义在一个 revision 上的不可变规范视图。
+type ToolRegistrySnapshot struct {
+	Revision uint64
+	Tools    []Tool
+	Digest   string
+}
 
 // Register 在 init() 中调用，注册工具到全局列表。
 func Register(t Tool) {
@@ -226,6 +260,7 @@ func Register(t Tool) {
 		}
 	}
 	registeredTools = append(registeredTools, t)
+	registryRevision.Add(1)
 }
 
 // RegisteredTools 返回所有已注册的工具。
@@ -233,8 +268,51 @@ func RegisteredTools() []Tool {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 	tools := make([]Tool, len(registeredTools))
-	copy(tools, registeredTools)
+	for i := range registeredTools {
+		tools[i] = cloneTool(registeredTools[i])
+	}
 	return tools
+}
+
+// RegisteredToolsSnapshot 返回深拷贝工具定义、单调 revision 和规范摘要。
+func RegisteredToolsSnapshot() ToolRegistrySnapshot {
+	registryMu.RLock()
+	tools := make([]Tool, len(registeredTools))
+	for i := range registeredTools {
+		tools[i] = cloneTool(registeredTools[i])
+	}
+	revision := registryRevision.Load()
+	registryMu.RUnlock()
+
+	type digestTool struct {
+		Name           string
+		Description    string
+		Parameters     map[string]any
+		DefaultConfirm bool
+		OwnsConfirm    bool
+	}
+	digestTools := make([]digestTool, len(tools))
+	for i := range tools {
+		digestTools[i] = digestTool{
+			Name: tools[i].Name, Description: tools[i].Description,
+			Parameters:     tools[i].SchemaParameters(),
+			DefaultConfirm: tools[i].DefaultConfirm, OwnsConfirm: tools[i].OwnsConfirm,
+		}
+	}
+	sort.Slice(digestTools, func(i, j int) bool { return digestTools[i].Name < digestTools[j].Name })
+	encoded, _ := json.Marshal(digestTools)
+	digest := sha256.Sum256(append([]byte("half-pi:tool-registry:v1\x00"), encoded...))
+	return ToolRegistrySnapshot{Revision: revision, Tools: tools, Digest: fmt.Sprintf("%x", digest[:])}
+}
+
+func cloneTool(tool Tool) Tool {
+	if tool.Parameters != nil {
+		parameters := *tool.Parameters
+		parameters.Properties = append([]PropertySchema(nil), tool.Parameters.Properties...)
+		parameters.Required = append([]string(nil), tool.Parameters.Required...)
+		tool.Parameters = &parameters
+	}
+	return tool
 }
 
 // FindTool 按名称查找已注册的工具。

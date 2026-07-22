@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 
+	"github.com/google/uuid"
+
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
@@ -111,7 +113,13 @@ func (r *Repl) loop() bool {
 		return true
 	}
 
-	ctx := requestctx.WithSource(context.Background(), "repl")
+	requestID, err := uuid.NewV7()
+	if err != nil {
+		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("generate request ID: %v", err))
+		return true
+	}
+	ctx := requestctx.WithRequestID(context.Background(), requestID.String())
+	ctx = requestctx.WithSource(ctx, "repl")
 	response, err := r.core.Chat(ctx, input)
 	if err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("error: %v", err))

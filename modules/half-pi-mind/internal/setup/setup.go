@@ -96,6 +96,25 @@ max_tokens = 256
 policy_version = "v1"
 profile = "default"
 
+[compact]
+enabled = false
+automatic = false
+provider = ""
+model = ""
+timeout_ms = 30000
+max_tokens = 2048
+high_watermark = 0.80
+low_watermark = 0.60
+reserved_output_tokens = 0
+provider_margin_tokens = 1024
+max_concurrent = 1
+rate_limit_initial_backoff_ms = 5000
+rate_limit_max_backoff_ms = 300000
+summary_warning_nodes = 100
+summary_warning_bytes = 16777216
+policy_version = "compact-v1"
+profile = "default"
+
   # ── Provider 定义 ──
   # name    内部标识
   # base_url  API 地址
@@ -135,7 +154,8 @@ id = "ds-v4-flash"
 name = "deepseek-v4-flash"
 provider = "deepseek"
 capabilities = []
-max_tokens = 384000
+context_window = 384000
+max_tokens = 8192
 temperature = 0.3
 input_price_per_1k = 0.0
 output_price_per_1k = 0.0

@@ -381,6 +381,30 @@ type testGuard struct {
 	verdict Verdict
 }
 
+func TestRegistrySnapshotIsImmutableAndRevisioned(t *testing.T) {
+	registry := NewRegistry()
+	before := registry.Snapshot()
+	registration := Registration{
+		ID: "snapshot-transformer", Kind: KindTransformer,
+		Phases:         []Phase{PhaseModelBeforeRequest},
+		Capabilities:   []Capability{CapabilityTransform},
+		Scope:          ScopeFilter{ConversationIDs: []string{"conversation-1"}},
+		ConfigRevision: 7,
+	}
+	if err := registry.RegisterTransformer(registration, &testTransformer{id: registration.ID}); err != nil {
+		t.Fatal(err)
+	}
+	after := registry.Snapshot()
+	if after.Revision != before.Revision+1 || after.Digest == before.Digest || len(after.Registrations) != 1 {
+		t.Fatalf("snapshot transition = before=%+v after=%+v", before, after)
+	}
+	after.Registrations[0].Scope.ConversationIDs[0] = "mutated"
+	again := registry.Snapshot()
+	if again.Registrations[0].Scope.ConversationIDs[0] != "conversation-1" || again.Digest != after.Digest {
+		t.Fatalf("snapshot was not immutable: %+v", again)
+	}
+}
+
 func (g *testGuard) ID() string                                                { return g.id }
 func (g *testGuard) Evaluate(ctx context.Context, action FrozenAction) Verdict { return g.verdict }
 
