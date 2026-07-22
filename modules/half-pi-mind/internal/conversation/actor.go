@@ -3,6 +3,7 @@ package conversation
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
@@ -10,6 +11,27 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
+
+// OperationLease 是 Actor 对一次已接纳 mutation 的唯一所有权证明。
+type OperationLease struct {
+	actor     *Actor
+	token     uint64
+	initial   OperationState
+	requestID string
+	released  atomic.Bool
+}
+
+// Release 放弃尚未执行或已经结束的 operation lease。
+func (l *OperationLease) Release() {
+	if l == nil || l.actor == nil || l.released.Swap(true) {
+		return
+	}
+	l.actor.operationMu.Lock()
+	if l.actor.operationToken == l.token {
+		l.actor.operation, l.actor.requestID = OperationIdle, ""
+	}
+	l.actor.operationMu.Unlock()
+}
 
 // OperationState 是 Actor 唯一 mutation lease 的公开状态。
 type OperationState string
@@ -32,13 +54,19 @@ func (a *Actor) OperationState() OperationState {
 }
 
 func (a *Actor) acquire(state OperationState, requestID string) bool {
+	_, ok := a.acquireLease(state, requestID)
+	return ok
+}
+
+func (a *Actor) acquireLease(state OperationState, requestID string) (*OperationLease, bool) {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 	if a.operation != OperationIdle {
-		return false
+		return nil, false
 	}
+	a.operationToken++
 	a.operation, a.requestID = state, requestID
-	return true
+	return &OperationLease{actor: a, token: a.operationToken, initial: state, requestID: requestID}, true
 }
 
 func (a *Actor) transition(from, to OperationState) bool {
@@ -65,11 +93,25 @@ func (a *Actor) Chat(ctx context.Context, content string) (string, error) {
 // ChatWithTransport 通过 Actor 唯一 lease 执行流式 Chat。
 func (a *Actor) ChatWithTransport(ctx context.Context, content string, transport agentcore.ChatTransport) (string, error) {
 	requestID := requestctx.RequestID(ctx)
-	if !a.acquire(OperationChatPreparing, requestID) {
+	lease, ok := a.AdmitChat(requestID)
+	if !ok {
+		return "", ErrBusy
+	}
+	return a.ChatWithLease(ctx, content, transport, lease)
+}
+
+// AdmitChat 非阻塞取得一轮 Chat 的 Actor lease。
+func (a *Actor) AdmitChat(requestID string) (*OperationLease, bool) {
+	return a.acquireLease(OperationChatPreparing, requestID)
+}
+
+// ChatWithLease 执行一轮已由 Actor 接纳的 Chat。
+func (a *Actor) ChatWithLease(ctx context.Context, content string, transport agentcore.ChatTransport, lease *OperationLease) (string, error) {
+	if !a.ownsLease(lease, OperationChatPreparing) {
 		return "", ErrBusy
 	}
 	defer func() {
-		a.release()
+		lease.Release()
 		a.schedulePendingWorker()
 	}()
 	return a.core.ChatWithTransport(ctx, content, transport)
@@ -80,11 +122,29 @@ func (a *Actor) Compact(ctx context.Context, request compact.CompactRequest) (co
 	if a.compactor == nil {
 		return compact.CompactResult{}, compact.NewError(compact.ErrUnavailable)
 	}
-	if !a.acquire(OperationCompactingManual, request.RequestID) {
+	lease, ok := a.AdmitCompact(request.RequestID)
+	if !ok {
+		return compact.CompactResult{}, ErrBusy
+	}
+	return a.CompactWithLease(ctx, request, lease)
+}
+
+// AdmitCompact 非阻塞取得一次手动 Compact 的 Actor lease。
+func (a *Actor) AdmitCompact(requestID string) (*OperationLease, bool) {
+	return a.acquireLease(OperationCompactingManual, requestID)
+}
+
+// CompactWithLease 执行一次已由 Actor 接纳的手动 Compact。
+func (a *Actor) CompactWithLease(ctx context.Context, request compact.CompactRequest, lease *OperationLease) (compact.CompactResult, error) {
+	if a.compactor == nil {
+		lease.Release()
+		return compact.CompactResult{}, compact.NewError(compact.ErrUnavailable)
+	}
+	if !a.ownsLease(lease, OperationCompactingManual) {
 		return compact.CompactResult{}, ErrBusy
 	}
 	defer func() {
-		a.release()
+		lease.Release()
 		a.schedulePendingWorker()
 	}()
 	request.SessionID = a.core.SessionID()
@@ -96,11 +156,18 @@ func (a *Actor) Compact(ctx context.Context, request compact.CompactRequest) (co
 	if status.Pending {
 		request.Pending = store.PendingExpectation{ID: status.PendingID, Attempt: status.PendingAttempt, Required: true}
 	}
+	request.Observe = a.compactObserver(request.Observe)
 	result, err := a.compactor.Compact(ctx, request)
-	if a.onChange != nil {
-		a.onChange()
-	}
 	return result, err
+}
+
+func (a *Actor) ownsLease(lease *OperationLease, initial OperationState) bool {
+	if lease == nil || lease.actor != a || lease.initial != initial || lease.released.Load() {
+		return false
+	}
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	return a.operationToken == lease.token && a.operation != OperationIdle && a.requestID == lease.requestID
 }
 
 // CompactStatus 返回已提交 Compact 状态；不取得 mutation lease。
@@ -159,8 +226,13 @@ func (a *Actor) ObserveModelBudget(ctx context.Context, observation agentcore.Bu
 		}
 		return false, nil
 	}
-	if a.onChange != nil && pending.Created {
-		a.onChange()
+	if pending.Created {
+		if a.onCompact != nil {
+			a.onCompact(compact.RequestedEvent{
+				SessionID: a.core.SessionID(), RequestID: pending.Runtime.PendingCompactID,
+				Trigger: compact.TriggerAutomatic, StateChanged: true,
+			})
+		}
 	}
 	if !observation.FirstRequest {
 		return false, nil
@@ -179,11 +251,9 @@ func (a *Actor) ObserveModelBudget(ctx context.Context, observation agentcore.Bu
 		SessionID: a.core.SessionID(), RequestID: pending.Runtime.PendingCompactID,
 		Target: compact.DefaultTarget{}, Trigger: compact.TriggerAutomatic,
 		Pending: store.PendingExpectation{ID: pending.Runtime.PendingCompactID, Attempt: pending.Runtime.PendingAttempt, Required: true},
+		Observe: a.compactObserver(nil),
 	})
 	a.transition(OperationCompactingForChat, OperationChatRunning)
-	if a.onChange != nil {
-		a.onChange()
-	}
 	if err != nil {
 		if observation.EstimatedTokens > observation.HardLimit {
 			return false, budgetFailure(observation, err)
@@ -200,6 +270,17 @@ func (a *Actor) PrepareToolBatchPending(_ context.Context, observation agentcore
 	}
 	pendingID, event := compact.NewAutomaticPendingMutation(a.core.SessionID())
 	return &agentcore.ToolBatchPending{ID: pendingID, Event: event}, nil
+}
+
+// ToolBatchPendingCommitted 将工具批次事务中真正建立的自动 Compact hint 投影为 domain event。
+func (a *Actor) ToolBatchPendingCommitted(pending *agentcore.ToolBatchPending, result store.CompactPendingResult) {
+	if pending == nil || !result.Created || a.onCompact == nil {
+		return
+	}
+	a.onCompact(compact.RequestedEvent{
+		SessionID: a.core.SessionID(), RequestID: result.Runtime.PendingCompactID,
+		Trigger: compact.TriggerAutomatic, StateChanged: true,
+	})
 }
 
 func budgetFailure(observation agentcore.BudgetObservation, err error) error {
@@ -287,14 +368,24 @@ func (a *Actor) runPendingWorker() {
 	_, runErr := a.compactor.Compact(ctx, compact.CompactRequest{
 		SessionID: a.core.SessionID(), RequestID: status.PendingID,
 		Target: compact.DefaultTarget{}, Trigger: compact.TriggerAutomatic, Pending: pending,
+		Observe: a.compactObserver(nil),
 	})
-	if a.onChange != nil {
-		a.onChange()
-	}
 	if errors.Is(runErr, context.Canceled) {
 		return
 	}
 	reschedule = compact.ErrorCodeOf(runErr) == compact.ErrRateLimited
+}
+
+func (a *Actor) compactObserver(existing func(compact.Event)) func(compact.Event) {
+	if existing == nil {
+		return a.onCompact
+	}
+	return func(event compact.Event) {
+		existing(event)
+		if a.onCompact != nil {
+			a.onCompact(event)
+		}
+	}
 }
 
 func (a *Actor) stopPendingWorker() {

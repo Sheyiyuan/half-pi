@@ -16,6 +16,7 @@ func IsFaceCommandType(typ string) bool {
 		TypeFaceChatStreamGet, TypeFaceCapabilitiesGet,
 		TypeFaceConversationList, TypeFaceConversationCreate,
 		TypeFaceConversationSnapshot, TypeFaceConversationRename, TypeFaceConversationMessages,
+		TypeFaceConversationCompact, TypeFaceCompactStatus,
 		TypeFaceSubscribe, TypeFaceApprovalResolve,
 		TypeFaceRunGet, TypeFaceRunCancel, TypeFaceHandList, TypeFaceHandGet,
 		TypeFaceTaskList, TypeFaceTaskGet, TypeFaceTaskLog, TypeFaceTaskCancel:
@@ -72,6 +73,9 @@ func ValidateFacePayload(typ string, payload json.RawMessage) error {
 		if err == nil {
 			err = requireFields(v.RequestID, "request_id")
 		}
+		if err == nil {
+			err = validateAcceptedFeatures(v.AcceptFeatures)
+		}
 	case TypeFaceConversationList:
 		var v FaceConversationList
 		err = decodeFacePayload(payload, &v)
@@ -101,6 +105,21 @@ func ValidateFacePayload(typ string, payload json.RawMessage) error {
 		err = decodeFacePayload(payload, &v)
 		if err == nil {
 			err = validateFaceConversationMessages(v)
+		}
+	case TypeFaceConversationCompact:
+		var v FaceConversationCompact
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = requireFields(v.RequestID, "request_id", v.ConversationID, "conversation_id")
+		}
+		if err == nil {
+			err = validateFaceCompactTarget(v.Target)
+		}
+	case TypeFaceCompactStatus:
+		var v FaceCompactStatusGet
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = requireFields(v.RequestID, "request_id", v.ConversationID, "conversation_id")
 		}
 	case TypeFaceSubscribe:
 		var v FaceSubscribe
@@ -272,6 +291,19 @@ func validateRawJSON(data json.RawMessage, field string) error {
 	}
 	if err := decoder.Decode(&struct{}{}); err != io.EOF {
 		return fmt.Errorf("%s contains trailing JSON data", field)
+	}
+	return nil
+}
+
+func requireJSONFields(data json.RawMessage, fields ...string) error {
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return err
+	}
+	for _, field := range fields {
+		if _, ok := object[field]; !ok {
+			return fmt.Errorf("%s is required", field)
+		}
 	}
 	return nil
 }
@@ -517,6 +549,31 @@ func ValidateFaceResultData(operation FaceOperation, data json.RawMessage) error
 				err = fmt.Errorf("unknown task cancel outcome %q", v.Outcome)
 			}
 		}
+	case FaceOperationConversationCompact:
+		var v FaceCompactResult
+		err = decodeFacePayload(data, &v)
+		if err == nil {
+			err = validateFaceCompactResult(v)
+		}
+	case FaceOperationCompactStatus:
+		var v FaceCompactStatus
+		err = requireJSONFields(data,
+			"enabled", "automatic", "operation_state", "summary_id", "covered_from_seq", "covered_to_seq",
+			"last_seq", "message_count", "context_message_count", "summary_node_count", "summary_storage_bytes",
+			"summary_bytes", "source_estimated_tokens", "summary_estimated_tokens", "compression_ratio",
+			"generation_mode", "candidate_generation_mode", "configured_summary_provider_id", "configured_summary_model_id",
+			"active_summary_provider_id", "active_summary_model_id", "estimated_tokens", "input_budget",
+			"reserved_output_tokens", "high_limit", "low_target", "compressible_from_seq", "compressible_to_seq",
+			"retained_from_seq", "retained_to_seq", "pending", "pending_attempt", "pending_not_before",
+			"summary_input_budget", "required_summary_input_estimated_tokens", "context_version", "projection_version",
+			"policy_version", "profile", "active_projection_version", "active_policy_version", "active_profile",
+			"compact_degraded", "blocker", "warnings")
+		if err == nil {
+			err = decodeFacePayload(data, &v)
+		}
+		if err == nil {
+			err = validateFaceCompactStatus(v)
+		}
 	default:
 		return fmt.Errorf("operation %q has no structured result data", operation)
 	}
@@ -566,6 +623,150 @@ func validateFaceCapabilities(v FaceCapabilitiesResult) error {
 		return fmt.Errorf("limits do not match protocol constants")
 	}
 	return nil
+}
+
+func validateAcceptedFeatures(features []string) error {
+	if len(features) > MaxFaceAcceptFeatures {
+		return fmt.Errorf("accept_features exceeds %d items", MaxFaceAcceptFeatures)
+	}
+	seen := make(map[string]struct{}, len(features))
+	for _, feature := range features {
+		if !validOpenFeature(feature) {
+			return fmt.Errorf("invalid accepted feature %q", feature)
+		}
+		if _, ok := seen[feature]; ok {
+			return fmt.Errorf("accept_features must not contain duplicate values")
+		}
+		seen[feature] = struct{}{}
+	}
+	return nil
+}
+
+func validOpenFeature(feature string) bool {
+	if len(feature) == 0 || len(feature) > MaxFaceFeatureBytes || !isLowerFeatureAlphaNum(feature[0]) {
+		return false
+	}
+	for index := 1; index < len(feature); index++ {
+		char := feature[index]
+		if isLowerFeatureAlphaNum(char) || char == '_' || char == '.' || char == '-' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+func isLowerFeatureAlphaNum(char byte) bool {
+	return char >= 'a' && char <= 'z' || char >= '0' && char <= '9'
+}
+
+func validateFaceCompactTarget(target FaceCompactTarget) error {
+	switch target.Mode {
+	case FaceCompactTargetDefault, FaceCompactTargetRebase:
+		if target.Ratio != nil || target.KeepMessages != nil {
+			return fmt.Errorf("%s target must not contain target-specific fields", target.Mode)
+		}
+	case FaceCompactTargetRatio:
+		if target.Ratio == nil || target.KeepMessages != nil || math.IsNaN(*target.Ratio) || math.IsInf(*target.Ratio, 0) || *target.Ratio < .20 || *target.Ratio >= .95 {
+			return fmt.Errorf("ratio target requires ratio between 0.20 and 0.95")
+		}
+	case FaceCompactTargetKeep:
+		if target.KeepMessages == nil || target.Ratio != nil || *target.KeepMessages < 1 || *target.KeepMessages > 10_000 {
+			return fmt.Errorf("keep_messages target requires a value between 1 and 10000")
+		}
+	default:
+		return fmt.Errorf("unknown compact target mode %q", target.Mode)
+	}
+	return nil
+}
+
+func validateFaceCompactResult(v FaceCompactResult) error {
+	if err := requireFields(v.SummaryID, "summary_id"); err != nil {
+		return err
+	}
+	if v.FromSeq != 1 || v.ToSeq < v.FromSeq || v.BeforeEstimatedTokens < 0 || v.AfterEstimatedTokens < 0 ||
+		v.RetainedFromSeq < 0 || v.RetainedToSeq < 0 || v.ContextVersion == 0 || !validCompactGenerationMode(v.GenerationMode, false) {
+		return fmt.Errorf("compact result range, estimates, mode or context version is invalid")
+	}
+	if (v.RetainedFromSeq == 0) != (v.RetainedToSeq == 0) || v.RetainedFromSeq > 0 && (v.RetainedFromSeq != v.ToSeq+1 || v.RetainedToSeq < v.RetainedFromSeq) {
+		return fmt.Errorf("retained range is invalid")
+	}
+	tokenVariant := v.TargetTokens != nil || v.TargetMet != nil
+	keepVariant := v.RequestedKeepMessages != nil || v.RetainedMessageCount != nil || v.SafetyRetainedExtra != nil || v.CapacityRetainedExtra != nil
+	if tokenVariant == keepVariant {
+		return fmt.Errorf("compact result requires exactly one target result variant")
+	}
+	if tokenVariant {
+		if v.TargetTokens == nil || v.TargetMet == nil || *v.TargetTokens < 0 {
+			return fmt.Errorf("token target result is incomplete")
+		}
+		return nil
+	}
+	if v.RequestedKeepMessages == nil || v.RetainedMessageCount == nil || v.SafetyRetainedExtra == nil || v.CapacityRetainedExtra == nil ||
+		*v.RequestedKeepMessages < 1 || *v.RetainedMessageCount < 0 || *v.SafetyRetainedExtra < 0 || *v.CapacityRetainedExtra < 0 ||
+		*v.RetainedMessageCount != *v.RequestedKeepMessages+*v.SafetyRetainedExtra+*v.CapacityRetainedExtra {
+		return fmt.Errorf("keep target result is invalid")
+	}
+	return nil
+}
+
+func validateFaceCompactStatus(v FaceCompactStatus) error {
+	if !validCompactOperationState(v.OperationState) || v.LastSeq < 0 || v.MessageCount < 0 || v.ContextMessageCount < 0 ||
+		v.ContextMessageCount > v.MessageCount || v.SummaryNodeCount < 0 || v.SummaryStorageBytes < 0 || v.SummaryBytes < 0 ||
+		v.SourceEstimatedTokens < 0 || v.SummaryEstimatedTokens < 0 || math.IsNaN(v.CompressionRatio) || math.IsInf(v.CompressionRatio, 0) || v.CompressionRatio < 0 ||
+		v.EstimatedTokens < 0 || v.InputBudget < 0 || v.ReservedOutputTokens < 0 || v.HighLimit < 0 || v.LowTarget < 0 ||
+		v.PendingAttempt < 0 || v.PendingNotBefore < 0 || v.SummaryInputBudget < 0 || v.RequiredSummaryInputEstimatedTokens < 0 {
+		return fmt.Errorf("compact status contains invalid numeric or operation values")
+	}
+	if !validCompactGenerationMode(v.GenerationMode, true) || !validCompactGenerationMode(v.CandidateGenerationMode, true) {
+		return fmt.Errorf("compact status contains an unknown generation mode")
+	}
+	if (v.SummaryID == "") != (v.CoveredFromSeq == 0 && v.CoveredToSeq == 0) || v.SummaryID != "" && (v.CoveredFromSeq != 1 || v.CoveredToSeq < 1 || v.SummaryBytes < 1) {
+		return fmt.Errorf("active compact summary fields are inconsistent")
+	}
+	if !validOptionalSeqRange(v.CompressibleFromSeq, v.CompressibleToSeq) || !validOptionalSeqRange(v.RetainedFromSeq, v.RetainedToSeq) {
+		return fmt.Errorf("compact candidate ranges are invalid")
+	}
+	if !v.Pending && (v.PendingAttempt != 0 || v.PendingNotBefore != 0) {
+		return fmt.Errorf("compact pending fields are inconsistent")
+	}
+	if v.Blocker != "" && !validCompactErrorCode(v.Blocker) {
+		return fmt.Errorf("unknown compact blocker %q", v.Blocker)
+	}
+	if v.Warnings == nil {
+		return fmt.Errorf("warnings is required")
+	}
+	seenWarnings := make(map[string]struct{}, len(v.Warnings))
+	previous := ""
+	for _, warning := range v.Warnings {
+		switch warning {
+		case "shared_summary_model", "summary_node_count_high", "summary_storage_high":
+		default:
+			return fmt.Errorf("unknown compact warning %q", warning)
+		}
+		if _, ok := seenWarnings[warning]; ok || previous > warning {
+			return fmt.Errorf("compact warnings must be unique and sorted")
+		}
+		seenWarnings[warning], previous = struct{}{}, warning
+	}
+	return nil
+}
+
+func validOptionalSeqRange(from, to int) bool {
+	return from == 0 && to == 0 || from > 0 && to >= from
+}
+
+func validCompactOperationState(state string) bool {
+	switch state {
+	case "idle", "chat_preparing", "compacting_for_chat", "chat_running", "compacting_manual", "compacting_auto", "mutating_context":
+		return true
+	default:
+		return false
+	}
+}
+
+func validCompactGenerationMode(mode FaceCompactGenerationMode, allowEmpty bool) bool {
+	return allowEmpty && mode == "" || mode == FaceCompactGenerationFull || mode == FaceCompactGenerationIncremental || mode == FaceCompactGenerationRebase
 }
 
 func validateChatStreamGetResult(v ChatStreamGetResult) error {
@@ -964,6 +1165,55 @@ func validateFaceEvent(v FaceEvent) error {
 		if data.ConversationID != v.ConversationID {
 			return fmt.Errorf("data.conversation_id must match conversation_id")
 		}
+	case FaceEventCompactRequested:
+		var data CompactRequestedEventData
+		if err := decodeFacePayload(v.Data, &data); err != nil {
+			return fmt.Errorf("data: %w", err)
+		}
+		if !validCompactTrigger(data.Trigger) {
+			return fmt.Errorf("unknown compact trigger %q", data.Trigger)
+		}
+	case FaceEventCompactStarted:
+		var data CompactStartedEventData
+		if err := decodeFacePayload(v.Data, &data); err != nil {
+			return fmt.Errorf("data: %w", err)
+		}
+		if !validCompactTrigger(data.Trigger) || data.FromSeq != 1 || data.ToSeq < data.FromSeq ||
+			!validCompactGenerationMode(data.GenerationMode, false) || !validSHA256Digest(data.SourceDigest) || data.Attempt < 1 {
+			return fmt.Errorf("compact started data is invalid")
+		}
+	case FaceEventCompactCompleted:
+		var data CompactCompletedEventData
+		if err := decodeFacePayload(v.Data, &data); err != nil {
+			return fmt.Errorf("data: %w", err)
+		}
+		if !validCompactTrigger(data.Trigger) || data.SummaryID == "" || data.FromSeq != 1 || data.ToSeq < data.FromSeq ||
+			data.BeforeEstimatedTokens < 0 || data.AfterEstimatedTokens < 0 || data.SummaryBytes < 1 ||
+			!validSHA256Digest(data.SourceDigest) || data.DurationMS < 0 || data.ContextVersion < 1 {
+			return fmt.Errorf("compact completed data is invalid")
+		}
+	case FaceEventCompactFailed:
+		if err := requireJSONFields(v.Data, "trigger", "reason", "duration_ms", "retry_scheduled"); err != nil {
+			return fmt.Errorf("data: %w", err)
+		}
+		var data CompactFailedEventData
+		if err := decodeFacePayload(v.Data, &data); err != nil {
+			return fmt.Errorf("data: %w", err)
+		}
+		if !validCompactTrigger(data.Trigger) || !validCompactErrorCode(data.Reason) || data.DurationMS < 0 {
+			return fmt.Errorf("compact failed data is invalid")
+		}
+		hasRange := data.FromSeq != nil || data.ToSeq != nil || data.SourceDigest != ""
+		if hasRange && (data.FromSeq == nil || data.ToSeq == nil || *data.FromSeq != 1 || *data.ToSeq < *data.FromSeq || !validSHA256Digest(data.SourceDigest)) {
+			return fmt.Errorf("compact failed source fields are incomplete")
+		}
+		if data.RetryScheduled {
+			if data.Reason != FaceErrorCompactRateLimited || data.PendingAttempt == nil || data.RetryNotBefore == nil || *data.PendingAttempt < 0 || *data.RetryNotBefore < 1 {
+				return fmt.Errorf("compact failed retry fields are invalid")
+			}
+		} else if data.PendingAttempt != nil || data.RetryNotBefore != nil {
+			return fmt.Errorf("compact failed retry fields require retry_scheduled")
+		}
 	}
 	return nil
 }
@@ -1026,6 +1276,8 @@ func validateFaceEventCorrelation(v FaceEvent) error {
 		return requireFields(v.ConversationID, "conversation_id")
 	case FaceEventRemoteRunChanged, FaceEventTaskChanged, FaceEventConversationChanged:
 		return requireFields(v.ConversationID, "conversation_id")
+	case FaceEventCompactRequested, FaceEventCompactStarted, FaceEventCompactCompleted, FaceEventCompactFailed:
+		return requireFields(v.ConversationID, "conversation_id", v.RequestID, "request_id")
 	case FaceEventHandConnected, FaceEventHandDisconnected:
 		if v.ConversationID != "" || v.RequestID != "" {
 			return fmt.Errorf("Hand lifecycle event must not contain conversation_id or request_id")
@@ -1056,6 +1308,12 @@ func validFaceErrorCode(code FaceErrorCode) bool {
 		FaceErrorTaskLost, FaceErrorTaskStale, FaceErrorTaskNotFound, FaceErrorHandOffline,
 		FaceErrorLogUnavailable, FaceErrorBusy, FaceErrorCancelled, FaceErrorTimeout, FaceErrorInternal:
 		return true
+	case FaceErrorCompactUnavailable, FaceErrorNothingToCompact, FaceErrorCompactTarget,
+		FaceErrorCompactIncrement, FaceErrorCompactRebase, FaceErrorCompactTimeout,
+		FaceErrorCompactRateLimited, FaceErrorCompactProvider, FaceErrorCompactResponse,
+		FaceErrorCompactConflict, FaceErrorContextLimit, FaceErrorCompactRepair,
+		FaceErrorCompactIntegrity, FaceErrorCompactVersion:
+		return true
 	default:
 		return false
 	}
@@ -1074,7 +1332,8 @@ func validFaceScope(scope FaceScope) bool {
 
 func validFaceFeature(feature FaceFeature) bool {
 	switch feature {
-	case FaceFeatureChatStream, FaceFeatureChatStreamResume, FaceFeatureRunProgress, FaceFeatureMessagePaging:
+	case FaceFeatureChatStream, FaceFeatureChatStreamResume, FaceFeatureRunProgress, FaceFeatureMessagePaging,
+		FaceFeatureContextCompaction:
 		return true
 	default:
 		return false
@@ -1114,7 +1373,8 @@ func validFaceEventType(typ FaceEventType) bool {
 		FaceEventChatCompleted, FaceEventChatFailed, FaceEventChatCancelled,
 		FaceEventApprovalRequested, FaceEventApprovalResolved, FaceEventRemoteRunChanged,
 		FaceEventHandConnected, FaceEventHandDisconnected, FaceEventConversationChanged,
-		FaceEventTaskChanged:
+		FaceEventTaskChanged, FaceEventCompactRequested, FaceEventCompactStarted,
+		FaceEventCompactCompleted, FaceEventCompactFailed:
 		return true
 	default:
 		return false
@@ -1137,11 +1397,41 @@ func validFaceOperation(operation FaceOperation) bool {
 		FaceOperationConversationCreate, FaceOperationConversationSnapshot,
 		FaceOperationConversationRename, FaceOperationConversationMessages, FaceOperationSubscribe, FaceOperationApprovalResolve,
 		FaceOperationRunGet, FaceOperationRunCancel, FaceOperationHandList, FaceOperationHandGet,
-		FaceOperationTaskList, FaceOperationTaskGet, FaceOperationTaskLog, FaceOperationTaskCancel:
+		FaceOperationTaskList, FaceOperationTaskGet, FaceOperationTaskLog, FaceOperationTaskCancel,
+		FaceOperationConversationCompact, FaceOperationCompactStatus:
 		return true
 	default:
 		return false
 	}
+}
+
+func validCompactTrigger(trigger FaceCompactTrigger) bool {
+	return trigger == FaceCompactTriggerManual || trigger == FaceCompactTriggerAutomatic
+}
+
+func validCompactErrorCode(code FaceErrorCode) bool {
+	switch code {
+	case FaceErrorCompactUnavailable, FaceErrorNothingToCompact, FaceErrorCompactTarget,
+		FaceErrorCompactIncrement, FaceErrorCompactRebase, FaceErrorCompactTimeout,
+		FaceErrorCompactRateLimited, FaceErrorCompactProvider, FaceErrorCompactResponse,
+		FaceErrorCompactConflict, FaceErrorContextLimit, FaceErrorCompactRepair,
+		FaceErrorCompactIntegrity, FaceErrorCompactVersion, FaceErrorInternal:
+		return true
+	default:
+		return false
+	}
+}
+
+func validSHA256Digest(value string) bool {
+	if len(value) != len("sha256:")+64 || value[:len("sha256:")] != "sha256:" {
+		return false
+	}
+	for _, char := range value[len("sha256:"):] {
+		if char < '0' || char > '9' && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 func validRunStatus(status RunStatus) bool {

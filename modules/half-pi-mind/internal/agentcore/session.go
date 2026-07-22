@@ -22,20 +22,20 @@ func (c *Core) saveSessionLocked() error {
 
 func (c *Core) saveSessionLockedWithPending(pending *ToolBatchPending) error {
 	c.stateMu.RLock()
-	store, sessionID := c.store, c.sessionID
+	storage, sessionID := c.store, c.sessionID
 	c.stateMu.RUnlock()
-	if store == nil || sessionID == "" {
+	if storage == nil || sessionID == "" {
 		return nil
 	}
 	// 自动命名只处理仍未命名的会话，显式名称始终优先。
-	sess, err := store.GetSession(sessionID)
+	sess, err := storage.GetSession(sessionID)
 	if err != nil {
 		return fmt.Errorf("save session: get session: %w", err)
 	}
 	if sess != nil && sess.Name == "" && len(c.history) > 0 {
 		for _, m := range c.history {
 			if m.Role == llm.RoleUser {
-				if err := store.UpdateSessionName(sessionID, automaticConversationName(m.Content)); err != nil {
+				if err := storage.UpdateSessionName(sessionID, automaticConversationName(m.Content)); err != nil {
 					return fmt.Errorf("save session: auto-name: %w", err)
 				}
 				break
@@ -50,10 +50,11 @@ func (c *Core) saveSessionLockedWithPending(pending *ToolBatchPending) error {
 		newMessages[i].Seq = c.persistedSeq + i + 1
 	}
 	var appendErr error
+	var appendResult store.CompactPendingResult
 	if pending != nil {
-		_, appendErr = store.AppendMessagesWithCompactPending(sessionID, c.persistedSeq, newMessages, pending.ID, pending.Event)
+		appendResult, appendErr = storage.AppendMessagesWithCompactPending(sessionID, c.persistedSeq, newMessages, pending.ID, pending.Event)
 	} else {
-		appendErr = store.AppendMessages(sessionID, c.persistedSeq, newMessages)
+		appendErr = storage.AppendMessages(sessionID, c.persistedSeq, newMessages)
 	}
 	if appendErr != nil {
 		return fmt.Errorf("save session: append messages: %w", appendErr)
@@ -61,6 +62,14 @@ func (c *Core) saveSessionLockedWithPending(pending *ToolBatchPending) error {
 	c.persistedMessages = len(c.history)
 	c.persistedSeq += len(newMessages)
 	c.notifySessionChanged()
+	if pending != nil && appendResult.Created {
+		c.stateMu.RLock()
+		coordinator := c.compaction
+		c.stateMu.RUnlock()
+		if observer, ok := coordinator.(ToolBatchPendingObserver); ok {
+			observer.ToolBatchPendingCommitted(pending, appendResult)
+		}
+	}
 	return nil
 }
 

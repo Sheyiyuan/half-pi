@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/conversation"
 )
 
 const (
@@ -39,6 +40,8 @@ type requestRecord struct {
 	streamResponses []streamResponseState
 	streamSeq       int64
 	streamBytes     int
+	lease           *conversation.OperationLease
+	compactErrors   bool
 }
 
 type streamResponseState struct {
@@ -85,7 +88,7 @@ func faceCommandDigest(operation protocol.FaceOperation, payload any) ([sha256.S
 	return sha256.Sum256(data), nil
 }
 
-func (r *chatRegistry) beginChat(identity protocol.FaceIdentity, request protocol.FaceChat, digest [sha256.Size]byte, origin *connection) requestAdmission {
+func (r *chatRegistry) beginChat(identity protocol.FaceIdentity, request protocol.FaceChat, digest [sha256.Size]byte, origin *connection, actor *conversation.Actor, compactErrors bool) requestAdmission {
 	now := time.Now().UTC()
 	key := requestKey{identityID: identity.ID, requestID: request.RequestID}
 	r.mu.Lock()
@@ -94,14 +97,15 @@ func (r *chatRegistry) beginChat(identity protocol.FaceIdentity, request protoco
 	if existing := r.requests[key]; existing != nil {
 		return replayRequest(existing, protocol.FaceOperationChat, digest)
 	}
-	for _, existing := range r.requests {
-		if existing.operation == protocol.FaceOperationChat && existing.conversationID == request.ConversationID &&
-			existing.key.requestID == request.RequestID {
-			return requestAdmission{code: protocol.FaceErrorRequestConflict, message: "request ID is already used in this conversation"}
+	var lease *conversation.OperationLease
+	if actor != nil {
+		var ok bool
+		lease, ok = actor.AdmitChat(request.RequestID)
+		if !ok {
+			return requestAdmission{code: protocol.FaceErrorBusy, message: "conversation is busy", retryable: true}
 		}
-	}
-	if r.active[request.ConversationID] != nil {
-		return requestAdmission{code: protocol.FaceErrorBusy, message: "conversation already has an active Chat", retryable: true}
+	} else if r.active[request.ConversationID] != nil {
+		return requestAdmission{code: protocol.FaceErrorBusy, message: "conversation is busy", retryable: true}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	record := &requestRecord{
@@ -111,10 +115,36 @@ func (r *chatRegistry) beginChat(identity protocol.FaceIdentity, request protoco
 			RequestID: request.RequestID, ConversationID: request.ConversationID,
 			Operation: protocol.FaceOperationChat,
 		},
-		startedAt: now, ctx: ctx, cancel: cancel, origin: origin,
+		startedAt: now, ctx: ctx, cancel: cancel, origin: origin, lease: lease, compactErrors: compactErrors,
 	}
 	r.requests[key] = record
 	r.active[request.ConversationID] = record
+	return requestAdmission{record: record}
+}
+
+func (r *chatRegistry) beginCompact(identity protocol.FaceIdentity, request protocol.FaceConversationCompact, digest [sha256.Size]byte, origin *connection, actor *conversation.Actor) requestAdmission {
+	now := time.Now().UTC()
+	key := requestKey{identityID: identity.ID, requestID: request.RequestID}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.pruneLocked(now)
+	if existing := r.requests[key]; existing != nil {
+		return replayRequest(existing, protocol.FaceOperationConversationCompact, digest)
+	}
+	lease, ok := actor.AdmitCompact(request.RequestID)
+	if !ok {
+		return requestAdmission{code: protocol.FaceErrorBusy, message: "conversation is busy", retryable: true}
+	}
+	record := &requestRecord{
+		key: key, operation: protocol.FaceOperationConversationCompact, digest: digest,
+		conversationID: request.ConversationID,
+		accepted: protocol.FaceAccepted{
+			RequestID: request.RequestID, ConversationID: request.ConversationID,
+			Operation: protocol.FaceOperationConversationCompact,
+		},
+		startedAt: now, ctx: context.Background(), origin: origin, lease: lease, compactErrors: true,
+	}
+	r.requests[key] = record
 	return requestAdmission{record: record}
 }
 
@@ -292,7 +322,12 @@ func (r *chatRegistry) abortChat(record *requestRecord) {
 	if record.cancel != nil {
 		record.cancel()
 	}
+	if record.lease != nil {
+		record.lease.Release()
+	}
 }
+
+func (r *chatRegistry) abortCompact(record *requestRecord) { r.abortChat(record) }
 
 func (r *chatRegistry) abortCancel(record, target *requestRecord) {
 	r.mu.Lock()
@@ -353,6 +388,7 @@ func (r *chatRegistry) completeLocked(record *requestRecord, result protocol.Fac
 	}
 	origin, cancel := record.origin, record.cancel
 	record.origin, record.ctx, record.cancel = nil, nil, nil
+	record.lease = nil
 	return origin, cancel
 }
 

@@ -122,6 +122,8 @@ type conversationState struct {
 	AtBottom         bool
 	NewContent       bool
 	Notice           string
+	CompactStatus    protocol.FaceCompactStatus
+	CompactKnown     bool
 }
 
 func newConversation(id string) *conversationState {
@@ -209,9 +211,11 @@ type Model struct {
 	scopes             map[protocol.FaceScope]struct{}
 	capabilitiesKnown  bool
 	legacyCapabilities bool
+	capabilityFallback bool
 	limits             protocol.FaceProtocolLimits
 	syncCapabilities   bool
 	syncConversations  bool
+	compactRequests    map[string]protocol.FaceConversationCompact
 
 	completion      []Completion
 	completionIndex int

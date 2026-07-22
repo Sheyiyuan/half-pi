@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/google/uuid"
@@ -66,6 +67,7 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 			compactRequestedPayload{Trigger: request.Trigger})); err != nil {
 			return CompactResult{}, compactError(ErrInternal, err)
 		}
+		observeCompact(request, RequestedEvent{SessionID: request.SessionID, RequestID: request.RequestID, Trigger: request.Trigger})
 	}
 
 	snapshot, err := e.store.GetCompactSnapshot(ctx, request.SessionID)
@@ -110,6 +112,7 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 	if err != nil {
 		return CompactResult{}, e.fail(ctx, request, startedAt, plan, err)
 	}
+	plan.SourceDigest = candidate.SourceDigest
 	existing, err := e.store.FindContextSummaryByContract(ctx, request.SessionID, 1, plan.ToSeq, candidate.ContractDigest)
 	if err != nil {
 		return CompactResult{}, e.fail(ctx, request, startedAt, plan, compactError(ErrInternal, err))
@@ -143,6 +146,11 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 		} else if err := e.store.AppendLifecycleEvent(ctx, startedEvent); err != nil {
 			return CompactResult{}, e.fail(ctx, request, startedAt, plan, compactError(ErrInternal, err))
 		}
+		observeCompact(request, StartedEvent{
+			SessionID: request.SessionID, RequestID: request.RequestID, Trigger: request.Trigger,
+			FromSeq: 1, ToSeq: plan.ToSeq, GenerationMode: candidate.GenerationMode,
+			SourceDigest: candidate.SourceDigest, Attempt: attempt,
+		})
 		summary, usage, providerErr := callSummaryProvider(ctx, e.provider, e.cfg, summaryRequest, e.estimator)
 		if providerErr != nil {
 			return CompactResult{}, e.fail(ctx, request, startedAt, plan, providerErr)
@@ -195,6 +203,14 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 	if err != nil {
 		return CompactResult{}, e.fail(ctx, request, startedAt, plan, compactError(ErrConflict, err))
 	}
+	observeCompact(request, CompletedEvent{
+		SessionID: request.SessionID, RequestID: request.RequestID, Trigger: request.Trigger,
+		SummaryID: commitResult.Summary.ID, FromSeq: commitResult.Summary.FromSeq, ToSeq: commitResult.Summary.ToSeq,
+		BeforeEstimatedTokens: beforeTokens, AfterEstimatedTokens: afterTokens,
+		SummaryBytes: len(commitResult.Summary.Summary), SourceDigest: commitResult.Summary.SourceDigest,
+		DurationMS: completed.DurationMS, ContextVersion: commitResult.Runtime.HistoryViewGeneration, Reused: commitResult.Reused,
+		StateChanged: commitResult.StateChanged || commitResult.PendingChanged,
+	})
 	return e.resultForPlan(plan, commitResult, beforeTokens, afterTokens, request.Target), nil
 }
 
@@ -226,6 +242,18 @@ func (e *Engine) Status(ctx context.Context, request CompactStatusRequest) (Comp
 		PendingAttempt: snapshot.Runtime.PendingAttempt, SummaryNodeCount: snapshot.SummaryNodeCount,
 		SummaryStorageBytes: snapshot.SummaryStorageBytes, SummaryInputBudget: e.cfg.SummaryInputBudget(),
 		Degraded: degradedReason != "", Blocker: degradedReason,
+		MessageCount: len(snapshot.Messages), ConfiguredSummaryProviderID: e.cfg.SummaryProviderID,
+		ConfiguredSummaryModelID: e.cfg.SummaryModelID, ReservedOutputTokens: e.cfg.ReservedOutputTokens,
+		ProjectionVersion: ProjectionVersion, PolicyVersion: e.cfg.PolicyVersion, Profile: e.cfg.Profile,
+		Warnings: []string{},
+	}
+	for _, message := range snapshot.Messages {
+		if message.Seq > status.LastSeq {
+			status.LastSeq = message.Seq
+		}
+		if message.Role != string(llm.RoleSystem) {
+			status.ContextMessageCount++
+		}
 	}
 	if snapshot.Runtime.PendingNotBefore > 0 {
 		status.PendingNotBefore = time.UnixMilli(snapshot.Runtime.PendingNotBefore).UTC()
@@ -240,6 +268,8 @@ func (e *Engine) Status(ctx context.Context, request CompactStatusRequest) (Comp
 				storedActive.ProjectionVersion, storedActive.PolicyVersion, storedActive.Profile
 		}
 		status.ActiveGenerationMode = storedActive.GenerationMode
+		status.ActiveSummaryBytes = len(storedActive.Summary)
+		status.ActiveContractDigest = storedActive.ContractDigest
 		status.SourceEstimatedTokens, status.SummaryEstimatedTokens = storedActive.SourceEstimatedTokens, storedActive.SummaryEstimatedTokens
 		status.CompressionRatio = float64(storedActive.SourceEstimatedTokens) / float64(max64(storedActive.SummaryEstimatedTokens, 1))
 	}
@@ -278,6 +308,13 @@ func (e *Engine) Status(ctx context.Context, request CompactStatusRequest) (Comp
 			})
 			status.RequiredSummaryInputEstimatedTokens = plan.RequiredSummaryInput
 			status.CandidateGenerationMode = plan.Cost.GenerationMode
+			if plan.ToSeq > 0 {
+				status.CompressibleFromSeq, status.CompressibleToSeq = activeToSeq+1, plan.ToSeq
+				if status.CompressibleFromSeq > status.CompressibleToSeq {
+					status.CompressibleFromSeq = 1
+				}
+				status.RetainedFromSeq, status.RetainedToSeq = plan.RetainedFromSeq, plan.RetainedToSeq
+			}
 			if planErr != nil && status.Blocker == "" {
 				status.Blocker = errorCodeOf(planErr)
 			}
@@ -286,6 +323,7 @@ func (e *Engine) Status(ctx context.Context, request CompactStatusRequest) (Comp
 			}
 		}
 	}
+	sort.Strings(status.Warnings)
 	return status, nil
 }
 
@@ -495,6 +533,7 @@ func (e *Engine) fail(ctx context.Context, request CompactRequest, startedAt tim
 	}
 	if plan.ToSeq > 0 {
 		payload.FromSeq, payload.ToSeq = 1, plan.ToSeq
+		payload.SourceDigest = plan.SourceDigest
 	}
 	if payload.RetryScheduled {
 		payload.PendingAttempt = request.Pending.Attempt
@@ -506,7 +545,7 @@ func (e *Engine) fail(ctx context.Context, request CompactRequest, startedAt tim
 		terminalCtx, cancel = context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 	}
-	_, err := e.store.FinishCompactFailure(terminalCtx, store.CompactFailure{
+	failureResult, err := e.store.FinishCompactFailure(terminalCtx, store.CompactFailure{
 		SessionID: request.SessionID, ExpectedPending: request.Pending,
 		Automatic: request.Trigger == TriggerAutomatic, RateLimited: payload.RetryScheduled,
 		RetryNotBefore: payload.RetryNotBefore,
@@ -515,6 +554,13 @@ func (e *Engine) fail(ctx context.Context, request CompactRequest, startedAt tim
 	if err != nil {
 		return compactError(ErrInternal, err)
 	}
+	observeCompact(request, FailedEvent{
+		SessionID: request.SessionID, RequestID: request.RequestID, Trigger: request.Trigger,
+		Reason: code, DurationMS: payload.DurationMS, RetryScheduled: payload.RetryScheduled,
+		FromSeq: payload.FromSeq, ToSeq: payload.ToSeq, SourceDigest: payload.SourceDigest,
+		PendingAttempt: payload.PendingAttempt, RetryNotBefore: payload.RetryNotBefore,
+		StateChanged: failureResult.StateChanged,
+	})
 	if rateLimited {
 		return &Error{Code: ErrRateLimited, RetryNotBefore: retryAt, cause: failure}
 	}
@@ -601,8 +647,15 @@ type compactFailedPayload struct {
 	RetryScheduled bool      `json:"retry_scheduled"`
 	FromSeq        int       `json:"from_seq,omitempty"`
 	ToSeq          int       `json:"to_seq,omitempty"`
+	SourceDigest   string    `json:"source_digest,omitempty"`
 	PendingAttempt int64     `json:"pending_attempt,omitempty"`
 	RetryNotBefore int64     `json:"retry_not_before,omitempty"`
+}
+
+func observeCompact(request CompactRequest, event Event) {
+	if request.Observe != nil {
+		request.Observe(event)
+	}
 }
 
 func newLifecycleEvent(eventType, sessionID string, payload any) store.LifecycleEvent {

@@ -13,7 +13,8 @@ func TestIsFaceMessageType(t *testing.T) {
 	commands := []string{
 		TypeFaceChat, TypeFaceChatCancel, TypeFaceChatStreamGet, TypeFaceCapabilitiesGet, TypeFaceConversationList,
 		TypeFaceConversationCreate, TypeFaceConversationSnapshot,
-		TypeFaceConversationRename, TypeFaceConversationMessages, TypeFaceSubscribe, TypeFaceApprovalResolve,
+		TypeFaceConversationRename, TypeFaceConversationMessages, TypeFaceConversationCompact, TypeFaceCompactStatus,
+		TypeFaceSubscribe, TypeFaceApprovalResolve,
 		TypeFaceRunGet, TypeFaceRunCancel, TypeFaceHandList, TypeFaceHandGet,
 		TypeFaceTaskList, TypeFaceTaskGet, TypeFaceTaskLog, TypeFaceTaskCancel,
 	}
@@ -179,6 +180,122 @@ func TestFaceStructuredEventsValidate(t *testing.T) {
 				t.Fatalf("valid event rejected: %v", err)
 			}
 		})
+	}
+}
+
+func TestFaceCompactProtocolValidation(t *testing.T) {
+	ratio, keep := .60, 40
+	commands := []struct {
+		typ     string
+		payload any
+	}{
+		{TypeFaceCapabilitiesGet, FaceCapabilitiesGet{RequestID: "cap", AcceptFeatures: []string{string(FaceFeatureContextCompaction), "future_feature.v2"}}},
+		{TypeFaceConversationCompact, FaceConversationCompact{RequestID: "compact-default", ConversationID: "conv-1", Target: FaceCompactTarget{Mode: FaceCompactTargetDefault}}},
+		{TypeFaceConversationCompact, FaceConversationCompact{RequestID: "compact-ratio", ConversationID: "conv-1", Target: FaceCompactTarget{Mode: FaceCompactTargetRatio, Ratio: &ratio}}},
+		{TypeFaceConversationCompact, FaceConversationCompact{RequestID: "compact-keep", ConversationID: "conv-1", Target: FaceCompactTarget{Mode: FaceCompactTargetKeep, KeepMessages: &keep}}},
+		{TypeFaceConversationCompact, FaceConversationCompact{RequestID: "compact-rebase", ConversationID: "conv-1", Target: FaceCompactTarget{Mode: FaceCompactTargetRebase}}},
+		{TypeFaceCompactStatus, FaceCompactStatusGet{RequestID: "status", ConversationID: "conv-1"}},
+	}
+	for _, command := range commands {
+		raw, err := json.Marshal(command.payload)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateFacePayload(command.typ, raw); err != nil {
+			t.Errorf("valid %s rejected: %v", command.typ, err)
+		}
+	}
+
+	targetTokens, targetMet := int64(700), true
+	result := FaceCompactResult{
+		SummaryID: "summary-1", FromSeq: 1, ToSeq: 4, BeforeEstimatedTokens: 1000, AfterEstimatedTokens: 500,
+		TargetTokens: &targetTokens, TargetMet: &targetMet, RetainedFromSeq: 5, RetainedToSeq: 6,
+		GenerationMode: FaceCompactGenerationFull, ContextVersion: 7,
+	}
+	assertValidFaceResultData(t, FaceOperationConversationCompact, result)
+	assertValidFaceResultData(t, FaceOperationCompactStatus, validCompactStatus())
+
+	digest := "sha256:" + strings.Repeat("a", 64)
+	now := time.Date(2026, 7, 22, 12, 0, 0, 0, time.UTC)
+	events := []struct {
+		typ  FaceEventType
+		data any
+	}{
+		{FaceEventCompactRequested, CompactRequestedEventData{Trigger: FaceCompactTriggerManual}},
+		{FaceEventCompactStarted, CompactStartedEventData{Trigger: FaceCompactTriggerManual, FromSeq: 1, ToSeq: 4, GenerationMode: FaceCompactGenerationFull, SourceDigest: digest, Attempt: 1}},
+		{FaceEventCompactCompleted, CompactCompletedEventData{Trigger: FaceCompactTriggerManual, SummaryID: "summary-1", FromSeq: 1, ToSeq: 4, BeforeEstimatedTokens: 1000, AfterEstimatedTokens: 500, SummaryBytes: 256, SourceDigest: digest, DurationMS: 20, ContextVersion: 7}},
+	}
+	for _, item := range events {
+		raw, err := json.Marshal(validFaceEvent(t, item.typ, item.data, now))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := ValidateFacePayload(TypeFaceEvent, raw); err != nil {
+			t.Errorf("valid %s rejected: %v", item.typ, err)
+		}
+	}
+}
+
+func TestFaceCompactProtocolRejectsInvalidUnions(t *testing.T) {
+	commands := []string{
+		`{"request_id":"cap","accept_features":["context_compaction.v1","context_compaction.v1"]}`,
+		`{"request_id":"cap","accept_features":["Context"]}`,
+		`{"request_id":"compact","conversation_id":"conv-1","target":{"mode":"default","ratio":0.6}}`,
+		`{"request_id":"compact","conversation_id":"conv-1","target":{"mode":"ratio"}}`,
+		`{"request_id":"compact","conversation_id":"conv-1","target":{"mode":"keep_messages","keep_messages":0}}`,
+	}
+	for _, payload := range commands {
+		typ := TypeFaceConversationCompact
+		if strings.Contains(payload, `"request_id":"cap"`) {
+			typ = TypeFaceCapabilitiesGet
+		}
+		if err := ValidateFacePayload(typ, json.RawMessage(payload)); err == nil {
+			t.Errorf("invalid Compact command accepted: %s", payload)
+		}
+	}
+
+	statusRaw, err := json.Marshal(validCompactStatus())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var status map[string]json.RawMessage
+	if err := json.Unmarshal(statusRaw, &status); err != nil {
+		t.Fatal(err)
+	}
+	delete(status, "warnings")
+	missing, _ := json.Marshal(status)
+	if err := ValidateFaceResultData(FaceOperationCompactStatus, missing); err == nil {
+		t.Fatal("Compact status missing a required key was accepted")
+	}
+
+	badFailed := FaceEvent{
+		EventSeq: 1, ConversationID: "conv-1", RequestID: "req-1", Type: FaceEventCompactFailed,
+		Source: "compact", Level: FaceEventLevelError, Message: "failed", Timestamp: time.Now().UTC(),
+		Data: json.RawMessage(`{"trigger":"automatic","reason":"compact_rate_limited","duration_ms":1,"retry_scheduled":true}`),
+	}
+	raw, _ := json.Marshal(badFailed)
+	if err := ValidateFacePayload(TypeFaceEvent, raw); err == nil {
+		t.Fatal("rate limited Compact event without retry metadata was accepted")
+	}
+}
+
+func assertValidFaceResultData(t *testing.T, operation FaceOperation, value any) {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateFaceResultData(operation, raw); err != nil {
+		t.Fatalf("valid %s result rejected: %v", operation, err)
+	}
+}
+
+func validCompactStatus() FaceCompactStatus {
+	return FaceCompactStatus{
+		Enabled: true, Automatic: true, OperationState: "idle", LastSeq: 6, MessageCount: 6, ContextMessageCount: 6,
+		EstimatedTokens: 1000, InputBudget: 4000, ReservedOutputTokens: 500, HighLimit: 3200, LowTarget: 2400,
+		SummaryInputBudget: 2000, ContextVersion: 6, ProjectionVersion: "compact-source-v1",
+		PolicyVersion: "compact-v1", Profile: "default", Warnings: []string{},
 	}
 }
 

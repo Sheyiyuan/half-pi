@@ -34,6 +34,7 @@ type budgetRecorder struct {
 	mu           sync.Mutex
 	observations []BudgetObservation
 	sessionID    string
+	committed    atomic.Int64
 }
 
 func (recorder *budgetRecorder) ObserveModelBudget(_ context.Context, observation BudgetObservation) (bool, error) {
@@ -49,6 +50,12 @@ func (recorder *budgetRecorder) PrepareToolBatchPending(_ context.Context, obser
 	}
 	pendingID, event := compact.NewAutomaticPendingMutation(recorder.sessionID)
 	return &ToolBatchPending{ID: pendingID, Event: event}, nil
+}
+
+func (recorder *budgetRecorder) ToolBatchPendingCommitted(_ *ToolBatchPending, result store.CompactPendingResult) {
+	if result.Created {
+		recorder.committed.Add(1)
+	}
 }
 
 type oneToolProvider struct{ calls atomic.Int64 }
@@ -194,6 +201,9 @@ func TestToolLoopHardBudgetStopsSecondProviderAfterCompleteBatch(t *testing.T) {
 	runtime, err := db.GetSessionRuntime(context.Background(), sessionID)
 	if err != nil || !runtime.PendingCompact || runtime.PendingCompactID == "" || runtime.PendingAttempt != 0 {
 		t.Fatalf("tool batch pending = %+v, err=%v", runtime, err)
+	}
+	if recorder.committed.Load() != 1 {
+		t.Fatalf("committed pending notifications = %d", recorder.committed.Load())
 	}
 	recorder.mu.Lock()
 	defer recorder.mu.Unlock()

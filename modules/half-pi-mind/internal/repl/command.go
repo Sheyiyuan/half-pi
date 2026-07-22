@@ -48,6 +48,10 @@ func (r *Repl) handleCommand(input string) bool {
 		}
 		return true
 
+	case input == "/compact" || strings.HasPrefix(input, "/compact "):
+		r.handleCompact(strings.TrimSpace(strings.TrimPrefix(input, "/compact")))
+		return true
+
 	case input == "/session":
 		r.handleSessionList()
 		return true

@@ -216,6 +216,26 @@ func (m *Model) applyResult(value protocol.FaceResult) tea.Cmd {
 			conversation.Tasks[data.Task.TaskID] = sanitizeTask(data.Task)
 		}
 		m.status = "Task cancellation reconciled"
+	case protocol.FaceOperationConversationCompact:
+		data, err := decodeResult[protocol.FaceCompactResult](value.Data)
+		if err != nil {
+			return m.disconnect(err)
+		}
+		delete(m.compactRequests, value.RequestID)
+		m.status = fmt.Sprintf("Context compacted to %d estimated tokens", data.AfterEstimatedTokens)
+		command, requestErr := m.requestCompactStatus(pending.ConversationID)
+		if requestErr == nil {
+			return command
+		}
+	case protocol.FaceOperationCompactStatus:
+		data, err := decodeResult[protocol.FaceCompactStatus](value.Data)
+		if err != nil {
+			return m.disconnect(err)
+		}
+		if conversation := m.conversations[pending.ConversationID]; conversation != nil {
+			conversation.CompactStatus, conversation.CompactKnown = data, true
+			conversation.Notice = compactStatusNotice(data)
+		}
 	}
 	m.refreshViewport(false)
 	return nil
@@ -251,10 +271,11 @@ func (m *Model) applyFailedResult(pending pendingRequest, value protocol.FaceRes
 	if pending.Operation == protocol.FaceOperationConversationCreate && pending.TargetID == "draft" {
 		m.flow = nil
 	}
+	if pending.Operation == protocol.FaceOperationConversationCompact {
+		delete(m.compactRequests, value.RequestID)
+	}
 	if pending.Operation == protocol.FaceOperationCapabilitiesGet {
-		m.legacyCapabilities = true
-		m.syncCapabilities = true
-		return m.finishBaseSync()
+		return m.fallbackCapabilities(pending)
 	}
 	if pending.Operation == protocol.FaceOperationConversationList {
 		m.syncConversations = true
@@ -275,19 +296,14 @@ func (m *Model) applyError(value protocol.FaceError) tea.Cmd {
 	}
 	delete(m.pending, value.RequestID)
 	if pending.Operation == protocol.FaceOperationCapabilitiesGet && value.Code == protocol.FaceErrorInvalidRequest {
-		m.capabilitiesKnown = false
-		m.legacyCapabilities = true
-		m.syncCapabilities = true
-		return m.finishBaseSync()
+		return m.fallbackCapabilities(pending)
 	}
 	if pending.Operation == protocol.FaceOperationConversationList && value.Code == protocol.FaceErrorForbidden {
 		m.syncConversations = true
 		return m.finishBaseSync()
 	}
 	if pending.Operation == protocol.FaceOperationCapabilitiesGet {
-		m.legacyCapabilities = true
-		m.syncCapabilities = true
-		return m.finishBaseSync()
+		return m.fallbackCapabilities(pending)
 	}
 	if pending.Operation == protocol.FaceOperationConversationList {
 		m.syncConversations = true
@@ -303,6 +319,9 @@ func (m *Model) applyError(value protocol.FaceError) tea.Cmd {
 	}
 	if pending.Operation == protocol.FaceOperationConversationCreate && pending.TargetID == "draft" {
 		m.flow = nil
+	}
+	if pending.Operation == protocol.FaceOperationConversationCompact {
+		delete(m.compactRequests, value.RequestID)
 	}
 	if (pending.Operation == protocol.FaceOperationSubscribe || pending.Operation == protocol.FaceOperationConversationSnapshot) &&
 		pending.TargetID == "flow" {
@@ -352,6 +371,10 @@ func (m *Model) applySnapshotResponse(value protocol.FaceSnapshot) tea.Cmd {
 					commands = append(commands, cmd)
 				}
 			}
+		}
+		commands = append(commands, m.replayCompacts(value.Snapshot.ConversationID)...)
+		if command, err := m.requestCompactStatus(value.Snapshot.ConversationID); err == nil && command != nil {
+			commands = append(commands, command)
 		}
 	}
 	if pending.TargetID == "sync" {
@@ -768,9 +791,46 @@ func (m *Model) applyEvent(event protocol.FaceEvent) tea.Cmd {
 		if err == nil {
 			return cmd
 		}
+	case protocol.FaceEventCompactRequested, protocol.FaceEventCompactStarted,
+		protocol.FaceEventCompactCompleted, protocol.FaceEventCompactFailed:
+		if conversation != nil {
+			conversation.Notice = sanitizeRemoteText(event.Message)
+		}
+		command, err := m.requestCompactStatus(event.ConversationID)
+		if err == nil {
+			return command
+		}
 	}
 	m.refreshViewport(true)
 	return nil
+}
+
+func (m *Model) fallbackCapabilities(pending pendingRequest) tea.Cmd {
+	if pending.TargetID != "legacy" && !m.capabilityFallback {
+		m.capabilityFallback = true
+		command, err := m.requestLegacyCapabilities()
+		if err == nil {
+			return command
+		}
+	}
+	m.capabilitiesKnown = false
+	m.legacyCapabilities = true
+	m.syncCapabilities = true
+	return m.finishBaseSync()
+}
+
+func compactStatusNotice(status protocol.FaceCompactStatus) string {
+	if status.Blocker != "" {
+		return "Context: " + string(status.Blocker)
+	}
+	if status.Pending {
+		return fmt.Sprintf("Context compact pending (attempt %d)", status.PendingAttempt)
+	}
+	if status.SummaryID != "" {
+		return fmt.Sprintf("Context: %d/%d estimated tokens, compacted through message %d",
+			status.EstimatedTokens, status.InputBudget, status.CoveredToSeq)
+	}
+	return fmt.Sprintf("Context: %d/%d estimated tokens", status.EstimatedTokens, status.InputBudget)
 }
 
 func ensureChat(conversation *conversationState, requestID string) *chatState {

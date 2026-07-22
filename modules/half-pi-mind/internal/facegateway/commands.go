@@ -33,6 +33,10 @@ func (g *Gateway) handleCommand(state *connection, identity protocol.FaceIdentit
 		g.handleConversationRename(state, identity, env)
 	case protocol.TypeFaceConversationMessages:
 		g.handleConversationMessages(state, identity, env)
+	case protocol.TypeFaceConversationCompact:
+		g.handleConversationCompact(state, identity, env)
+	case protocol.TypeFaceCompactStatus:
+		g.handleCompactStatus(state, identity, env)
 	case protocol.TypeFaceSubscribe:
 		g.handleSubscribe(state, identity, env)
 	case protocol.TypeFaceApprovalResolve:
@@ -68,15 +72,29 @@ func (g *Gateway) handleCapabilitiesGet(state *connection, identity protocol.Fac
 	if !g.sendAccepted(state, meta, protocol.FaceOperationCapabilitiesGet, 0) {
 		return
 	}
+	state.mu.Lock()
+	if state.features == nil {
+		state.features = make(map[protocol.FaceFeature]struct{})
+	}
+	for _, feature := range request.AcceptFeatures {
+		if feature == string(protocol.FaceFeatureContextCompaction) {
+			state.features[protocol.FaceFeatureContextCompaction] = struct{}{}
+		}
+	}
+	features := []protocol.FaceFeature{
+		protocol.FaceFeatureChatStream,
+		protocol.FaceFeatureChatStreamResume,
+		protocol.FaceFeatureRunProgress,
+		protocol.FaceFeatureMessagePaging,
+	}
+	if _, ok := state.features[protocol.FaceFeatureContextCompaction]; ok {
+		features = append(features, protocol.FaceFeatureContextCompaction)
+	}
+	state.mu.Unlock()
 	g.sendResult(state, meta, protocol.FaceOperationCapabilitiesGet, protocol.FaceCapabilitiesResult{
 		Revision: protocol.FaceProtocolRevision,
 		Identity: identity,
-		Features: []protocol.FaceFeature{
-			protocol.FaceFeatureChatStream,
-			protocol.FaceFeatureChatStreamResume,
-			protocol.FaceFeatureRunProgress,
-			protocol.FaceFeatureMessagePaging,
-		},
+		Features: features,
 		Limits: protocol.FaceProtocolLimits{
 			MaxChatContentBytes: protocol.MaxFaceChatContentBytes,
 			MaxChatDeltaBytes:   protocol.MaxFaceChatDeltaBytes,
@@ -242,7 +260,7 @@ func (g *Gateway) handleConversationMessages(state *connection, identity protoco
 func (g *Gateway) handleSubscribe(state *connection, identity protocol.FaceIdentity, env protocol.Envelope) {
 	request, _ := protocol.DecodePayload[protocol.FaceSubscribe](&env)
 	meta := protocol.FaceCommandMeta{RequestID: request.RequestID}
-	filter, code, message := g.validateSubscription(identity, request)
+	filter, code, message := g.validateSubscription(state, identity, request)
 	if code != "" {
 		g.sendError(state, meta, code, message, false)
 		return
@@ -451,7 +469,7 @@ func (g *Gateway) sendCommandFailure(state *connection, meta protocol.FaceComman
 	g.sendFailedResult(state, meta, status, code, message)
 }
 
-func (g *Gateway) validateSubscription(identity protocol.FaceIdentity, request protocol.FaceSubscribe) (subscription, protocol.FaceErrorCode, string) {
+func (g *Gateway) validateSubscription(state *connection, identity protocol.FaceIdentity, request protocol.FaceSubscribe) (subscription, protocol.FaceErrorCode, string) {
 	filter := subscription{
 		conversations: make(map[string]struct{}, len(request.ConversationIDs)),
 		events:        make(map[protocol.FaceEventType]struct{}, len(request.EventTypes)),
@@ -468,6 +486,9 @@ func (g *Gateway) validateSubscription(identity protocol.FaceIdentity, request p
 		filter.conversations[conversationID] = struct{}{}
 	}
 	for _, eventType := range request.EventTypes {
+		if isCompactEvent(eventType) && !g.connectionHasFeature(state, protocol.FaceFeatureContextCompaction) {
+			return subscription{}, protocol.FaceErrorInvalidRequest, "Compact feature was not negotiated"
+		}
 		scope := eventScope(eventType)
 		if scope != "" && !hasScope(identity, scope) {
 			return subscription{}, protocol.FaceErrorForbidden, "event scope is required"
@@ -510,6 +531,9 @@ func eventScope(eventType protocol.FaceEventType) protocol.FaceScope {
 		return protocol.FaceScopeSessionsRead
 	case protocol.FaceEventTaskChanged:
 		return protocol.FaceScopeTasksRead
+	case protocol.FaceEventCompactRequested, protocol.FaceEventCompactStarted,
+		protocol.FaceEventCompactCompleted, protocol.FaceEventCompactFailed:
+		return protocol.FaceScopeSessionsRead
 	default:
 		return ""
 	}
@@ -524,6 +548,10 @@ func commandScope(messageType string) protocol.FaceScope {
 		return protocol.FaceScopeSessionsRead
 	case protocol.TypeFaceConversationCreate, protocol.TypeFaceConversationRename:
 		return protocol.FaceScopeSessionsWrite
+	case protocol.TypeFaceConversationCompact:
+		return protocol.FaceScopeSessionsWrite
+	case protocol.TypeFaceCompactStatus:
+		return protocol.FaceScopeSessionsRead
 	case protocol.TypeFaceApprovalResolve:
 		return protocol.FaceScopeApprove
 	case protocol.TypeFaceRunGet:
@@ -538,6 +566,16 @@ func commandScope(messageType string) protocol.FaceScope {
 		return protocol.FaceScopeTasksCancel
 	default:
 		return ""
+	}
+}
+
+func isCompactEvent(eventType protocol.FaceEventType) bool {
+	switch eventType {
+	case protocol.FaceEventCompactRequested, protocol.FaceEventCompactStarted,
+		protocol.FaceEventCompactCompleted, protocol.FaceEventCompactFailed:
+		return true
+	default:
+		return false
 	}
 }
 

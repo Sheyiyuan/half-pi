@@ -34,7 +34,8 @@ func NewModel(connector client.Connector) *Model {
 		conversations: make(map[string]*conversationState), localDraft: local,
 		hands: make(map[string]protocol.HandSummary), pending: make(map[string]pendingRequest),
 		outgoingChats: make(map[string]*sendFlow), features: make(map[protocol.FaceFeature]struct{}),
-		scopes: make(map[protocol.FaceScope]struct{}), limits: protocol.FaceProtocolLimits{
+		compactRequests: make(map[string]protocol.FaceConversationCompact),
+		scopes:          make(map[protocol.FaceScope]struct{}), limits: protocol.FaceProtocolLimits{
 			MaxChatContentBytes: protocol.MaxFaceChatContentBytes, MaxMessageListLimit: protocol.MaxFaceMessageListLimit,
 		},
 		commands: NewCommandRegistry(), idSource: randomID,
@@ -78,6 +79,9 @@ func (m *Model) Update(message tea.Msg) (tea.Model, tea.Cmd) { //nolint:gocyclo
 		m.status = "Synchronizing"
 		m.permanentError = false
 		m.syncCapabilities, m.syncConversations = false, false
+		m.capabilitiesKnown, m.legacyCapabilities, m.capabilityFallback = false, false, false
+		m.features = make(map[protocol.FaceFeature]struct{})
+		m.scopes = make(map[protocol.FaceScope]struct{})
 		capabilities, capErr := m.requestCapabilities()
 		conversations, listErr := m.requestConversationList()
 		if capErr != nil || listErr != nil {
@@ -155,6 +159,11 @@ func (m *Model) disconnect(cause error) tea.Cmd {
 		m.conn = nil
 	}
 	for requestID, pending := range m.pending {
+		if pending.Operation == protocol.FaceOperationConversationCompact {
+			pending.Sent = false
+			m.pending[requestID] = pending
+			continue
+		}
 		if pending.Mutation && pending.Sent {
 			if conversation := m.conversations[pending.ConversationID]; conversation != nil {
 				conversation.Notice = "An operation may have completed while disconnected; state will be reconciled."

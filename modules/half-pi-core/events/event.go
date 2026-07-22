@@ -35,16 +35,17 @@ const (
 // ── 事件类型 ──
 
 const (
-	TypeSystem       = "system"
-	TypeUserInput    = "user_input"
-	TypeLLMRequest   = "llm_request"
-	TypeLLMResponse  = "llm_response"
-	TypeToolCall     = "tool_call"
-	TypeToolResult   = "tool_result"
-	TypeToolProgress = "tool_progress"
-	TypeToolBlock    = "tool_blocked"
-	TypeSecurity     = "security"
-	TypeModeChange   = "mode_change"
+	TypeSystem             = "system"
+	TypeUserInput          = "user_input"
+	TypeLLMRequest         = "llm_request"
+	TypeLLMResponse        = "llm_response"
+	TypeToolCall           = "tool_call"
+	TypeToolResult         = "tool_result"
+	TypeToolProgress       = "tool_progress"
+	TypeToolBlock          = "tool_blocked"
+	TypeSecurity           = "security"
+	TypeModeChange         = "mode_change"
+	TypeCompactUnsupported = "compact.unsupported_version"
 )
 
 // New 创建一条事件。会话 ID 和来源由调用方传入，其余字段自动填充。

@@ -20,6 +20,10 @@ const (
 	MaxFaceChatStreamBytes = 2 << 20
 	// MaxFaceChatStreamChunks 限制单个 Chat 的聚合增量数量。
 	MaxFaceChatStreamChunks = 2048
+	// MaxFaceAcceptFeatures 限制一次 capabilities 协商的开放 feature 数量。
+	MaxFaceAcceptFeatures = 64
+	// MaxFaceFeatureBytes 限制开放 feature 名称的 ASCII 字节数。
+	MaxFaceFeatureBytes = 64
 	// DefaultFaceTaskListLimit 是 Face 任务列表的默认分页大小。
 	DefaultFaceTaskListLimit = 50
 	// MaxFaceTaskListLimit 是 Face 任务列表的最大分页大小。
@@ -40,6 +44,8 @@ const (
 	TypeFaceConversationSnapshot = "face.conversation.snapshot"
 	TypeFaceConversationRename   = "face.conversation.rename"
 	TypeFaceConversationMessages = "face.conversation.messages"
+	TypeFaceConversationCompact  = "face.conversation.compact"
+	TypeFaceCompactStatus        = "face.conversation.compact.status"
 	TypeFaceSubscribe            = "face.subscribe"
 	TypeFaceApprovalResolve      = "face.approval.resolve"
 	TypeFaceRunGet               = "face.run.get"
@@ -82,10 +88,11 @@ const (
 type FaceFeature string
 
 const (
-	FaceFeatureChatStream       FaceFeature = "chat_stream.v1"
-	FaceFeatureChatStreamResume FaceFeature = "chat_stream_resume.v1"
-	FaceFeatureRunProgress      FaceFeature = "run_progress.v1"
-	FaceFeatureMessagePaging    FaceFeature = "message_pagination.v1"
+	FaceFeatureChatStream        FaceFeature = "chat_stream.v1"
+	FaceFeatureChatStreamResume  FaceFeature = "chat_stream_resume.v1"
+	FaceFeatureRunProgress       FaceFeature = "run_progress.v1"
+	FaceFeatureMessagePaging     FaceFeature = "message_pagination.v1"
+	FaceFeatureContextCompaction FaceFeature = "context_compaction.v1"
 )
 
 // FaceTransientType 是必须显式订阅的非权威增量类型。
@@ -129,6 +136,20 @@ const (
 	FaceErrorCancelled            FaceErrorCode = "cancelled"
 	FaceErrorTimeout              FaceErrorCode = "timeout"
 	FaceErrorInternal             FaceErrorCode = "internal_error"
+	FaceErrorCompactUnavailable   FaceErrorCode = "compact_unavailable"
+	FaceErrorNothingToCompact     FaceErrorCode = "nothing_to_compact"
+	FaceErrorCompactTarget        FaceErrorCode = "compact_target_unreachable"
+	FaceErrorCompactIncrement     FaceErrorCode = "compact_increment_too_large"
+	FaceErrorCompactRebase        FaceErrorCode = "compact_rebase_too_large"
+	FaceErrorCompactTimeout       FaceErrorCode = "compact_timeout"
+	FaceErrorCompactRateLimited   FaceErrorCode = "compact_rate_limited"
+	FaceErrorCompactProvider      FaceErrorCode = "compact_provider_error"
+	FaceErrorCompactResponse      FaceErrorCode = "compact_invalid_response"
+	FaceErrorCompactConflict      FaceErrorCode = "compact_conflict"
+	FaceErrorContextLimit         FaceErrorCode = "context_limit"
+	FaceErrorCompactRepair        FaceErrorCode = "compact_repair_required"
+	FaceErrorCompactIntegrity     FaceErrorCode = "compact_integrity_error"
+	FaceErrorCompactVersion       FaceErrorCode = "compact_unsupported_version"
 )
 
 // FaceResultStatus 是已接受请求的终态。
@@ -171,6 +192,10 @@ const (
 	FaceEventHandDisconnected    FaceEventType = "hand.disconnected"
 	FaceEventConversationChanged FaceEventType = "conversation.changed"
 	FaceEventTaskChanged         FaceEventType = "task.changed"
+	FaceEventCompactRequested    FaceEventType = "compact.requested"
+	FaceEventCompactStarted      FaceEventType = "compact.started"
+	FaceEventCompactCompleted    FaceEventType = "compact.completed"
+	FaceEventCompactFailed       FaceEventType = "compact.failed"
 )
 
 // FaceEventLevel 是 Face 事件的严重级别。
@@ -205,6 +230,35 @@ const (
 	FaceOperationTaskGet              FaceOperation = "task.get"
 	FaceOperationTaskLog              FaceOperation = "task.log"
 	FaceOperationTaskCancel           FaceOperation = "task.cancel"
+	FaceOperationConversationCompact  FaceOperation = "conversation.compact"
+	FaceOperationCompactStatus        FaceOperation = "conversation.compact.status"
+)
+
+// FaceCompactTrigger 表示 Compact 由人工还是自动策略触发。
+type FaceCompactTrigger string
+
+const (
+	FaceCompactTriggerManual    FaceCompactTrigger = "manual"
+	FaceCompactTriggerAutomatic FaceCompactTrigger = "automatic"
+)
+
+// FaceCompactTargetMode 是 Compact command 的目标 variant。
+type FaceCompactTargetMode string
+
+const (
+	FaceCompactTargetDefault FaceCompactTargetMode = "default"
+	FaceCompactTargetRatio   FaceCompactTargetMode = "ratio"
+	FaceCompactTargetKeep    FaceCompactTargetMode = "keep_messages"
+	FaceCompactTargetRebase  FaceCompactTargetMode = "rebase"
+)
+
+// FaceCompactGenerationMode 是摘要节点的生成方式。
+type FaceCompactGenerationMode string
+
+const (
+	FaceCompactGenerationFull        FaceCompactGenerationMode = "full"
+	FaceCompactGenerationIncremental FaceCompactGenerationMode = "incremental"
+	FaceCompactGenerationRebase      FaceCompactGenerationMode = "rebase"
 )
 
 // FaceCommandMeta 是所有 Face command 共用的关联字段。
@@ -237,7 +291,8 @@ type FaceChatStreamGet struct {
 
 // FaceCapabilitiesGet 请求当前 Face 身份、应用能力和协议限额。
 type FaceCapabilitiesGet struct {
-	RequestID string `json:"request_id"`
+	RequestID      string   `json:"request_id"`
+	AcceptFeatures []string `json:"accept_features,omitempty"`
 }
 
 // FaceConversationList 请求列出可访问的对话。
@@ -270,6 +325,26 @@ type FaceConversationMessages struct {
 	ConversationID string `json:"conversation_id"`
 	BeforeSeq      int    `json:"before_seq,omitempty"`
 	Limit          int    `json:"limit,omitempty"`
+}
+
+// FaceCompactTarget 是 default、ratio、keep_messages、rebase 的严格 tagged union。
+type FaceCompactTarget struct {
+	Mode         FaceCompactTargetMode `json:"mode"`
+	Ratio        *float64              `json:"ratio,omitempty"`
+	KeepMessages *int                  `json:"keep_messages,omitempty"`
+}
+
+// FaceConversationCompact 请求对指定 conversation 执行手动 Compact。
+type FaceConversationCompact struct {
+	RequestID      string            `json:"request_id"`
+	ConversationID string            `json:"conversation_id"`
+	Target         FaceCompactTarget `json:"target"`
+}
+
+// FaceCompactStatusGet 请求读取指定 conversation 的权威 Compact 状态。
+type FaceCompactStatusGet struct {
+	RequestID      string `json:"request_id"`
+	ConversationID string `json:"conversation_id"`
 }
 
 // FaceSubscribe 设置连接的增量事件订阅。
@@ -558,6 +633,75 @@ type FaceCapabilitiesResult struct {
 	Limits   FaceProtocolLimits `json:"limits"`
 }
 
+// FaceCompactResult 是 conversation.compact 的成功结果。目标结果字段严格二选一。
+type FaceCompactResult struct {
+	SummaryID             string                    `json:"summary_id"`
+	FromSeq               int                       `json:"from_seq"`
+	ToSeq                 int                       `json:"to_seq"`
+	BeforeEstimatedTokens int64                     `json:"before_estimated_tokens"`
+	AfterEstimatedTokens  int64                     `json:"after_estimated_tokens"`
+	TargetTokens          *int64                    `json:"target_tokens,omitempty"`
+	TargetMet             *bool                     `json:"target_met,omitempty"`
+	RequestedKeepMessages *int                      `json:"requested_keep_messages,omitempty"`
+	RetainedMessageCount  *int                      `json:"retained_message_count,omitempty"`
+	SafetyRetainedExtra   *int                      `json:"safety_retained_extra,omitempty"`
+	CapacityRetainedExtra *int                      `json:"capacity_retained_extra,omitempty"`
+	RetainedFromSeq       int                       `json:"retained_from_seq"`
+	RetainedToSeq         int                       `json:"retained_to_seq"`
+	GenerationMode        FaceCompactGenerationMode `json:"generation_mode"`
+	ContextVersion        uint64                    `json:"context_version"`
+	Reused                bool                      `json:"reused"`
+}
+
+// FaceCompactStatus 是 conversation.compact.status 的完整无正文诊断结果。
+type FaceCompactStatus struct {
+	Enabled                             bool                      `json:"enabled"`
+	Automatic                           bool                      `json:"automatic"`
+	OperationState                      string                    `json:"operation_state"`
+	SummaryID                           string                    `json:"summary_id"`
+	CoveredFromSeq                      int                       `json:"covered_from_seq"`
+	CoveredToSeq                        int                       `json:"covered_to_seq"`
+	LastSeq                             int                       `json:"last_seq"`
+	MessageCount                        int                       `json:"message_count"`
+	ContextMessageCount                 int                       `json:"context_message_count"`
+	SummaryNodeCount                    int                       `json:"summary_node_count"`
+	SummaryStorageBytes                 int64                     `json:"summary_storage_bytes"`
+	SummaryBytes                        int                       `json:"summary_bytes"`
+	SourceEstimatedTokens               int64                     `json:"source_estimated_tokens"`
+	SummaryEstimatedTokens              int64                     `json:"summary_estimated_tokens"`
+	CompressionRatio                    float64                   `json:"compression_ratio"`
+	GenerationMode                      FaceCompactGenerationMode `json:"generation_mode"`
+	CandidateGenerationMode             FaceCompactGenerationMode `json:"candidate_generation_mode"`
+	ConfiguredSummaryProviderID         string                    `json:"configured_summary_provider_id"`
+	ConfiguredSummaryModelID            string                    `json:"configured_summary_model_id"`
+	ActiveSummaryProviderID             string                    `json:"active_summary_provider_id"`
+	ActiveSummaryModelID                string                    `json:"active_summary_model_id"`
+	EstimatedTokens                     int64                     `json:"estimated_tokens"`
+	InputBudget                         int64                     `json:"input_budget"`
+	ReservedOutputTokens                int64                     `json:"reserved_output_tokens"`
+	HighLimit                           int64                     `json:"high_limit"`
+	LowTarget                           int64                     `json:"low_target"`
+	CompressibleFromSeq                 int                       `json:"compressible_from_seq"`
+	CompressibleToSeq                   int                       `json:"compressible_to_seq"`
+	RetainedFromSeq                     int                       `json:"retained_from_seq"`
+	RetainedToSeq                       int                       `json:"retained_to_seq"`
+	Pending                             bool                      `json:"pending"`
+	PendingAttempt                      int64                     `json:"pending_attempt"`
+	PendingNotBefore                    int64                     `json:"pending_not_before"`
+	SummaryInputBudget                  int64                     `json:"summary_input_budget"`
+	RequiredSummaryInputEstimatedTokens int64                     `json:"required_summary_input_estimated_tokens"`
+	ContextVersion                      uint64                    `json:"context_version"`
+	ProjectionVersion                   string                    `json:"projection_version"`
+	PolicyVersion                       string                    `json:"policy_version"`
+	Profile                             string                    `json:"profile"`
+	ActiveProjectionVersion             string                    `json:"active_projection_version"`
+	ActivePolicyVersion                 string                    `json:"active_policy_version"`
+	ActiveProfile                       string                    `json:"active_profile"`
+	CompactDegraded                     bool                      `json:"compact_degraded"`
+	Blocker                             FaceErrorCode             `json:"blocker"`
+	Warnings                            []string                  `json:"warnings"`
+}
+
 // ChatStreamResponse 是一次 provider response 的可恢复可见文本。
 type ChatStreamResponse struct {
 	ResponseIndex int    `json:"response_index"`
@@ -700,3 +844,46 @@ type ConversationChangedEventData struct {
 
 // TaskChangedEventData 是 task.changed 携带的完整任务摘要。
 type TaskChangedEventData = TaskSummary
+
+// CompactRequestedEventData 是 compact.requested 的严格数据。
+type CompactRequestedEventData struct {
+	Trigger FaceCompactTrigger `json:"trigger"`
+}
+
+// CompactStartedEventData 是 compact.started 的严格数据。
+type CompactStartedEventData struct {
+	Trigger        FaceCompactTrigger        `json:"trigger"`
+	FromSeq        int                       `json:"from_seq"`
+	ToSeq          int                       `json:"to_seq"`
+	GenerationMode FaceCompactGenerationMode `json:"generation_mode"`
+	SourceDigest   string                    `json:"source_digest"`
+	Attempt        int64                     `json:"attempt"`
+}
+
+// CompactCompletedEventData 是 compact.completed 的严格数据。
+type CompactCompletedEventData struct {
+	Trigger               FaceCompactTrigger `json:"trigger"`
+	SummaryID             string             `json:"summary_id"`
+	FromSeq               int                `json:"from_seq"`
+	ToSeq                 int                `json:"to_seq"`
+	BeforeEstimatedTokens int64              `json:"before_estimated_tokens"`
+	AfterEstimatedTokens  int64              `json:"after_estimated_tokens"`
+	SummaryBytes          int                `json:"summary_bytes"`
+	SourceDigest          string             `json:"source_digest"`
+	DurationMS            int64              `json:"duration_ms"`
+	ContextVersion        int64              `json:"context_version"`
+	Reused                bool               `json:"reused"`
+}
+
+// CompactFailedEventData 是 compact.failed 的严格数据。
+type CompactFailedEventData struct {
+	Trigger        FaceCompactTrigger `json:"trigger"`
+	Reason         FaceErrorCode      `json:"reason"`
+	DurationMS     int64              `json:"duration_ms"`
+	RetryScheduled bool               `json:"retry_scheduled"`
+	FromSeq        *int               `json:"from_seq,omitempty"`
+	ToSeq          *int               `json:"to_seq,omitempty"`
+	SourceDigest   string             `json:"source_digest,omitempty"`
+	PendingAttempt *int64             `json:"pending_attempt,omitempty"`
+	RetryNotBefore *int64             `json:"retry_not_before,omitempty"`
+}

@@ -285,7 +285,75 @@ type CompactRequest struct {
 	Target    Target
 	Trigger   Trigger
 	Pending   store.PendingExpectation
+	Observe   func(Event)
 }
+
+// Event 是一次 Compact operation 的脱敏 phase-specific 事实。
+type Event interface {
+	compactEvent()
+}
+
+// RequestedEvent 表示 Compact 请求已持久化。
+type RequestedEvent struct {
+	SessionID    string
+	RequestID    string
+	Trigger      Trigger
+	StateChanged bool
+}
+
+func (RequestedEvent) compactEvent() {}
+
+// StartedEvent 表示摘要 provider admission 已持久化。
+type StartedEvent struct {
+	SessionID      string
+	RequestID      string
+	Trigger        Trigger
+	FromSeq        int
+	ToSeq          int
+	GenerationMode string
+	SourceDigest   string
+	Attempt        int64
+}
+
+func (StartedEvent) compactEvent() {}
+
+// CompletedEvent 表示摘要和 active pointer 已提交。
+type CompletedEvent struct {
+	SessionID             string
+	RequestID             string
+	Trigger               Trigger
+	SummaryID             string
+	FromSeq               int
+	ToSeq                 int
+	BeforeEstimatedTokens int64
+	AfterEstimatedTokens  int64
+	SummaryBytes          int
+	SourceDigest          string
+	DurationMS            int64
+	ContextVersion        int64
+	Reused                bool
+	StateChanged          bool
+}
+
+func (CompletedEvent) compactEvent() {}
+
+// FailedEvent 表示一次 Compact attempt 已以稳定分类收束。
+type FailedEvent struct {
+	SessionID      string
+	RequestID      string
+	Trigger        Trigger
+	Reason         ErrorCode
+	DurationMS     int64
+	RetryScheduled bool
+	FromSeq        int
+	ToSeq          int
+	SourceDigest   string
+	PendingAttempt int64
+	RetryNotBefore int64
+	StateChanged   bool
+}
+
+func (FailedEvent) compactEvent() {}
 
 // CompactResult 是不暴露摘要正文的成功结果。
 type CompactResult struct {
@@ -345,6 +413,21 @@ type CompactStatus struct {
 	Blocker                             ErrorCode
 	Degraded                            bool
 	Warnings                            []string
+	LastSeq                             int
+	MessageCount                        int
+	ContextMessageCount                 int
+	ActiveSummaryBytes                  int
+	ActiveContractDigest                string
+	ConfiguredSummaryProviderID         string
+	ConfiguredSummaryModelID            string
+	ReservedOutputTokens                int64
+	ProjectionVersion                   string
+	PolicyVersion                       string
+	Profile                             string
+	CompressibleFromSeq                 int
+	CompressibleToSeq                   int
+	RetainedFromSeq                     int
+	RetainedToSeq                       int
 }
 
 // Compactor 是 Actor、REPL 和 Face 共用的上下文压缩接口。

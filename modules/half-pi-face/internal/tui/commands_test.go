@@ -64,3 +64,53 @@ func TestEnterExecutesCompleteCommandWithCompletionVisible(t *testing.T) {
 		t.Fatalf("snapshot request = %+v, %v", snapshot, err)
 	}
 }
+
+func TestCompactCommandSendsTypedMutation(t *testing.T) {
+	model, connection := readyModel(t)
+	model.features[protocol.FaceFeatureContextCompaction] = struct{}{}
+	model.activeID = "conversation-1"
+	model.localDraft = nil
+	model.conversations[model.activeID] = newConversation(model.activeID)
+	model.idSource = sequenceIDSource(t, "compact-request")
+	model.composer.SetValue("/compact keep 40")
+	command, err := model.submitComposer()
+	if err != nil {
+		t.Fatal(err)
+	}
+	runCommand(t, command)
+	if len(connection.sent) != 1 || connection.sent[0].Type != protocol.TypeFaceConversationCompact {
+		t.Fatalf("Compact command sent %#v", connection.sent)
+	}
+	request, err := protocol.DecodePayload[protocol.FaceConversationCompact](&connection.sent[0])
+	if err != nil || request.Target.Mode != protocol.FaceCompactTargetKeep || request.Target.KeepMessages == nil || *request.Target.KeepMessages != 40 {
+		t.Fatalf("Compact request = %+v, %v", request, err)
+	}
+	if _, ok := model.compactRequests["compact-request"]; !ok {
+		t.Fatal("Compact mutation was not retained for replay")
+	}
+}
+
+func TestCapabilitiesFallsBackToLegacyOnce(t *testing.T) {
+	model, connection := readyModel(t)
+	model.capabilitiesKnown = false
+	model.legacyCapabilities = false
+	model.idSource = sequenceIDSource(t, "legacy-capabilities")
+	model.pending["modern-capabilities"] = pendingRequest{Operation: protocol.FaceOperationCapabilitiesGet}
+	command := model.applyError(protocol.FaceError{
+		RequestID: "modern-capabilities", Code: protocol.FaceErrorInvalidRequest, Message: "invalid", Retryable: false,
+	})
+	runCommand(t, command)
+	if len(connection.sent) != 1 || connection.sent[0].Type != protocol.TypeFaceCapabilitiesGet {
+		t.Fatalf("fallback sent %#v", connection.sent)
+	}
+	request, err := protocol.DecodePayload[protocol.FaceCapabilitiesGet](&connection.sent[0])
+	if err != nil || len(request.AcceptFeatures) != 0 {
+		t.Fatalf("legacy capabilities request = %+v, %v", request, err)
+	}
+	model.applyError(protocol.FaceError{
+		RequestID: "legacy-capabilities", Code: protocol.FaceErrorInvalidRequest, Message: "invalid", Retryable: false,
+	})
+	if len(connection.sent) != 1 || !model.capabilityFallback {
+		t.Fatalf("legacy fallback looped: sent=%d attempted=%t", len(connection.sent), model.capabilityFallback)
+	}
+}

@@ -26,7 +26,8 @@ func (g *Gateway) handleChat(state *connection, identity protocol.FaceIdentity, 
 		g.sendError(state, meta, protocol.FaceErrorInternal, "Chat request registration failed", true)
 		return
 	}
-	admission := g.chats.beginChat(identity, request, digest, state)
+	admission := g.chats.beginChat(identity, request, digest, state, actor,
+		g.connectionHasFeature(state, protocol.FaceFeatureContextCompaction))
 	if g.sendRequestAdmission(state, meta, admission) {
 		return
 	}
@@ -61,7 +62,7 @@ func (g *Gateway) runChat(record *requestRecord, actor *conversation.Actor, cont
 				})
 		},
 	}
-	reply, err := actor.ChatWithTransport(ctx, content, transport)
+	reply, err := actor.ChatWithLease(ctx, content, transport, record.lease)
 	if closeErr := stream.Close(); err == nil && closeErr != nil {
 		err = closeErr
 	}
@@ -95,6 +96,16 @@ func chatResult(record *requestRecord, reply string, err error) protocol.FaceRes
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		result.Status, result.ErrorCode, result.Error = protocol.FaceResultTimedOut, protocol.FaceErrorTimeout, "Chat timed out"
+		result.Content = ""
+		return result
+	}
+	if code, message, ok := compactFaceError(err); ok {
+		if record.compactErrors {
+			result.Status, result.ErrorCode, result.Error = compactResultStatus(code), code, message
+		} else {
+			result.Status, result.ErrorCode, result.Error = protocol.FaceResultFailed, protocol.FaceErrorInternal,
+				"Chat could not continue within the model context budget"
+		}
 		result.Content = ""
 		return result
 	}

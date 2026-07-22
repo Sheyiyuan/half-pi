@@ -52,8 +52,18 @@ func (m *Model) requestCapabilities() (tea.Cmd, error) {
 		return nil, err
 	}
 	return m.sendRequest(requestID, protocol.TypeFaceCapabilitiesGet,
-		protocol.FaceCapabilitiesGet{RequestID: requestID},
+		protocol.FaceCapabilitiesGet{RequestID: requestID, AcceptFeatures: []string{string(protocol.FaceFeatureContextCompaction)}},
 		pendingRequest{Operation: protocol.FaceOperationCapabilitiesGet})
+}
+
+func (m *Model) requestLegacyCapabilities() (tea.Cmd, error) {
+	requestID, err := m.nextRequestID()
+	if err != nil {
+		return nil, err
+	}
+	return m.sendRequest(requestID, protocol.TypeFaceCapabilitiesGet,
+		protocol.FaceCapabilitiesGet{RequestID: requestID},
+		pendingRequest{Operation: protocol.FaceOperationCapabilitiesGet, TargetID: "legacy"})
 }
 
 func (m *Model) requestConversationList() (tea.Cmd, error) {
@@ -140,6 +150,10 @@ func (m *Model) requestSubscribe(conversationID, purpose string) (tea.Cmd, error
 	}
 	if m.hasScope(protocol.FaceScopeSessionsRead) {
 		events = append(events, protocol.FaceEventConversationChanged)
+		if m.hasFeature(protocol.FaceFeatureContextCompaction) {
+			events = append(events, protocol.FaceEventCompactRequested, protocol.FaceEventCompactStarted,
+				protocol.FaceEventCompactCompleted, protocol.FaceEventCompactFailed)
+		}
 	}
 	if m.hasScope(protocol.FaceScopeTasksRead) {
 		events = append(events, protocol.FaceEventTaskChanged)
@@ -155,6 +169,56 @@ func (m *Model) requestSubscribe(conversationID, purpose string) (tea.Cmd, error
 		RequestID: requestID, ConversationIDs: []string{conversationID},
 		EventTypes: events, TransientTypes: transients,
 	}, pendingRequest{Operation: protocol.FaceOperationSubscribe, ConversationID: conversationID, TargetID: purpose})
+}
+
+func (m *Model) requestCompact(target protocol.FaceCompactTarget) (tea.Cmd, error) {
+	if m.activeID == "" || !m.hasFeature(protocol.FaceFeatureContextCompaction) {
+		return nil, fmt.Errorf("context compaction is unavailable")
+	}
+	if !m.hasScope(protocol.FaceScopeSessionsWrite) {
+		return nil, fmt.Errorf("conversation write permission is required")
+	}
+	requestID, err := m.nextRequestID()
+	if err != nil {
+		return nil, err
+	}
+	request := protocol.FaceConversationCompact{RequestID: requestID, ConversationID: m.activeID, Target: target}
+	m.compactRequests[requestID] = request
+	return m.sendRequest(requestID, protocol.TypeFaceConversationCompact, request,
+		pendingRequest{Operation: protocol.FaceOperationConversationCompact, ConversationID: m.activeID, Mutation: true})
+}
+
+func (m *Model) requestCompactStatus(conversationID string) (tea.Cmd, error) {
+	if conversationID == "" || !m.hasFeature(protocol.FaceFeatureContextCompaction) || !m.hasScope(protocol.FaceScopeSessionsRead) {
+		return nil, nil
+	}
+	for _, pending := range m.pending {
+		if pending.Operation == protocol.FaceOperationCompactStatus && pending.ConversationID == conversationID {
+			return nil, nil
+		}
+	}
+	requestID, err := m.nextRequestID()
+	if err != nil {
+		return nil, err
+	}
+	return m.sendRequest(requestID, protocol.TypeFaceCompactStatus,
+		protocol.FaceCompactStatusGet{RequestID: requestID, ConversationID: conversationID},
+		pendingRequest{Operation: protocol.FaceOperationCompactStatus, ConversationID: conversationID})
+}
+
+func (m *Model) replayCompacts(conversationID string) []tea.Cmd {
+	var commands []tea.Cmd
+	for requestID, request := range m.compactRequests {
+		pending, ok := m.pending[requestID]
+		if !ok || pending.ConversationID != conversationID || pending.Sent {
+			continue
+		}
+		command, err := m.sendRequest(requestID, protocol.TypeFaceConversationCompact, request, pending)
+		if err == nil && command != nil {
+			commands = append(commands, command)
+		}
+	}
+	return commands
 }
 
 func (m *Model) requestSnapshot(conversationID, purpose string) (tea.Cmd, error) {

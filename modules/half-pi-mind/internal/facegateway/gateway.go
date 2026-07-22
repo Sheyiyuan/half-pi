@@ -66,6 +66,7 @@ type connection struct {
 	subscribed bool
 	filter     subscription
 	eventSeq   int64
+	features   map[protocol.FaceFeature]struct{}
 }
 
 type subscription struct {
@@ -96,6 +97,7 @@ func New(config Config) (*Gateway, error) {
 	}
 	gateway.version.Store(1)
 	config.Conversations.Subscribe(gateway.PublishConversationChanged)
+	config.Conversations.SubscribeCompact(gateway.PublishCompactEvent)
 	config.Approvals.Subscribe(gateway.PublishApprovalRequested, gateway.PublishApprovalFinished)
 	config.Authority.Registry.Subscribe(gateway.PublishRemoteRunChanged)
 	config.Authority.SubscribeProgress(gateway.PublishRunProgress)
@@ -141,7 +143,23 @@ func (g *Gateway) deauthorize(state *connection) {
 	state.identity = protocol.FaceIdentity{}
 	state.subscribed = false
 	state.filter = subscription{}
+	state.features = nil
 	state.mu.Unlock()
+}
+
+func (g *Gateway) connectionHasFeature(state *connection, feature protocol.FaceFeature) bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	_, ok := state.features[feature]
+	return ok
+}
+
+func (g *Gateway) requireFeature(state *connection, meta protocol.FaceCommandMeta, feature protocol.FaceFeature) bool {
+	if g.connectionHasFeature(state, feature) {
+		return true
+	}
+	g.sendError(state, meta, protocol.FaceErrorInvalidRequest, "Face feature was not negotiated", false)
+	return false
 }
 
 // HandleFaceDisconnect 清理连接级队列、订阅和 event_seq。

@@ -16,7 +16,7 @@ func TestChatRegistryAcceptedCancellationWinsCompletionRace(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	chatAdmission := registry.beginChat(identity, chat, chatDigest, nil)
+	chatAdmission := registry.beginChat(identity, chat, chatDigest, nil, nil, false)
 	cancel := protocol.FaceChatCancel{
 		RequestID: "cancel-race", TargetRequestID: chat.RequestID, ConversationID: chat.ConversationID,
 	}

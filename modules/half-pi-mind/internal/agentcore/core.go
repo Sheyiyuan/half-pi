@@ -77,6 +77,12 @@ type ToolBatchCompactionCoordinator interface {
 	PrepareToolBatchPending(context.Context, BudgetObservation) (*ToolBatchPending, error)
 }
 
+// ToolBatchPendingObserver 在工具消息批次和 pending 同事务提交后收到一次通知。
+// 观察者不得改变已经提交的业务事实；它只负责投影 domain event 或安排后续工作。
+type ToolBatchPendingObserver interface {
+	ToolBatchPendingCommitted(*ToolBatchPending, store.CompactPendingResult)
+}
+
 // SubscribeSessionChanges 注册持久化 conversation 状态变化观察者。
 func (c *Core) SubscribeSessionChanges(subscriber func()) func() {
 	if subscriber == nil {

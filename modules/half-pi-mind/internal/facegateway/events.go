@@ -7,6 +7,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/compact"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
 
@@ -145,6 +146,72 @@ func (g *Gateway) PublishTaskChanged(task remoteexec.Task) {
 	g.publishConversationVersion(task.SessionID, version)
 }
 
+// PublishCompactEvent 按 phase 投影不含摘要正文的 Compact domain fact。
+func (g *Gateway) PublishCompactEvent(event compact.Event) {
+	var domain domainEvent
+	stateChanged := false
+	domain.source = "compact"
+	domain.level = protocol.FaceEventLevelInfo
+	switch value := event.(type) {
+	case compact.RequestedEvent:
+		stateChanged = value.StateChanged
+		domain.conversationID, domain.requestID = value.SessionID, value.RequestID
+		domain.typ, domain.message = protocol.FaceEventCompactRequested, "Compact requested"
+		domain.data = protocol.CompactRequestedEventData{Trigger: projectCompactTrigger(value.Trigger)}
+	case compact.StartedEvent:
+		stateChanged = value.Trigger == compact.TriggerAutomatic
+		domain.conversationID, domain.requestID = value.SessionID, value.RequestID
+		domain.typ, domain.message = protocol.FaceEventCompactStarted, "Compact started"
+		domain.data = protocol.CompactStartedEventData{
+			Trigger: projectCompactTrigger(value.Trigger), FromSeq: value.FromSeq, ToSeq: value.ToSeq,
+			GenerationMode: protocol.FaceCompactGenerationMode(value.GenerationMode), SourceDigest: value.SourceDigest, Attempt: value.Attempt,
+		}
+	case compact.CompletedEvent:
+		stateChanged = value.StateChanged
+		domain.conversationID, domain.requestID = value.SessionID, value.RequestID
+		domain.typ, domain.message = protocol.FaceEventCompactCompleted, "Compact completed"
+		domain.data = protocol.CompactCompletedEventData{
+			Trigger: projectCompactTrigger(value.Trigger), SummaryID: value.SummaryID,
+			FromSeq: value.FromSeq, ToSeq: value.ToSeq, BeforeEstimatedTokens: value.BeforeEstimatedTokens,
+			AfterEstimatedTokens: value.AfterEstimatedTokens, SummaryBytes: value.SummaryBytes,
+			SourceDigest: value.SourceDigest, DurationMS: value.DurationMS, ContextVersion: value.ContextVersion, Reused: value.Reused,
+		}
+	case compact.FailedEvent:
+		stateChanged = value.StateChanged
+		domain.conversationID, domain.requestID = value.SessionID, value.RequestID
+		domain.typ, domain.message, domain.level = protocol.FaceEventCompactFailed, "Compact failed", protocol.FaceEventLevelError
+		data := protocol.CompactFailedEventData{
+			Trigger: projectCompactTrigger(value.Trigger), Reason: protocol.FaceErrorCode(value.Reason),
+			DurationMS: value.DurationMS, RetryScheduled: value.RetryScheduled, SourceDigest: value.SourceDigest,
+		}
+		if value.FromSeq > 0 {
+			data.FromSeq, data.ToSeq = intPointer(value.FromSeq), intPointer(value.ToSeq)
+		}
+		if value.RetryScheduled {
+			data.PendingAttempt, data.RetryNotBefore = int64Pointer(value.PendingAttempt), int64Pointer(value.RetryNotBefore)
+		}
+		domain.data = data
+	default:
+		return
+	}
+	if domain.conversationID == "" || domain.requestID == "" {
+		return
+	}
+	g.domainMu.Lock()
+	g.publish(domain)
+	if stateChanged {
+		g.publishConversationVersion(domain.conversationID, g.version.Add(1))
+	}
+	g.domainMu.Unlock()
+}
+
+func projectCompactTrigger(trigger compact.Trigger) protocol.FaceCompactTrigger {
+	return protocol.FaceCompactTrigger(trigger)
+}
+
+func intPointer(value int) *int       { return &value }
+func int64Pointer(value int64) *int64 { return &value }
+
 func (g *Gateway) publishConversationVersion(conversationID string, version int64) {
 	g.publish(domainEvent{
 		conversationID: conversationID, typ: protocol.FaceEventConversationChanged,
@@ -200,6 +267,11 @@ func (g *Gateway) publish(event domainEvent) {
 func (g *Gateway) matchesLocked(state *connection, event domainEvent) bool {
 	if state.closed || state.slow || !state.subscribed {
 		return false
+	}
+	if isCompactEvent(event.typ) {
+		if _, ok := state.features[protocol.FaceFeatureContextCompaction]; !ok {
+			return false
+		}
 	}
 	scope := eventScope(event.typ)
 	if scope != "" && !hasScope(state.identity, scope) {

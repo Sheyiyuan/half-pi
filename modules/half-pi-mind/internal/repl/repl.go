@@ -87,6 +87,7 @@ func (r *Repl) printBanner(serverEnabled bool) {
 	fmt.Println("/hand task cancel <task_id>  cancel background task")
 	fmt.Println("/peers                list connected peers")
 	fmt.Println("/mode <strict|normal|review|yolo>  switch mode")
+	fmt.Println("/compact [N%|keep N|rebase|status]  compact or inspect context")
 	fmt.Println("/debug                toggle debug")
 	fmt.Println("exit / quit           exit")
 	fmt.Println()

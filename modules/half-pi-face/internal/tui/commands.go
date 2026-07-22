@@ -365,6 +365,9 @@ func defaultCommandSpecs() []CommandSpec {
 		{Name: "snapshot", Description: "Refresh the current conversation", Scopes: []protocol.FaceScope{protocol.FaceScopeSessionsRead}, Execute: commandSnapshot},
 		{Name: "messages", Description: "Load a message page", Args: []ArgumentSpec{{Name: "before_seq", Complete: completeMessageCursor}, {Name: "limit"}}, Scopes: []protocol.FaceScope{protocol.FaceScopeSessionsRead}, Execute: commandMessages},
 		{Name: "rename", Description: "Rename the current conversation", Args: []ArgumentSpec{{Name: "name", Required: true, Variadic: true, Complete: completeCurrentName}}, Scopes: []protocol.FaceScope{protocol.FaceScopeSessionsWrite}, Execute: commandRename},
+		{Name: "compact", Description: "Compact or inspect conversation context", Args: []ArgumentSpec{{Name: "target", Variadic: true}}, Scopes: []protocol.FaceScope{protocol.FaceScopeSessionsRead}, Visible: func(m *Model) bool {
+			return m.activeID != "" && m.hasFeature(protocol.FaceFeatureContextCompaction)
+		}, Execute: commandCompact},
 		{Name: "cancel", Description: "Cancel the active Chat", Args: []ArgumentSpec{{Name: "request_id"}}, Scopes: []protocol.FaceScope{protocol.FaceScopeChat}, Execute: commandCancelChat},
 		{Name: "approve", Description: "Resolve an approval", Args: []ArgumentSpec{{Name: "approval", Required: true, Complete: completeApprovals}, {Name: "decision", Required: true, Complete: completeDecisions}, {Name: "reason", Variadic: true}}, Scopes: []protocol.FaceScope{protocol.FaceScopeApprove}, Execute: commandApprove},
 		{Name: "hands", Description: "Refresh Hands", Scopes: []protocol.FaceScope{protocol.FaceScopeHandsRead}, Execute: func(m *Model, _ ParsedCommand) (tea.Cmd, error) { return m.requestHands() }},
@@ -381,6 +384,37 @@ func defaultCommandSpecs() []CommandSpec {
 		{Name: "task-log", Description: "Read durable task output", Args: []ArgumentSpec{{Name: "task", Required: true, Complete: completeTasks}, {Name: "offset"}, {Name: "limit"}}, Scopes: []protocol.FaceScope{protocol.FaceScopeTasksRead}, Execute: commandTaskLog},
 		{Name: "task-cancel", Description: "Cancel a durable task", Args: []ArgumentSpec{{Name: "task", Required: true, Complete: completeTasks}}, Scopes: []protocol.FaceScope{protocol.FaceScopeTasksRead, protocol.FaceScopeTasksCancel}, Execute: commandTaskCancel},
 	}
+}
+
+func commandCompact(m *Model, command ParsedCommand) (tea.Cmd, error) {
+	if len(command.Args) == 1 && command.Args[0] == "status" {
+		return m.requestCompactStatus(m.activeID)
+	}
+	if !m.hasScope(protocol.FaceScopeSessionsWrite) {
+		return nil, fmt.Errorf("conversation write permission is required")
+	}
+	target := protocol.FaceCompactTarget{Mode: protocol.FaceCompactTargetDefault}
+	switch {
+	case len(command.Args) == 0:
+	case len(command.Args) == 1 && command.Args[0] == "rebase":
+		target.Mode = protocol.FaceCompactTargetRebase
+	case len(command.Args) == 1 && strings.HasSuffix(command.Args[0], "%"):
+		percent, err := strconv.ParseFloat(strings.TrimSuffix(command.Args[0], "%"), 64)
+		if err != nil || percent < 20 || percent >= 95 {
+			return nil, fmt.Errorf("usage: /compact [20%%..94%%|keep 1..10000|rebase|status]")
+		}
+		ratio := percent / 100
+		target.Mode, target.Ratio = protocol.FaceCompactTargetRatio, &ratio
+	case len(command.Args) == 2 && command.Args[0] == "keep":
+		messages, err := strconv.Atoi(command.Args[1])
+		if err != nil || messages < 1 || messages > 10_000 {
+			return nil, fmt.Errorf("usage: /compact keep <1..10000>")
+		}
+		target.Mode, target.KeepMessages = protocol.FaceCompactTargetKeep, &messages
+	default:
+		return nil, fmt.Errorf("usage: /compact [N%%|keep N|rebase|status]")
+	}
+	return m.requestCompact(target)
 }
 
 func commandCreate(m *Model, command ParsedCommand) (tea.Cmd, error) {

@@ -47,6 +47,7 @@ type rangePlan struct {
 	Cost                  candidateCost
 	RequiredSummaryInput  int64
 	Blocker               ErrorCode
+	SourceDigest          string
 }
 
 type conversationRound struct {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -45,20 +46,22 @@ type Config struct {
 
 // Actor 持有一个 conversation 独占的可变运行时状态。
 type Actor struct {
-	core        *agentcore.Core
-	bridge      *local.RemoteBridge
-	compactor   compact.Compactor
-	runtime     compact.RuntimeConfig
-	onChange    func()
-	operationMu sync.Mutex
-	operation   OperationState
-	requestID   string
-	workerMu    sync.Mutex
-	workerLive  bool
-	workerAgain bool
-	workerCtx   context.Context
-	workerStop  context.CancelFunc
-	workerWG    sync.WaitGroup
+	core           *agentcore.Core
+	bridge         *local.RemoteBridge
+	compactor      compact.Compactor
+	runtime        compact.RuntimeConfig
+	onChange       func()
+	onCompact      func(compact.Event)
+	operationMu    sync.Mutex
+	operation      OperationState
+	requestID      string
+	operationToken uint64
+	workerMu       sync.Mutex
+	workerLive     bool
+	workerAgain    bool
+	workerCtx      context.Context
+	workerStop     context.CancelFunc
+	workerWG       sync.WaitGroup
 }
 
 // Core 返回该 conversation 独占的 Agent Core。
@@ -71,11 +74,16 @@ func (a *Actor) Bridge() *local.RemoteBridge { return a.bridge }
 type Manager struct {
 	config Config
 
-	mu        sync.Mutex
-	actors    map[string]*Actor
-	changes   observer.Hub[string]
-	compactor compact.Compactor
-	runtime   compact.RuntimeConfig
+	mu                 sync.Mutex
+	actors             map[string]*Actor
+	changes            observer.Hub[string]
+	compactMu          sync.RWMutex
+	compactNext        uint64
+	compactSubscribers map[uint64]func(compact.Event)
+	diagnosticMu       sync.Mutex
+	diagnostics        map[string]struct{}
+	compactor          compact.Compactor
+	runtime            compact.RuntimeConfig
 }
 
 // SetCompactor 安装进程共享的 Compactor，并为既有 Actor 启用预算编排。
@@ -91,6 +99,7 @@ func (m *Manager) SetCompactor(compactor compact.Compactor, runtime compact.Runt
 	m.mu.Unlock()
 	for _, actor := range actors {
 		actor.schedulePendingWorker()
+		go m.diagnoseUnsupportedCompact(actor)
 	}
 }
 
@@ -113,6 +122,29 @@ func (m *Manager) Snapshot(ctx context.Context, sessionID string) (compact.Envir
 // Subscribe 注册 conversation 持久化状态变化观察者。
 func (m *Manager) Subscribe(subscriber func(string)) func() {
 	return m.changes.Subscribe(subscriber)
+}
+
+// SubscribeCompact 同步注册已提交 Compact domain fact 的观察者。
+func (m *Manager) SubscribeCompact(subscriber func(compact.Event)) func() {
+	if subscriber == nil {
+		return func() {}
+	}
+	m.compactMu.Lock()
+	m.compactNext++
+	id := m.compactNext
+	if m.compactSubscribers == nil {
+		m.compactSubscribers = make(map[uint64]func(compact.Event))
+	}
+	m.compactSubscribers[id] = subscriber
+	m.compactMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			m.compactMu.Lock()
+			delete(m.compactSubscribers, id)
+			m.compactMu.Unlock()
+		})
+	}
 }
 
 // NewManager 创建可由服务模式和 REPL 共用的 Conversation Manager。
@@ -219,6 +251,9 @@ func (m *Manager) Get(id string) (*Actor, error) {
 	}
 	m.actors[id] = actor
 	actor.schedulePendingWorker()
+	if actor.compactor != nil {
+		go m.diagnoseUnsupportedCompact(actor)
+	}
 	return actor, nil
 }
 
@@ -261,10 +296,78 @@ func (m *Manager) newActor(id string) (*Actor, error) {
 	actor := &Actor{
 		core: core, bridge: bridge, compactor: m.compactor, runtime: m.runtime,
 		operation: OperationIdle, onChange: func() { m.notify(id) },
+		onCompact: m.publishCompact,
 		workerCtx: workerCtx, workerStop: workerStop,
 	}
 	core.SetCompactRuntime(m.runtime, actor)
 	return actor, nil
+}
+
+func (m *Manager) publishCompact(event compact.Event) {
+	m.compactMu.RLock()
+	subscribers := make([]func(compact.Event), 0, len(m.compactSubscribers))
+	for _, subscriber := range m.compactSubscribers {
+		subscribers = append(subscribers, subscriber)
+	}
+	m.compactMu.RUnlock()
+	for _, subscriber := range subscribers {
+		func() {
+			defer func() { _ = recover() }()
+			subscriber(event)
+		}()
+	}
+}
+
+type unsupportedCompactDiagnostic struct {
+	SummaryID         string   `json:"summary_id"`
+	FromSeq           int      `json:"from_seq"`
+	ToSeq             int      `json:"to_seq"`
+	Unsupported       []string `json:"unsupported"`
+	ProjectionVersion string   `json:"projection_version,omitempty"`
+	PolicyVersion     string   `json:"policy_version,omitempty"`
+	Profile           string   `json:"profile,omitempty"`
+	Blocker           string   `json:"blocker"`
+}
+
+func (m *Manager) diagnoseUnsupportedCompact(actor *Actor) {
+	if actor == nil || actor.compactor == nil || m.config.Bus == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	status, err := actor.CompactStatus(ctx)
+	if err != nil || status.Blocker != compact.ErrUnsupportedVersion || status.ActiveSummaryID == "" {
+		return
+	}
+	key := actor.core.SessionID() + "\x00" + status.ActiveSummaryID + "\x00" + status.ActiveContractDigest
+	m.diagnosticMu.Lock()
+	if m.diagnostics == nil {
+		m.diagnostics = make(map[string]struct{})
+	}
+	if _, exists := m.diagnostics[key]; exists {
+		m.diagnosticMu.Unlock()
+		return
+	}
+	m.diagnostics[key] = struct{}{}
+	m.diagnosticMu.Unlock()
+	diagnostic := unsupportedCompactDiagnostic{
+		SummaryID: status.ActiveSummaryID, FromSeq: status.ActiveFromSeq, ToSeq: status.ActiveToSeq,
+		Blocker: string(compact.ErrUnsupportedVersion),
+	}
+	if status.ActiveProjectionVersion != compact.ProjectionVersion {
+		diagnostic.Unsupported = append(diagnostic.Unsupported, "projection_version")
+		diagnostic.ProjectionVersion = status.ActiveProjectionVersion
+	}
+	if status.ActivePolicyVersion != status.PolicyVersion {
+		diagnostic.Unsupported = append(diagnostic.Unsupported, "policy_version")
+		diagnostic.PolicyVersion = status.ActivePolicyVersion
+	}
+	if status.ActiveProfile != status.Profile {
+		diagnostic.Unsupported = append(diagnostic.Unsupported, "profile")
+		diagnostic.Profile = status.ActiveProfile
+	}
+	m.config.Bus.PublishSync(events.New(actor.core.SessionID(), "compact", events.LevelWarn,
+		events.TypeCompactUnsupported, "Active context summary version is unsupported").WithData(diagnostic))
 }
 
 func (m *Manager) notify(id string) {
