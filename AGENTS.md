@@ -313,6 +313,8 @@ make test         # 运行全部 5 个模块的测试
 - `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（客户端、Mind runtime 与进程 E2E 可用）
 - `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
 - `docs/mind-management-cli.md` — Mind 本地管理 CLI、在线 IPC、离线 Store 与状态锁设计/实现记录
+- `docs/lifecycle-hooks-and-security-audit.md` — 统一生命周期 Hook、安全审查、审计与插件开放前置架构提案（尚未实现）
+- `docs/plugin-architecture.md` — 插件契约、Goja 宿主、process/WASM 运行时与实施顺序提案（尚未实现）
 - `docs/archived/README.md` — 已完成、被替代或仅供决策追溯的设计文档索引
 
 #### ⏳ 待完成

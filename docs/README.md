@@ -11,6 +11,8 @@
 | [`ai-face-protocol.md`](ai-face-protocol.md) | AI、Headless Agent 和自动化客户端接入指南 |
 | [`remote-execution-closed-loop.md`](remote-execution-closed-loop.md) | Mind 到 Hand 的远程执行、进度流和持久化任务架构 |
 | [`mind-management-cli.md`](mind-management-cli.md) | Mind 本地管理 CLI、在线 IPC、离线管理和平台边界 |
+| [`lifecycle-hooks-and-security-audit.md`](lifecycle-hooks-and-security-audit.md) | 统一生命周期 Hook、安全审查、审计，以及插件开放前的架构准备 |
+| [`plugin-architecture.md`](plugin-architecture.md) | 插件契约、Goja 宿主、process/WASM 运行时和实施顺序提案 |
 
 ## 维护约定
 
