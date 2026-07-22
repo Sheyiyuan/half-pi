@@ -279,7 +279,7 @@ func (r *LifecycleRegistry) Snapshot() RegistrySnapshot {
 	sort.Slice(registrations, func(i, j int) bool { return registrations[i].ID < registrations[j].ID })
 	encoded, _ := json.Marshal(registrations)
 	digest := sha256.Sum256(append([]byte("half-pi:lifecycle-registry:v1\x00"), encoded...))
-	return RegistrySnapshot{Revision: revision, Registrations: registrations, Digest: hex.EncodeToString(digest[:])}
+	return RegistrySnapshot{Revision: revision, Registrations: registrations, Digest: "sha256:" + hex.EncodeToString(digest[:])}
 }
 
 func cloneRegistration(registration Registration) Registration {

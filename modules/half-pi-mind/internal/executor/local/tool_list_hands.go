@@ -28,6 +28,7 @@ func init() {
 
 			peers := bridge.Hub.PeersByType(hub.PeerHand)
 			hands := make([]handEntry, 0, len(peers))
+			facts := make([]executor.CompactFact, 0, len(peers))
 			for _, p := range peers {
 				entry := handEntry{ID: p.ID}
 				if p.Info != nil {
@@ -36,10 +37,11 @@ func init() {
 					entry.WorkDir = p.Info.WorkDir
 				}
 				hands = append(hands, entry)
+				facts = append(facts, executor.CompactFact{Kind: "hand", HandID: p.ID})
 			}
 
 			output, _ := json.Marshal(map[string]any{"hands": hands})
-			return &executor.ToolResult{Success: true, Output: string(output)}
+			return &executor.ToolResult{Success: true, Output: string(output), CompactFacts: facts}
 		},
 	})
 }

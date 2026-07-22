@@ -27,14 +27,17 @@ type ToolResult struct {
 
 // CompactFact 是工具可提交给中央 Compact projector 的强类型候选事实。
 type CompactFact struct {
-	Kind      string
-	Path      string
-	HandID    string
-	RunID     string
-	TaskID    string
-	Tool      string
-	Status    string
-	ToolNames []string
+	Kind         string
+	Path         string
+	HandID       string
+	RunID        string
+	TaskID       string
+	Tool         string
+	Status       string
+	Count        int64
+	Truncated    bool
+	ExitCategory string
+	ToolNames    []string
 }
 
 // CompactProjection 绑定最终工具输出，并携带尚未由中央策略放行的候选事实。
@@ -302,7 +305,7 @@ func RegisteredToolsSnapshot() ToolRegistrySnapshot {
 	sort.Slice(digestTools, func(i, j int) bool { return digestTools[i].Name < digestTools[j].Name })
 	encoded, _ := json.Marshal(digestTools)
 	digest := sha256.Sum256(append([]byte("half-pi:tool-registry:v1\x00"), encoded...))
-	return ToolRegistrySnapshot{Revision: revision, Tools: tools, Digest: fmt.Sprintf("%x", digest[:])}
+	return ToolRegistrySnapshot{Revision: revision, Tools: tools, Digest: fmt.Sprintf("sha256:%x", digest[:])}
 }
 
 func cloneTool(tool Tool) Tool {

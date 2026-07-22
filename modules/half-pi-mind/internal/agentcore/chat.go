@@ -10,6 +10,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/compact"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 )
@@ -192,6 +193,7 @@ func (c *Core) ChatWithTransport(ctx context.Context, input string, transport Ch
 			}
 			c.history = append(c.history, llm.Message{
 				Role: llm.RoleTool, ToolID: call.ID, Content: output, RequestID: requestID,
+				CompactProjection: compact.ProjectToolResult(call.Name, result, output),
 			})
 		}
 		if err = c.saveSessionLocked(); err != nil {

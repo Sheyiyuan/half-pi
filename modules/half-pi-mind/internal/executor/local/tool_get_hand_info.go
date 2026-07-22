@@ -62,7 +62,10 @@ func queryOneHand(ctx context.Context, bridge *RemoteBridge, handID string, time
 	}
 
 	output, _ := json.Marshal(map[string]any{"hands": []handInfoResult{result}})
-	return &executor.ToolResult{Success: true, Output: string(output), Data: map[string]any{"hands": []handInfoResult{result}}}
+	return &executor.ToolResult{
+		Success: true, Output: string(output), Data: map[string]any{"hands": []handInfoResult{result}},
+		CompactFacts: handInfoCompactFacts([]handInfoResult{result}),
+	}
 }
 
 func queryAllHands(ctx context.Context, bridge *RemoteBridge, timeout time.Duration) *executor.ToolResult {
@@ -89,7 +92,22 @@ func queryAllHands(ctx context.Context, bridge *RemoteBridge, timeout time.Durat
 	wg.Wait()
 
 	output, _ := json.Marshal(map[string]any{"hands": results})
-	return &executor.ToolResult{Success: true, Output: string(output), Data: map[string]any{"hands": results}}
+	return &executor.ToolResult{
+		Success: true, Output: string(output), Data: map[string]any{"hands": results},
+		CompactFacts: handInfoCompactFacts(results),
+	}
+}
+
+func handInfoCompactFacts(results []handInfoResult) []executor.CompactFact {
+	facts := make([]executor.CompactFact, 0, len(results))
+	for _, result := range results {
+		toolNames := make([]string, 0, len(result.Tools))
+		for _, tool := range result.Tools {
+			toolNames = append(toolNames, tool.Name)
+		}
+		facts = append(facts, executor.CompactFact{Kind: "hand_info", HandID: result.ID, ToolNames: toolNames})
+	}
+	return facts
 }
 
 func doHandInfoQuery(ctx context.Context, bridge *RemoteBridge, handID string, timeout time.Duration) (handInfoResult, bool) {

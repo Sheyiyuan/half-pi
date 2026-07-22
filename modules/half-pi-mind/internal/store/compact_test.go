@@ -186,6 +186,31 @@ func TestCompactPendingAttemptCASAndCooldown(t *testing.T) {
 	}
 }
 
+func TestCompactAttemptAndStartedOutboxCommitTogether(t *testing.T) {
+	store, sessionID := newCompactSession(t)
+	ctx := context.Background()
+	pendingID := newUUIDv7(t)
+	if _, err := store.EnsureCompactPending(ctx, sessionID, pendingID, compactEvent(t, "compact.requested", sessionID)); err != nil {
+		t.Fatal(err)
+	}
+	duplicate := compactEvent(t, "compact.started", sessionID)
+	if err := store.AppendLifecycleEvent(ctx, duplicate); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.AdmitCompactAttemptWithEvent(ctx, sessionID, pendingID, 0, duplicate); err == nil {
+		t.Fatal("duplicate started event did not fail attempt transaction")
+	}
+	runtime, err := store.GetSessionRuntime(ctx, sessionID)
+	if err != nil || runtime.PendingAttempt != 0 {
+		t.Fatalf("attempt escaped rollback: %+v err=%v", runtime, err)
+	}
+	admitted, err := store.AdmitCompactAttemptWithEvent(ctx, sessionID, pendingID, 0,
+		compactEvent(t, "compact.started", sessionID))
+	if err != nil || admitted.PendingAttempt != 1 {
+		t.Fatalf("admitted = %+v err=%v", admitted, err)
+	}
+}
+
 func TestContextSummaryCommitReuseRebaseAndCoverage(t *testing.T) {
 	store, sessionID := newCompactSessionWithMessages(t, 4)
 	ctx := context.Background()
@@ -249,6 +274,42 @@ func TestContextSummaryCommitReuseRebaseAndCoverage(t *testing.T) {
 	snapshot, err := store.GetCompactSnapshot(ctx, sessionID)
 	if err != nil || snapshot.SummaryNodeCount != 3 || snapshot.SummaryStorageBytes != int64(len(first.Summary)+len(rebase.Summary)+len(incremental.Summary)) {
 		t.Fatalf("compact snapshot = %+v, err=%v", snapshot, err)
+	}
+}
+
+func TestContextSummaryDegradedRepairReplacesCorruptActive(t *testing.T) {
+	store, sessionID := newCompactSessionWithMessages(t, 4)
+	ctx := context.Background()
+	runtime, _ := store.GetSessionRuntime(ctx, sessionID)
+	active := compactSummaryForRange(t, store, sessionID, 2, "full", "", "", "active summary")
+	committed, err := store.CommitContextSummary(ctx, CompactCommit{
+		Summary: active, ExpectedHistoryGeneration: runtime.HistoryGeneration,
+		ExpectedHistoryViewGeneration: runtime.HistoryViewGeneration,
+		CompletedEvent:                compactEvent(t, "compact.completed", sessionID),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`UPDATE context_summaries SET summary = 'tampered' WHERE id = ?`, active.ID); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := store.GetCompactSnapshot(ctx, sessionID)
+	if err != nil || !snapshot.ActiveIntegrityError || snapshot.ActiveReferenceUsable {
+		t.Fatalf("corrupt snapshot = %+v, err=%v", snapshot, err)
+	}
+	repair := compactSummaryForRange(t, store, sessionID, 2, "rebase", "", ContextSummaryDigest("repair"), "repaired")
+	repaired, err := store.CommitContextSummary(ctx, CompactCommit{
+		Summary: repair, ExpectedHistoryGeneration: committed.Runtime.HistoryGeneration,
+		ExpectedActiveSummaryID: active.ID, ExpectedHistoryViewGeneration: committed.Runtime.HistoryViewGeneration,
+		AllowSameRange: true, AllowDegradedRepair: true,
+		CompletedEvent: compactEvent(t, "compact.completed", sessionID),
+	})
+	if err != nil || repaired.Runtime.ActiveSummaryID != repair.ID {
+		t.Fatalf("repair = %+v, err=%v", repaired, err)
+	}
+	snapshot, err = store.GetCompactSnapshot(ctx, sessionID)
+	if err != nil || snapshot.ActiveIntegrityError || snapshot.ActiveSummary == nil || snapshot.ActiveSummary.ID != repair.ID {
+		t.Fatalf("repaired snapshot = %+v, err=%v", snapshot, err)
 	}
 }
 

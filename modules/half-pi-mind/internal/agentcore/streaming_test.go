@@ -67,6 +67,9 @@ func TestChatStreamsMultipleResponsesAndPersistsCompletedBatches(t *testing.T) {
 	if messages[1].Content != "checking" || messages[2].Role != "tool" || messages[3].Content != "done" {
 		t.Fatalf("persisted batches = %#v", messages)
 	}
+	if messages[2].CompactProjection == "" {
+		t.Fatalf("tool result has no compact projection: %#v", messages[2])
+	}
 }
 
 func TestChatDoesNotCompleteOrPersistPartialProviderResponse(t *testing.T) {

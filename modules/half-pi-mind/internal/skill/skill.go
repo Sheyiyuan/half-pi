@@ -143,7 +143,7 @@ func (s *Store) Snapshot() Snapshot {
 	}
 	encoded, _ := json.Marshal(digestSkills)
 	digest := sha256.Sum256(append([]byte("half-pi:skill-store:v1\x00"), encoded...))
-	return Snapshot{Revision: revision, Skills: skills, Digest: fmt.Sprintf("%x", digest[:])}
+	return Snapshot{Revision: revision, Skills: skills, Digest: fmt.Sprintf("sha256:%x", digest[:])}
 }
 
 func cloneSkill(skill *Skill) Skill {

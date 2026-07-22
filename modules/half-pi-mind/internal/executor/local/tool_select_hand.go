@@ -37,8 +37,9 @@ func init() {
 					msg = fmt.Sprintf("当前默认 Hand: %s", current)
 				}
 				return &executor.ToolResult{
-					Success: true,
-					Output:  fmt.Sprintf(`{"active_hand": %q, "message": %q}`, current, msg),
+					Success:      true,
+					Output:       fmt.Sprintf(`{"active_hand": %q, "message": %q}`, current, msg),
+					CompactFacts: []executor.CompactFact{{Kind: "hand", HandID: current}},
 				}
 			}
 
@@ -58,7 +59,10 @@ func init() {
 				"active_hand": params.HandID,
 				"action":      "set",
 			})
-			return &executor.ToolResult{Success: true, Output: string(output)}
+			return &executor.ToolResult{
+				Success: true, Output: string(output),
+				CompactFacts: []executor.CompactFact{{Kind: "hand", HandID: params.HandID}},
+			}
 		},
 	})
 }

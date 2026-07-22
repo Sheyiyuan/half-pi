@@ -67,7 +67,11 @@ func getHandTask(ctx context.Context, args json.RawMessage) *executor.ToolResult
 		for i := range tasks {
 			tasks[i].ArgsDigest = ""
 		}
-		return jsonToolResult(map[string]any{"tasks": tasks})
+		result := jsonToolResult(map[string]any{"tasks": tasks})
+		for _, task := range tasks {
+			result.CompactFacts = append(result.CompactFacts, taskCompactFact(task))
+		}
+		return result
 	}
 	queryCtx, cancel := context.WithTimeout(ctx, taskQueryTimeout)
 	defer cancel()
@@ -100,10 +104,12 @@ func readHandTaskLog(ctx context.Context, args json.RawMessage) *executor.ToolRe
 	if err != nil {
 		return &executor.ToolResult{Error: err.Error()}
 	}
-	return jsonToolResult(map[string]any{
+	result := jsonToolResult(map[string]any{
 		"task_id": page.TaskID, "offset": page.Offset, "next_offset": page.NextOffset,
 		"data": string(page.Data), "eof": page.EOF, "truncated": page.Truncated,
 	})
+	result.CompactFacts = []executor.CompactFact{{Kind: "task", TaskID: page.TaskID, Truncated: page.Truncated}}
+	return result
 }
 
 func cancelHandTask(ctx context.Context, args json.RawMessage) *executor.ToolResult {
@@ -123,12 +129,23 @@ func cancelHandTask(ctx context.Context, args json.RawMessage) *executor.ToolRes
 	if err != nil {
 		return &executor.ToolResult{Error: err.Error()}
 	}
-	return jsonToolResult(result)
+	toolResult := jsonToolResult(result)
+	toolResult.CompactFacts = []executor.CompactFact{{Kind: "task", TaskID: params.TaskID, Status: string(result.Status)}}
+	return toolResult
 }
 
 func taskToolResult(task remoteexec.Task) *executor.ToolResult {
 	task.ArgsDigest = ""
-	return jsonToolResult(task)
+	result := jsonToolResult(task)
+	result.CompactFacts = []executor.CompactFact{taskCompactFact(task)}
+	return result
+}
+
+func taskCompactFact(task remoteexec.Task) executor.CompactFact {
+	return executor.CompactFact{
+		Kind: "task", HandID: task.HandID, TaskID: task.TaskID,
+		Tool: task.Tool, Status: string(task.Status), Truncated: task.Truncated,
+	}
 }
 
 func jsonToolResult(value any) *executor.ToolResult {

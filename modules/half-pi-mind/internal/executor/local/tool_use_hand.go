@@ -81,6 +81,19 @@ func init() {
 
 			// 2. 生成完整执行摘要，再进入 conversation 级审批。
 			runID := protocol.MustNewMsgID()
+			defer func() {
+				if toolResult == nil {
+					return
+				}
+				fact := executor.CompactFact{Kind: "remote", HandID: handID, RunID: runID, Tool: params.Tool}
+				if params.Background {
+					fact.TaskID = runID
+				}
+				if run, ok := bridge.Runs.Snapshot(runID); ok {
+					fact.Status = string(run.Status)
+				}
+				toolResult.CompactFacts = append(toolResult.CompactFacts, fact)
+			}()
 			cleanArgs, _ := json.Marshal(params.Args)
 			timeoutMs := params.TimeoutMs
 			if timeoutMs <= 0 {

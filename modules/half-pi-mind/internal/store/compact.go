@@ -59,11 +59,13 @@ type SessionRuntime struct {
 
 // CompactSnapshot 是 Compactor 使用的一致 SQLite 快照。
 type CompactSnapshot struct {
-	Runtime             SessionRuntime
-	Messages            []Message
-	ActiveSummary       *ContextSummary
-	SummaryNodeCount    int
-	SummaryStorageBytes int64
+	Runtime               SessionRuntime
+	Messages              []Message
+	ActiveSummary         *ContextSummary
+	ActiveIntegrityError  bool
+	ActiveReferenceUsable bool
+	SummaryNodeCount      int
+	SummaryStorageBytes   int64
 }
 
 // PendingExpectation 绑定一次自动 attempt 或手动 admission 观察到的 pending 状态。
@@ -82,6 +84,7 @@ type CompactCommit struct {
 	Pending                       PendingExpectation
 	ConsumePending                bool
 	AllowSameRange                bool
+	AllowDegradedRepair           bool
 	CompletedEvent                LifecycleEvent
 }
 
@@ -190,10 +193,18 @@ func (s *Store) GetCompactSnapshot(ctx context.Context, sessionID string) (Compa
 	result := CompactSnapshot{Runtime: runtime, Messages: messages}
 	if runtime.ActiveSummaryID != "" {
 		summary, err := getContextSummaryByID(ctx, tx, runtime.ActiveSummaryID)
-		if err != nil {
+		if err == sql.ErrNoRows {
+			result.ActiveIntegrityError = true
+		} else if err != nil {
 			return CompactSnapshot{}, fmt.Errorf("read active context summary: %w", err)
+		} else {
+			result.ActiveSummary = &summary
+			result.ActiveReferenceUsable = validateStoredSummary(summary) == nil
+			if validateSummarySource(ctx, tx, summary, runtime.HistoryGeneration) != nil ||
+				validateSummaryReferences(ctx, tx, summary) != nil {
+				result.ActiveIntegrityError = true
+			}
 		}
-		result.ActiveSummary = &summary
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(summary AS BLOB))), 0)
 		FROM context_summaries WHERE session_id = ?`, sessionID).
@@ -269,11 +280,28 @@ func (s *Store) EnsureCompactPending(ctx context.Context, sessionID, pendingID s
 
 // AdmitCompactAttempt 在 provider 调用前原子递增 durable attempt。
 func (s *Store) AdmitCompactAttempt(ctx context.Context, sessionID, pendingID string, expectedAttempt int64) (SessionRuntime, error) {
+	return s.admitCompactAttempt(ctx, sessionID, pendingID, expectedAttempt, nil)
+}
+
+// AdmitCompactAttemptWithEvent 将 attempt 递增与 started outbox 原子提交。
+func (s *Store) AdmitCompactAttemptWithEvent(ctx context.Context, sessionID, pendingID string, expectedAttempt int64, startedEvent LifecycleEvent) (SessionRuntime, error) {
+	if startedEvent.SubjectID != sessionID {
+		return SessionRuntime{}, fmt.Errorf("compact started event subject mismatch")
+	}
+	return s.admitCompactAttempt(ctx, sessionID, pendingID, expectedAttempt, &startedEvent)
+}
+
+func (s *Store) admitCompactAttempt(ctx context.Context, sessionID, pendingID string, expectedAttempt int64, startedEvent *LifecycleEvent) (SessionRuntime, error) {
 	if !validUUIDv7(pendingID) || expectedAttempt < 0 || expectedAttempt == math.MaxInt64 {
 		return SessionRuntime{}, fmt.Errorf("invalid compact attempt admission")
 	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return SessionRuntime{}, fmt.Errorf("begin compact attempt: %w", err)
+	}
+	defer tx.Rollback()
 	now := time.Now().UTC().UnixMilli()
-	result, err := s.db.ExecContext(ctx, `UPDATE session_runtime SET pending_attempt = pending_attempt + 1,
+	result, err := tx.ExecContext(ctx, `UPDATE session_runtime SET pending_attempt = pending_attempt + 1,
 		snapshot_version = snapshot_version + 1, updated_at = ?
 		WHERE session_id = ? AND pending_compact = 1 AND pending_compact_id = ? AND pending_attempt = ?`,
 		now, sessionID, pendingID, expectedAttempt)
@@ -283,7 +311,19 @@ func (s *Store) AdmitCompactAttempt(ctx context.Context, sessionID, pendingID st
 	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
 		return SessionRuntime{}, fmt.Errorf("compact attempt conflict")
 	}
-	return s.GetSessionRuntime(ctx, sessionID)
+	if startedEvent != nil {
+		if err := insertLifecycleEvent(ctx, tx, *startedEvent); err != nil {
+			return SessionRuntime{}, err
+		}
+	}
+	runtime, err := getSessionRuntime(ctx, tx, sessionID)
+	if err != nil {
+		return SessionRuntime{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return SessionRuntime{}, fmt.Errorf("commit compact attempt: %w", err)
+	}
+	return runtime, nil
 }
 
 // ClearCompactPending 按 ID/attempt CAS 静默清除重新评估后不再需要的 pending。
@@ -410,12 +450,16 @@ func (s *Store) CommitContextSummary(ctx context.Context, commit CompactCommit) 
 		return CompactCommitResult{}, err
 	}
 	var active *ContextSummary
+	activeMissing := false
 	if runtime.ActiveSummaryID != "" {
 		stored, err := getContextSummaryByID(ctx, tx, runtime.ActiveSummaryID)
-		if err != nil {
+		if err == sql.ErrNoRows && commit.AllowDegradedRepair {
+			activeMissing = true
+		} else if err != nil {
 			return CompactCommitResult{}, fmt.Errorf("read active context summary: %w", err)
+		} else {
+			active = &stored
 		}
-		active = &stored
 	}
 	candidate, exists, err := findContextSummaryContract(ctx, tx, commit.Summary)
 	if err != nil {
@@ -477,7 +521,8 @@ func (s *Store) CommitContextSummary(ctx context.Context, commit CompactCommit) 
 		if err := validateSummarySource(ctx, tx, candidate, runtime.HistoryGeneration); err != nil {
 			return CompactCommitResult{}, err
 		}
-		if err := validateSummaryTransition(ctx, tx, runtime, candidate, commit.AllowSameRange, !exists); err != nil {
+		if err := validateSummaryTransition(ctx, tx, runtime, candidate, commit.AllowSameRange,
+			commit.AllowDegradedRepair, activeMissing, !exists); err != nil {
 			return CompactCommitResult{}, err
 		}
 		if !exists {
@@ -698,11 +743,19 @@ func validateReusableSummary(stored, candidate ContextSummary) error {
 	return nil
 }
 
-func validateSummaryTransition(ctx context.Context, tx *sql.Tx, runtime SessionRuntime, candidate ContextSummary, allowSameRange, inserting bool) error {
+func validateSummaryTransition(ctx context.Context, tx *sql.Tx, runtime SessionRuntime, candidate ContextSummary,
+	allowSameRange, allowDegradedRepair, activeMissing, inserting bool,
+) error {
 	if runtime.ActiveSummaryID != "" {
 		active, err := getContextSummaryByID(ctx, tx, runtime.ActiveSummaryID)
+		if err == sql.ErrNoRows && allowDegradedRepair && activeMissing {
+			return validateDegradedRepair(candidate, nil, inserting)
+		}
 		if err != nil {
 			return fmt.Errorf("read current active summary: %w", err)
+		}
+		if allowDegradedRepair {
+			return validateDegradedRepair(candidate, &active, inserting)
 		}
 		if err := validateStoredSummary(active); err != nil {
 			return err
@@ -723,6 +776,32 @@ func validateSummaryTransition(ctx context.Context, tx *sql.Tx, runtime SessionR
 		return fmt.Errorf("first summary cannot supersede another node")
 	}
 	return validateSummaryReferences(ctx, tx, candidate)
+}
+
+func validateDegradedRepair(candidate ContextSummary, active *ContextSummary, inserting bool) error {
+	if candidate.GenerationMode != "rebase" || candidate.ParentSummaryID != "" {
+		return fmt.Errorf("degraded compact repair must be a full rebase")
+	}
+	if active == nil {
+		if candidate.SupersedesSummaryID != "" {
+			return fmt.Errorf("repair of missing active summary cannot retain a dangling reference")
+		}
+		return nil
+	}
+	expectedSupersedes := ""
+	if validateStoredSummary(*active) == nil {
+		expectedSupersedes = active.ID
+	}
+	if candidate.SessionID != active.SessionID || candidate.SupersedesSummaryID != expectedSupersedes {
+		return fmt.Errorf("degraded compact repair identity mismatch")
+	}
+	if active.ToSeq > 0 && candidate.ToSeq < active.ToSeq {
+		return fmt.Errorf("degraded compact repair cannot move coverage backward")
+	}
+	if !inserting && candidate.ID == active.ID {
+		return fmt.Errorf("degraded compact repair must use a replacement node")
+	}
+	return nil
 }
 
 func validateSummaryReferences(ctx context.Context, tx *sql.Tx, candidate ContextSummary) error {

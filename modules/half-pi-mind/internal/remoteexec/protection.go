@@ -202,7 +202,7 @@ func protectionDigest(records []ProtectionRecord) string {
 			_, _ = hash.Write([]byte{0})
 		}
 	}
-	return fmt.Sprintf("%x", hash.Sum(nil))
+	return fmt.Sprintf("sha256:%x", hash.Sum(nil))
 }
 
 func writeProtectionField(writer interface{ Write([]byte) (int, error) }, value string) {
