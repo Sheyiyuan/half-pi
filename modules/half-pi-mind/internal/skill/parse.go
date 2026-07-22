@@ -63,6 +63,8 @@ func parseFrontmatter(src string) (*Meta, string, error) {
 			meta.Version = val
 		case "author":
 			meta.Author = val
+		case "groups":
+			meta.Groups = parseTags(val)
 		}
 	}
 

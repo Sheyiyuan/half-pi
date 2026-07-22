@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
 )
 
 // Status 是审批审计记录的生命周期状态。
@@ -37,12 +38,20 @@ var (
 
 // Request 是 Agent Core 提交给 Broker 的脱敏审批请求。
 type Request struct {
+	Meta           corelifecycle.Meta
 	ConversationID string
 	RequestID      string
 	RunID          string
 	Tool           string
 	Reason         string
 	ArgsDigest     string
+}
+
+// Observation 是 Approval Broker 投影给 lifecycle adapter 的权威事实。
+// Meta 只在进程内使用，不改变 Face wire payload。
+type Observation struct {
+	Request protocol.ApprovalRequest
+	Meta    corelifecycle.Meta
 }
 
 // Actor 是一次审批裁决的身份来源。
@@ -83,6 +92,7 @@ type CheckResult struct {
 // AuditRecord 是 SQLite 可持久化的审批请求和裁决摘要。
 type AuditRecord struct {
 	Request          protocol.ApprovalRequest
+	Meta             corelifecycle.Meta
 	Status           Status
 	Decision         protocol.FaceApprovalDecision
 	Actor            Actor

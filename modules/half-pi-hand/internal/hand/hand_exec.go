@@ -10,10 +10,11 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
+	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-hand/internal/taskmanager"
 )
 
-// handleRPC 执行工具（权限过滤 → 安全检查 → 执行 → 输出截断）。
+// handleRPC 通过 Hand ToolRuntime 完成本地独立守门和执行。
 func (h *Hand) handleRPC(ctx context.Context, env protocol.Envelope) {
 	rpc, err := protocol.DecodePayload[protocol.RPC](&env)
 	if err != nil {
@@ -37,56 +38,46 @@ func (h *Hand) handleRPC(ctx context.Context, env protocol.Envelope) {
 		return
 	}
 
-	tool, found := executor.FindTool(rpc.Tool)
-	if !found {
-		h.rejectRPC(rpc.RunID, protocol.RejectUnknownTool, fmt.Sprintf("tool %q is not registered", rpc.Tool))
-		return
-	}
-	if tool.Execute == nil {
-		h.rejectRPC(rpc.RunID, protocol.RejectInternalError, fmt.Sprintf("tool %q has no execute function", rpc.Tool))
-		return
-	}
-	if code := h.toolPermissionRejection(rpc.Tool); code != "" {
-		h.rejectRPC(rpc.RunID, code, fmt.Sprintf("tool %q is not allowed by Hand policy", rpc.Tool))
-		return
-	}
-
 	args, err := json.Marshal(rpc.Args)
 	if err != nil {
 		h.rejectRPC(rpc.RunID, protocol.RejectInvalidRequest, fmt.Sprintf("marshal args: %v", err))
 		return
 	}
 
-	_, decision, reason, _ := executor.CheckTool(rpc.Tool, args)
-	switch decision {
-	case executor.DecisionDeny:
-		h.rejectRPC(rpc.RunID, protocol.RejectCheckFailed, reason)
-		return
-	case executor.DecisionConfirm:
-		if rpc.Background == nil {
-			if err := protocol.ValidateApproval(rpc.Approval, rpc.RunID, h.conn.Session.LocalID, rpc.Tool, rpc.Args, now); err != nil {
-				h.rejectApproval(rpc.RunID, err)
-				return
-			}
+	authorizer := &handAuthorizer{hand: h, rpc: rpc, now: now}
+	runtime := executor.NewToolRuntime(authorizer, h.lifecycle)
+	meta := corelifecycle.NewMeta(corelifecycle.SourceHand).WithNode(h.nodeID()).WithRequest(rpc.RunID)
+	var background *executor.BackgroundContract
+	if rpc.Background != nil {
+		background = &executor.BackgroundContract{TaskTimeout: time.Duration(rpc.Background.MaxRuntimeMS) * time.Millisecond}
+	}
+	prepared, terminal := runtime.Prepare(ctx, executor.Invocation{
+		Meta: meta, Tool: rpc.Tool, Args: args, TargetNode: h.nodeID(), RunID: rpc.RunID,
+		Timeout: time.Until(time.UnixMilli(rpc.DeadlineAt)), Background: background,
+	})
+	if prepared == nil {
+		code := authorizer.rejection
+		if code == "" {
+			code = runtimeRejectCode(terminal.ErrorCode)
 		}
+		h.rejectRPC(rpc.RunID, code, terminal.Output)
+		return
 	}
 	if rpc.Background != nil {
-		if err := protocol.ValidateRPCApproval(rpc.Approval, rpc, h.conn.Session.LocalID, now); err != nil {
-			h.rejectApproval(rpc.RunID, err)
-			return
-		}
-		h.handleBackgroundRPC(rpc, tool.Execute, args)
+		h.handleBackgroundRPC(rpc, prepared)
 		return
 	}
 
 	execCtx, cancel := context.WithDeadline(ctx, time.UnixMilli(rpc.DeadlineAt))
 	accepted, err := h.acceptTask(rpc.RunID, rpc.Tool, cancel)
 	if err != nil {
+		prepared.Abort(ctx, "rpc_accept_failed")
 		fmt.Fprintf(os.Stderr, "send rpc accepted failed: %v\n", err)
 		return
 	}
 	if !accepted {
 		cancel()
+		prepared.Abort(ctx, "duplicate_run")
 		h.rejectRPC(rpc.RunID, protocol.RejectDuplicateRun, "run_id has already been accepted")
 		return
 	}
@@ -109,16 +100,16 @@ func (h *Hand) handleRPC(ctx context.Context, env protocol.Envelope) {
 		pump = newProgressPump(h, rpc.RunID, h.maxProgressSize())
 		execCtx = executor.WithProgress(execCtx, pump.report)
 	}
-	result := tool.Execute(execCtx, args)
+	runtimeResult := prepared.Execute(execCtx)
 	if pump != nil {
 		pump.close()
 	}
-	if result == nil {
-		result = &executor.ToolResult{Error: "tool returned nil result"}
+	success := runtimeResult.ExecutionOutcome == executor.ExecutionSucceeded && runtimeResult.DeliveryOutcome == corelifecycle.OutcomeSucceeded
+	output := runtimeResult.Output
+	errMsg := ""
+	if !success {
+		errMsg, output = output, ""
 	}
-
-	output := result.Output
-	errMsg := result.Error
 	truncated := false
 	if maxSize := h.maxOutputSize(); maxSize > 0 {
 		var outputTruncated, errorTruncated bool
@@ -126,15 +117,28 @@ func (h *Hand) handleRPC(ctx context.Context, env protocol.Envelope) {
 		errMsg, errorTruncated = truncateBytes(errMsg, maxSize)
 		truncated = outputTruncated || errorTruncated
 	}
-	if h.taskCancellationRequested(rpc.RunID) && execCtx.Err() != nil && !result.Success {
+	if h.taskCancellationRequested(rpc.RunID) && execCtx.Err() != nil && !success {
 		h.finishTask(rpc.RunID, taskCancelled)
 		return
 	}
 
-	if err := h.sendRPCReply(rpc.RunID, result.Success, output, errMsg, truncated); err != nil {
+	if err := h.sendRPCReply(rpc.RunID, success, output, errMsg, truncated); err != nil {
 		fmt.Fprintf(os.Stderr, "send rpc result failed: %v\n", err)
 	}
 	h.finishTask(rpc.RunID, taskDone)
+}
+
+func runtimeRejectCode(errorCode string) protocol.RejectCode {
+	switch errorCode {
+	case "unknown_tool":
+		return protocol.RejectUnknownTool
+	case "freeze_error", "transform_failed":
+		return protocol.RejectInvalidRequest
+	case "authorizer_denied", "guard_denied":
+		return protocol.RejectCheckFailed
+	default:
+		return protocol.RejectInternalError
+	}
 }
 
 func (h *Hand) rejectApproval(runID string, err error) {
@@ -148,7 +152,7 @@ func (h *Hand) rejectApproval(runID string, err error) {
 	h.rejectRPC(runID, code, err.Error())
 }
 
-func (h *Hand) handleBackgroundRPC(rpc protocol.RPC, execute func(context.Context, json.RawMessage) *executor.ToolResult, args json.RawMessage) {
+func (h *Hand) handleBackgroundRPC(rpc protocol.RPC, prepared *executor.PreparedExecution) {
 	if h.taskManager == nil {
 		h.rejectRPC(rpc.RunID, protocol.RejectInternalError, "background task manager is unavailable")
 		return
@@ -158,19 +162,30 @@ func (h *Hand) handleBackgroundRPC(rpc protocol.RPC, execute func(context.Contex
 		h.rejectRPC(rpc.RunID, protocol.RejectInvalidRequest, err.Error())
 		return
 	}
-	task, _, err := h.taskManager.Start(rpc, digest, func(ctx context.Context, progress executor.ProgressFunc) *executor.ToolResult {
+	task, created, err := h.taskManager.Start(rpc, digest, func(ctx context.Context, progress executor.ProgressFunc) *executor.ToolResult {
 		if supportsProgress(rpc.Tool) {
 			ctx = executor.WithProgress(ctx, progress)
 		}
-		return execute(ctx, args)
+		result := prepared.Execute(ctx)
+		toolResult := &executor.ToolResult{Data: result.Data}
+		if result.ExecutionOutcome == executor.ExecutionSucceeded && result.DeliveryOutcome == corelifecycle.OutcomeSucceeded {
+			toolResult.Success, toolResult.Output = true, result.Output
+		} else {
+			toolResult.Error = result.Output
+		}
+		return toolResult
 	})
 	if err != nil {
+		prepared.Abort(context.Background(), "background_admission_failed")
 		code := protocol.RejectInternalError
 		if errors.Is(err, taskmanager.ErrConflictingDuplicate) {
 			code = protocol.RejectDuplicateRun
 		}
 		h.rejectRPC(rpc.RunID, code, err.Error())
 		return
+	}
+	if !created {
+		prepared.Abort(context.Background(), "duplicate_background_replay")
 	}
 	// Background acceptance is durable queued admission; CreatedAt is the persisted admission time.
 	if err := h.sendRPCMessage(protocol.TypeRPCAccepted, protocol.RPCAccepted{RunID: rpc.RunID, StartedAt: task.CreatedAt}); err != nil {

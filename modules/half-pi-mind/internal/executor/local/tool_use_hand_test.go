@@ -15,9 +15,22 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
+
+type remoteTestAuthorizer func(context.Context, executor.FrozenInvocation) executor.Authorization
+
+func (a remoteTestAuthorizer) Authorize(ctx context.Context, frozen executor.FrozenInvocation) executor.Authorization {
+	if a != nil {
+		return a(ctx, frozen)
+	}
+	return executor.Authorization{Allowed: true, Decision: "allow", ReasonCode: "test_allow"}
+}
+
+func testRemotePreparer(authorizer remoteTestAuthorizer) func(context.Context, executor.Invocation, executor.Tool, executor.ExternalDigestFunc) (*executor.PreparedExternal, executor.Result) {
+	runtime := executor.NewToolRuntime(authorizer, nil)
+	return runtime.PrepareExternal
+}
 
 func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 	h := hub.New()
@@ -63,12 +76,12 @@ func TestUseHandRemoteUnknownToolKeepsHandChecks(t *testing.T) {
 		Runs:       runs,
 		ActiveHand: func() string { return "remote-hand" },
 		SessionID:  func() string { return "session-1" },
-		CheckAndConfirm: func(_ context.Context, _, toolName string, _ json.RawMessage, _ string, llmConfirm bool) approval.CheckResult {
-			if !llmConfirm {
+		PrepareRemote: testRemotePreparer(func(_ context.Context, frozen executor.FrozenInvocation) executor.Authorization {
+			if frozen.Tool != "remote_only_tool" || !frozen.ForceUserApproval {
 				t.Error("remote-only tool did not force Mind approval")
 			}
-			return approval.CheckResult{}
-		},
+			return executor.Authorization{Allowed: true, Decision: "allow", ReasonCode: "test_allow"}
+		}),
 	}
 
 	tool, ok := executor.FindTool("use_hand")

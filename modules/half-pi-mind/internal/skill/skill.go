@@ -18,6 +18,7 @@ type Meta struct {
 	Tags        []string // 分类标签
 	Version     string   // 版本号
 	Author      string   // 创建者
+	Groups      []string // 允许使用此技能的 SessionGroup；空表示全局共享
 }
 
 // Skill 是一个完整的技能定义。
@@ -100,9 +101,29 @@ func (s *Store) Get(name string) (*Skill, bool) {
 	return sk, ok
 }
 
+// GetForGroup 按名称查询当前 SessionGroup 可见的技能。
+func (s *Store) GetForGroup(name, groupID string) (*Skill, bool) {
+	sk, ok := s.Get(name)
+	if !ok || !skillVisibleToGroup(sk, groupID) {
+		return nil, false
+	}
+	return sk, true
+}
+
 // Index 生成技能的索引文本，用于注入 system prompt。
 func (s *Store) Index() string {
-	list := s.List()
+	return s.IndexForGroup("")
+}
+
+// IndexForGroup 生成指定 SessionGroup 可见的技能索引。
+func (s *Store) IndexForGroup(groupID string) string {
+	all := s.List()
+	list := make([]*Skill, 0, len(all))
+	for _, sk := range all {
+		if skillVisibleToGroup(sk, groupID) {
+			list = append(list, sk)
+		}
+	}
 	if len(list) == 0 {
 		return ""
 	}
@@ -113,4 +134,19 @@ func (s *Store) Index() string {
 	}
 	buf.WriteString("\n查看技能详情：view_skill(\"<name>\")")
 	return buf.String()
+}
+
+func skillVisibleToGroup(sk *Skill, groupID string) bool {
+	if sk == nil || len(sk.Groups) == 0 {
+		return sk != nil
+	}
+	if groupID == "" {
+		return false
+	}
+	for _, allowed := range sk.Groups {
+		if allowed == groupID {
+			return true
+		}
+	}
+	return false
 }

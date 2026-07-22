@@ -238,7 +238,7 @@ func TestHandExecUsesSharedAuthorityAndEmitsResultForOriginalSession(t *testing.
 	bridge.SessionID = core.SessionID
 	bridge.Mode = core.SecurityMode
 	bridge.SetActiveHand = core.SetActiveHand
-	bridge.CheckAndConfirm = core.CheckAndConfirmRun
+	bridge.PrepareRemote = core.PrepareRemoteTool
 	r := &Repl{core: core, bridge: bridge, bus: bus, store: db}
 
 	if !r.handleCommand(`/hand exec simulated_remote_tool {"value":1}`) {

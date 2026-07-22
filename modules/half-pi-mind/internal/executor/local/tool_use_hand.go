@@ -11,6 +11,8 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
+	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 )
@@ -32,9 +34,10 @@ func init() {
 			},
 			Required: []string{"tool", "args"},
 		},
-		Execute: func(ctx context.Context, args json.RawMessage) *executor.ToolResult {
+		Execute: func(ctx context.Context, args json.RawMessage) (toolResult *executor.ToolResult) {
 			bridge := remoteBridgeFromContext(ctx)
-			if bridge == nil || bridge.Authority == nil || bridge.Runs == nil || bridge.Hub == nil || bridge.ActiveHand == nil || bridge.CheckAndConfirm == nil {
+			if bridge == nil || bridge.Authority == nil || bridge.Runs == nil || bridge.Hub == nil || bridge.ActiveHand == nil ||
+				bridge.PrepareRemote == nil {
 				return &executor.ToolResult{Error: "远程执行系统未初始化"}
 			}
 
@@ -97,16 +100,61 @@ func init() {
 				}
 				rpc.Background = &protocol.RPCBackgroundOptions{TaskID: runID, MaxRuntimeMS: params.TaskTimeoutMs}
 			}
-			digest, err := protocol.RPCApprovalDigest(rpc, handID)
-			if err != nil {
-				return &executor.ToolResult{Error: fmt.Sprintf("创建审批摘要失败: %v", err)}
-			}
 			_, knownLocally := executor.FindTool(params.Tool)
-			confirmation := bridge.CheckAndConfirm(
-				ctx, runID, params.Tool, cleanArgs, digest,
-				remoteNeedsConfirmation(params.Confirm, params.Background, knownLocally),
-			)
+			forceApproval := remoteNeedsConfirmation(params.Confirm, params.Background, knownLocally)
+			var digest string
+			var confirmation approval.CheckResult
+			definition := executor.Tool{Name: params.Tool}
+			if localDefinition, found := executor.FindTool(params.Tool); found {
+				definition = localDefinition
+			}
+			meta, ok := executor.LifecycleMetaFromContext(ctx)
+			if ok {
+				meta = meta.ChildMeta(corelifecycle.SourceMind).WithNode("mind")
+			} else {
+				meta = corelifecycle.NewMeta(corelifecycle.SourceMind).WithNode("mind")
+			}
+			var background *executor.BackgroundContract
+			if params.Background {
+				background = &executor.BackgroundContract{TaskTimeout: time.Duration(params.TaskTimeoutMs) * time.Millisecond}
+			}
+			remotePrepared, terminal := bridge.PrepareRemote(ctx, executor.Invocation{
+				Meta: meta, Tool: params.Tool, Args: cleanArgs, TargetNode: handID, RunID: runID,
+				Timeout: timeout, Background: background, ForceUserApproval: forceApproval,
+				Purpose: "remote execution via Hand",
+			}, definition, func(frozen executor.FrozenInvocation) (string, error) {
+				var frozenArgs map[string]any
+				decoder := json.NewDecoder(bytes.NewReader(frozen.Args))
+				decoder.UseNumber()
+				if err := decoder.Decode(&frozenArgs); err != nil {
+					return "", err
+				}
+				rpc.Args = frozenArgs
+				return protocol.RPCApprovalDigest(rpc, handID)
+			})
+			if remotePrepared == nil {
+				confirmation.Blocked, confirmation.Reason = true, terminal.Output
+			} else {
+				authorization := remotePrepared.Authorization()
+				confirmation.Blocked, confirmation.Reason = !authorization.Allowed, authorization.Reason
+				confirmation.Resolution = approval.Resolution{
+					ApprovalID: authorization.ApprovalID,
+					Decision:   protocol.FaceApprovalDecision(authorization.ApprovalDecision),
+					Actor:      approval.Actor{ID: authorization.ApprovalActorID, Source: authorization.ApprovalActorSource},
+				}
+				digest = remotePrepared.Frozen().ApprovalDigest
+				unbindProgress := bridge.Authority.BindProgressPolicy(runID, func(observation remoteexec.ProgressObservation) bool {
+					return remotePrepared.ObserveProgress(context.Background(), executor.Progress{
+						Kind: string(observation.Progress.Kind), Data: observation.Progress.Data,
+					})
+				})
+				defer unbindProgress()
+				defer func() { toolResult = completeRemoteLifecycle(remotePrepared, toolResult) }()
+			}
 			blocked, reason := confirmation.Blocked, confirmation.Reason
+			if digest == "" {
+				digest, _ = protocol.RPCApprovalDigest(rpc, handID)
+			}
 			if current := bridge.Hub.PeerByType(hub.PeerHand, handID); current != peer || current.SessionID() != peer.SessionID() {
 				return &executor.ToolResult{Error: fmt.Sprintf("Hand %q 在审批期间已断开", handID)}
 			}
@@ -132,6 +180,12 @@ func init() {
 			metadata := remoteexec.AuditMetadata{
 				RequestID: requestctx.RequestID(ctx), ArgsDigest: digest,
 				ApprovalSource: approvalSource, ApprovalMode: mode, ApprovalReason: reason,
+			}
+			if remotePrepared != nil {
+				frozen := remotePrepared.Frozen()
+				metadata.TraceID, metadata.SpanID, metadata.ParentSpanID = frozen.Meta.TraceID, frozen.Meta.SpanID, frozen.Meta.ParentSpanID
+				metadata.GroupID, metadata.PrincipalID = frozen.Meta.GroupID, frozen.Meta.PrincipalID
+				metadata.Source, metadata.NodeID = frozen.Meta.Source, frozen.Meta.NodeID
 			}
 			var createErr error
 			if params.Background && !blocked {
@@ -289,6 +343,39 @@ func cancelBackgroundStart(bridge *RemoteBridge, taskID, sessionID string) *exec
 
 func remoteNeedsConfirmation(requested, background, knownLocally bool) bool {
 	return requested || background || !knownLocally
+}
+
+func completeRemoteLifecycle(prepared *executor.PreparedExternal, toolResult *executor.ToolResult) *executor.ToolResult {
+	if prepared == nil {
+		return toolResult
+	}
+	if toolResult == nil {
+		toolResult = &executor.ToolResult{Error: "remote execution returned no result"}
+	}
+	output := toolResult.Output
+	outcome := executor.ExecutionSucceeded
+	errorCode := ""
+	if !toolResult.Success {
+		outcome = executor.ExecutionFailed
+		errorCode = "remote_failed"
+		if toolResult.Error != "" {
+			output = toolResult.Error
+		}
+	}
+	completed := prepared.Complete(context.Background(), executor.Result{
+		ExecutionOutcome: outcome, DeliveryOutcome: corelifecycle.OutcomeSucceeded,
+		Output: output, Data: toolResult.Data, ErrorCode: errorCode,
+	})
+	result := &executor.ToolResult{Data: completed.Data}
+	if completed.ExecutionOutcome == executor.ExecutionSucceeded && completed.DeliveryOutcome == corelifecycle.OutcomeSucceeded {
+		result.Success, result.Output = true, completed.Output
+		return result
+	}
+	result.Error = completed.Output
+	if result.Error == "" {
+		result.Error = completed.ErrorCode
+	}
+	return result
 }
 
 func remoteRunFailure(bridge *RemoteBridge, runID, message string) *executor.ToolResult {

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 
@@ -33,8 +34,8 @@ func TestChatStreamsMultipleResponsesAndPersistsCompletedBatches(t *testing.T) {
 		t.Fatal(err)
 	}
 	var lifecycle []string
-	ctx := WithChatHooks(context.Background(), ChatHooks{
-		RequestID: "request-stream",
+	ctx := requestctx.WithRequestID(context.Background(), "request-stream")
+	transport := ChatTransport{
 		TextDelta: func(delta ChatTextDelta) error {
 			lifecycle = append(lifecycle, "delta:"+delta.Delta)
 			return nil
@@ -45,8 +46,8 @@ func TestChatStreamsMultipleResponsesAndPersistsCompletedBatches(t *testing.T) {
 		},
 		ToolCalled:    func(ChatToolCall) { lifecycle = append(lifecycle, "tool-called") },
 		ToolCompleted: func(ChatToolResult) { lifecycle = append(lifecycle, "tool-completed") },
-	})
-	reply, err := core.Chat(ctx, "start")
+	}
+	reply, err := core.ChatWithTransport(ctx, "start", transport)
 	if err != nil || reply != "done" {
 		t.Fatalf("reply = %q, err = %v", reply, err)
 	}
@@ -90,8 +91,8 @@ func TestChatDoesNotCompleteOrPersistPartialProviderResponse(t *testing.T) {
 			_ = core.SetStore(db, "partial-session")
 			var deltas []string
 			completed := false
-			ctx := WithChatHooks(context.Background(), ChatHooks{
-				RequestID: "partial-request",
+			ctx := requestctx.WithRequestID(context.Background(), "partial-request")
+			transport := ChatTransport{
 				TextDelta: func(delta ChatTextDelta) error {
 					deltas = append(deltas, delta.Delta)
 					return nil
@@ -100,8 +101,8 @@ func TestChatDoesNotCompleteOrPersistPartialProviderResponse(t *testing.T) {
 					completed = true
 					return nil
 				},
-			})
-			if _, err := core.Chat(ctx, "hello"); !errors.Is(err, test.err) {
+			}
+			if _, err := core.ChatWithTransport(ctx, "hello", transport); !errors.Is(err, test.err) {
 				t.Fatalf("Chat error = %v, want %v", err, test.err)
 			}
 			if !reflect.DeepEqual(deltas, []string{"partial"}) || completed {

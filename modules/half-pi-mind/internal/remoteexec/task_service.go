@@ -9,6 +9,7 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/observer"
 )
 
 // Task 是 Mind 持久化的后台任务快照，不含原始参数和 Hand 文件路径。
@@ -46,20 +47,17 @@ var (
 
 // TaskService 是进程级后台任务服务。
 type TaskService struct {
-	hub        *hub.Hub
-	pending    func(string, time.Duration, *hub.Peer) (<-chan protocol.Envelope, func())
-	store      TaskStore
-	locksMu    sync.Mutex
-	locks      map[string]*taskLock
-	observerMu sync.RWMutex
-	observer   func(Task)
+	hub     *hub.Hub
+	pending func(string, time.Duration, *hub.Peer) (<-chan protocol.Envelope, func())
+	store   TaskStore
+	locksMu sync.Mutex
+	locks   map[string]*taskLock
+	changes observer.Hub[Task]
 }
 
-// OnChange 设置后台任务快照变化观察者。
-func (s *TaskService) OnChange(observer func(Task)) {
-	s.observerMu.Lock()
-	s.observer = observer
-	s.observerMu.Unlock()
+// Subscribe 注册后台任务快照变化观察者。
+func (s *TaskService) Subscribe(subscriber func(Task)) func() {
+	return s.changes.Subscribe(subscriber)
 }
 
 type taskLock struct {
@@ -210,12 +208,7 @@ func (s *TaskService) markStale(task Task, message string) (Task, error) {
 }
 
 func (s *TaskService) notify(task Task) {
-	s.observerMu.RLock()
-	observer := s.observer
-	s.observerMu.RUnlock()
-	if observer != nil {
-		observer(task)
-	}
+	s.changes.Publish(task)
 }
 
 // List 返回当前会话拥有的任务。

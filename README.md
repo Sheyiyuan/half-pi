@@ -5,10 +5,15 @@
 <h1 align="center">Half Pi · 半派</h1>
 
 <p align="center">
-  <strong><i>她不该被困在某一台设备上。</i></strong>
+  <strong><i>「她不该被困在某一台设备上。」Half-Pi 让你所有的设备，都成为同一个 AI 助理双手的延伸。 </i></strong>
 </p>
 
 > **当前状态：Alpha 开发中。** 核心架构已可用，Face 跨设备体验正在完善。目前阶段自用优先。
+
+<div align="center">
+    <img alt="Go" src="https://img.shields.io/badge/Go%201.25+-00ADD8?style=for-the-badge&logo=go&logoColor=white" height="28" />
+    <img alt="AGPL-3.0" src="https://img.shields.io/badge/AGPL--3.0-394260?style=for-the-badge" height="28" />
+</div>
 
 ---
 
@@ -63,7 +68,7 @@
 #### 路线图
 
 - [x] **你好，世界**——Mind 可以独立思考，拥有工具、技能和会话记忆
-  - [x] 16 个内置工具：文件、搜索、命令执行、安全预查
+  - [x] 基础内置工具：文件、搜索、命令执行、安全预查
   - [x] Skill 渐进披露，按需向 LLM 注入专业知识
   - [x] OpenAI / Gemini / Anthropic 多适配器，一行切换
   - [x] SQLite 持久化：会话、消息、工作区、凭据
@@ -255,3 +260,5 @@ make lint        # golangci-lint
 [AGPL-3.0](LICENSE)，附带[插件例外](LICENSE.EXCEPTION)。
 
 在此之上编写的插件、技能包、Face / Hand 客户端——由作者自己决定许可证。
+
+AGPL-3.0 确保她永远是自由的。插件例外让社区可以在自由生态上构建自己的价值。

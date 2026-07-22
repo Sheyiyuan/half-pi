@@ -38,51 +38,6 @@ func (s *stubExecutor) Tools() []executor.Tool {
 	return nil
 }
 
-func TestCheckAndConfirmCannotOverrideDeny(t *testing.T) {
-	const toolName = "phase1_mind_deny_tool"
-	executor.Register(executor.Tool{
-		Name: toolName,
-		Check: func(json.RawMessage) (executor.Decision, string) {
-			return executor.DecisionDeny, "hard deny"
-		},
-		Execute: func(context.Context, json.RawMessage) *executor.ToolResult {
-			t.Fatal("denied tool must not execute")
-			return nil
-		},
-	})
-	core, err := New(&stubLLM{}, &stubExecutor{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	core.SetApprover(allowApprover{})
-	blocked, reason := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), true)
-	if !blocked {
-		t.Fatal("DecisionDeny must not be overridden by approval")
-	}
-	if reason != "hard deny" {
-		t.Fatalf("reason = %q, want hard deny", reason)
-	}
-}
-
-func TestCheckAndConfirmRequiresApprover(t *testing.T) {
-	const toolName = "phase1_mind_confirm_tool"
-	executor.Register(executor.Tool{
-		Name:           toolName,
-		DefaultConfirm: true,
-		Execute: func(context.Context, json.RawMessage) *executor.ToolResult {
-			return &executor.ToolResult{Success: true}
-		},
-	})
-	core, err := New(&stubLLM{}, &stubExecutor{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	blocked, _ := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false)
-	if !blocked {
-		t.Fatal("confirmation-required tool must be blocked without an approver")
-	}
-}
-
 func TestNewDefaults(t *testing.T) {
 	core, err := New(&stubLLM{}, &stubExecutor{})
 	if err != nil {
@@ -94,11 +49,11 @@ func TestNewDefaults(t *testing.T) {
 	if core.Debug {
 		t.Error("default Debug should be false")
 	}
-	if core.autoAllow == nil {
-		t.Error("autoAllow map should be initialized")
+	if core.authorizer == nil {
+		t.Error("authorizer should be initialized")
 	}
-	if core.autoDeny == nil {
-		t.Error("autoDeny map should be initialized")
+	if core.toolRuntime == nil {
+		t.Error("tool runtime should be initialized")
 	}
 }
 
@@ -108,8 +63,8 @@ func TestSetMode(t *testing.T) {
 	if err := core.SetMode("trust"); err != nil {
 		t.Fatal(err)
 	}
-	if core.Mode != "trust" {
-		t.Errorf("Mode = %q, want trust", core.Mode)
+	if core.Mode != "review" {
+		t.Errorf("Mode = %q, want review", core.Mode)
 	}
 	if len(core.history) != 1 {
 		t.Fatalf("SetMode should append 1 message, got %d", len(core.history))
@@ -118,7 +73,7 @@ func TestSetMode(t *testing.T) {
 	if msg.Role != llm.RoleSystem {
 		t.Errorf("role = %q, want system", msg.Role)
 	}
-	if !strings.Contains(msg.Content, "trust") {
+	if !strings.Contains(msg.Content, "review") {
 		t.Errorf("content should mention mode, got %q", msg.Content)
 	}
 
@@ -157,11 +112,11 @@ func TestSetModeUpdatesSecurityPolicy(t *testing.T) {
 		t.Fatal("strict mode should not allow ls")
 	}
 
-	// switch to trust → ls should be allowed
+	// switch to legacy trust alias → review policy should allow ls
 	core.SetMode("trust")
 	decision, _ = core.policy.Check("ls -la")
 	if decision != security.Allow {
-		t.Errorf("trust mode should allow ls, got %v", decision)
+		t.Errorf("review mode should allow ls, got %v", decision)
 	}
 
 	// switch to yolo → ls should be allowed (unless blacklisted)

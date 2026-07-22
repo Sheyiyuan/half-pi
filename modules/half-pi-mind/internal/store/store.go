@@ -142,8 +142,15 @@ func (s *Store) migrate() error {
 		`CREATE TABLE IF NOT EXISTS remote_runs (
 			id TEXT PRIMARY KEY,
 			session_id TEXT NOT NULL DEFAULT '',
-			request_id TEXT NOT NULL DEFAULT '',
-			hand_id TEXT NOT NULL,
+				request_id TEXT NOT NULL DEFAULT '',
+				trace_id TEXT NOT NULL DEFAULT '',
+				span_id TEXT NOT NULL DEFAULT '',
+				parent_span_id TEXT NOT NULL DEFAULT '',
+				group_id TEXT NOT NULL DEFAULT '',
+				principal_id TEXT NOT NULL DEFAULT '',
+				lifecycle_source TEXT NOT NULL DEFAULT '',
+				node_id TEXT NOT NULL DEFAULT '',
+				hand_id TEXT NOT NULL,
 			tool TEXT NOT NULL,
 			args_digest TEXT NOT NULL DEFAULT '',
 			approval_source TEXT NOT NULL DEFAULT '',
@@ -196,9 +203,16 @@ func (s *Store) migrate() error {
 		`CREATE TABLE IF NOT EXISTS approval_audits (
 			approval_id TEXT PRIMARY KEY,
 			conversation_id TEXT NOT NULL,
-			request_id TEXT NOT NULL DEFAULT '',
-			run_id TEXT NOT NULL DEFAULT '',
-			tool TEXT NOT NULL,
+				request_id TEXT NOT NULL DEFAULT '',
+				run_id TEXT NOT NULL DEFAULT '',
+				trace_id TEXT NOT NULL DEFAULT '',
+				span_id TEXT NOT NULL DEFAULT '',
+				parent_span_id TEXT NOT NULL DEFAULT '',
+				group_id TEXT NOT NULL DEFAULT '',
+				principal_id TEXT NOT NULL DEFAULT '',
+				lifecycle_source TEXT NOT NULL DEFAULT '',
+				node_id TEXT NOT NULL DEFAULT '',
+				tool TEXT NOT NULL,
 			reason TEXT NOT NULL,
 			args_digest TEXT NOT NULL,
 			status TEXT NOT NULL,
@@ -229,6 +243,47 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_management_audits_request ON management_audits(request_id)`,
 		`CREATE INDEX IF NOT EXISTS idx_management_audits_created ON management_audits(created_at)`,
+		`CREATE TABLE IF NOT EXISTS security_decisions (
+			id TEXT PRIMARY KEY,
+			trace_id TEXT NOT NULL,
+			span_id TEXT NOT NULL,
+			request_id TEXT NOT NULL DEFAULT '',
+			conversation_id TEXT NOT NULL DEFAULT '',
+			group_id TEXT NOT NULL DEFAULT '',
+			principal_id TEXT NOT NULL DEFAULT '',
+			node_id TEXT NOT NULL DEFAULT '',
+			action_kind TEXT NOT NULL,
+			resource_name TEXT NOT NULL DEFAULT '',
+			target_node TEXT NOT NULL DEFAULT '',
+			input_digest TEXT NOT NULL DEFAULT '',
+			risk_labels TEXT NOT NULL DEFAULT '[]',
+			decision TEXT NOT NULL,
+			reason_code TEXT NOT NULL DEFAULT '',
+			rule_id TEXT NOT NULL DEFAULT '',
+			policy_version TEXT NOT NULL DEFAULT '',
+				approval_id TEXT NOT NULL DEFAULT '',
+				run_id TEXT NOT NULL DEFAULT '',
+				details_redacted TEXT NOT NULL DEFAULT '{}',
+				created_at INTEGER NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_security_decisions_trace ON security_decisions(trace_id, created_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_security_decisions_conversation ON security_decisions(conversation_id, created_at)`,
+		`CREATE TABLE IF NOT EXISTS lifecycle_outbox (
+			id TEXT PRIMARY KEY,
+			event_type TEXT NOT NULL,
+			schema_version INTEGER NOT NULL,
+			trace_id TEXT NOT NULL,
+			span_id TEXT NOT NULL,
+			subject_id TEXT NOT NULL DEFAULT '',
+			payload_redacted TEXT NOT NULL,
+			attempts INTEGER NOT NULL DEFAULT 0,
+			available_at INTEGER NOT NULL,
+			created_at INTEGER NOT NULL,
+			delivered_at INTEGER NOT NULL DEFAULT 0,
+			dead_letter_at INTEGER NOT NULL DEFAULT 0,
+			last_error TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_lifecycle_outbox_due ON lifecycle_outbox(delivered_at, dead_letter_at, available_at)`,
 	}
 	for _, stmt := range statements {
 		if _, err := s.db.Exec(stmt); err != nil {
@@ -260,6 +315,11 @@ func (s *Store) migrate() error {
 	if err := s.addColumnIfNotExists("remote_runs", "request_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate remote run request ID: %w", err)
 	}
+	for _, column := range []string{"trace_id", "span_id", "parent_span_id", "group_id", "principal_id", "lifecycle_source", "node_id"} {
+		if err := s.addColumnIfNotExists("remote_runs", column, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("migrate remote run lifecycle %s: %w", column, err)
+		}
+	}
 	if err := s.addColumnIfNotExists("remote_run_events", "progress_seq", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return fmt.Errorf("migrate remote progress seq: %w", err)
 	}
@@ -268,6 +328,20 @@ func (s *Store) migrate() error {
 	}
 	if err := s.addColumnIfNotExists("remote_run_events", "gap", "INTEGER NOT NULL DEFAULT 0"); err != nil {
 		return fmt.Errorf("migrate remote progress gap: %w", err)
+	}
+	if err := s.addColumnIfNotExists("security_decisions", "details_redacted", "TEXT NOT NULL DEFAULT '{}'"); err != nil {
+		return fmt.Errorf("migrate security decision details: %w", err)
+	}
+	if err := s.addColumnIfNotExists("security_decisions", "target_node", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return fmt.Errorf("migrate security decision target node: %w", err)
+	}
+	if err := s.addColumnIfNotExists("security_decisions", "risk_labels", "TEXT NOT NULL DEFAULT '[]'"); err != nil {
+		return fmt.Errorf("migrate security decision risk labels: %w", err)
+	}
+	for _, column := range []string{"trace_id", "span_id", "parent_span_id", "group_id", "principal_id", "lifecycle_source", "node_id"} {
+		if err := s.addColumnIfNotExists("approval_audits", column, "TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("migrate approval lifecycle %s: %w", column, err)
+		}
 	}
 	if _, err := s.db.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_remote_run_progress_unique
 		ON remote_run_events(run_id, progress_seq) WHERE progress_seq > 0`); err != nil {

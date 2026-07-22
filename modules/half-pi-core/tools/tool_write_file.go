@@ -17,7 +17,7 @@ func init() {
 		Parameters: &executor.ObjectSchema{
 			Properties: []executor.PropertySchema{
 				{Name: "path", Type: "string", Description: "要写入的文件路径"},
-				{Name: "content", Type: "string", Description: "要写入的完整内容"},
+				{Name: "content", Type: "string", Description: "要写入的完整内容", Review: executor.ReviewRedact},
 			},
 			Required: []string{"path", "content"},
 		},

@@ -61,7 +61,9 @@ func TestRemoteRunAuditLifecycle(t *testing.T) {
 	store := newTestStore(t)
 	registry := remoteexec.NewRegistry(store)
 	metadata := remoteexec.AuditMetadata{
-		RequestID: "face-request-1", ArgsDigest: "approval:abc123",
+		RequestID: "face-request-1", TraceID: "trace-1", SpanID: "span-1", ParentSpanID: "parent-1",
+		GroupID: "group-1", PrincipalID: "principal-1", Source: "face", NodeID: "mind",
+		ArgsDigest:     "approval:abc123",
 		ApprovalSource: "mind", ApprovalMode: "normal", ApprovalReason: "confirmed",
 	}
 	if err := registry.CreateWithMetadata("run-1", "session-1", "hand-1", "exec_command", metadata); err != nil {
@@ -84,7 +86,9 @@ func TestRemoteRunAuditLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if run.Status != protocol.RunSucceeded || run.RequestID != metadata.RequestID || run.ArgsDigest != metadata.ArgsDigest || run.ApprovalSource != "mind" {
+	if run.Status != protocol.RunSucceeded || run.RequestID != metadata.RequestID || run.ArgsDigest != metadata.ArgsDigest || run.ApprovalSource != "mind" ||
+		run.TraceID != metadata.TraceID || run.SpanID != metadata.SpanID || run.ParentSpanID != metadata.ParentSpanID ||
+		run.GroupID != metadata.GroupID || run.PrincipalID != metadata.PrincipalID || run.LifecycleSource != metadata.Source || run.NodeID != metadata.NodeID {
 		t.Fatalf("unexpected run: %+v", run)
 	}
 	if run.SentAt.IsZero() || run.AcceptedAt.IsZero() || run.FinishedAt.IsZero() {

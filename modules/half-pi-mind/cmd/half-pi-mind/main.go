@@ -187,6 +187,13 @@ func run(args []string, output, logs io.Writer) (runErr error) {
 	if err != nil {
 		return fmt.Errorf("initialize conversation runtime: %w", err)
 	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := conversations.Close(closeCtx); err != nil {
+			runErr = errors.Join(runErr, fmt.Errorf("close conversation lifecycle: %w", err))
+		}
+	}()
 	faceGateway, err := facegateway.New(facegateway.Config{
 		Hub: wsHub, Store: db, Conversations: conversations, Approvals: approvalBroker,
 		Authority: authority, Tasks: taskService,

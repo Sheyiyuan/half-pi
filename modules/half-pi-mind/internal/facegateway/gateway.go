@@ -95,11 +95,11 @@ func New(config Config) (*Gateway, error) {
 		return nil, fmt.Errorf("generate Face task cursor key: %w", err)
 	}
 	gateway.version.Store(1)
-	config.Conversations.OnChange(gateway.PublishConversationChanged)
-	config.Approvals.OnChange(gateway.PublishApprovalRequested, gateway.PublishApprovalFinished)
-	config.Authority.Registry.OnChange(gateway.PublishRemoteRunChanged)
-	config.Authority.OnProgress(gateway.PublishRunProgress)
-	config.Tasks.OnChange(gateway.PublishTaskChanged)
+	config.Conversations.Subscribe(gateway.PublishConversationChanged)
+	config.Approvals.Subscribe(gateway.PublishApprovalRequested, gateway.PublishApprovalFinished)
+	config.Authority.Registry.Subscribe(gateway.PublishRemoteRunChanged)
+	config.Authority.SubscribeProgress(gateway.PublishRunProgress)
+	config.Tasks.Subscribe(gateway.PublishTaskChanged)
 	return gateway, nil
 }
 

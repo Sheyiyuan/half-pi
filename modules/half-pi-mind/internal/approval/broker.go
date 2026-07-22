@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
 )
 
 const (
@@ -29,6 +30,7 @@ type Config struct {
 
 type entry struct {
 	request       protocol.ApprovalRequest
+	meta          corelifecycle.Meta
 	status        Status
 	resolution    Resolution
 	confirmResult Resolution
@@ -48,8 +50,13 @@ type Broker struct {
 	fallback FallbackResolver
 
 	observerMu sync.RWMutex
-	requested  func(protocol.ApprovalRequest)
-	finished   func(protocol.ApprovalRequest, Status, Resolution)
+	observerID uint64
+	observers  map[uint64]changeSubscriber
+}
+
+type changeSubscriber struct {
+	requested func(Observation)
+	finished  func(Observation, Status, Resolution)
 }
 
 // New 创建审批 Broker。
@@ -68,15 +75,42 @@ func New(config Config) (*Broker, error) {
 	}
 	return &Broker{
 		entries: make(map[string]*entry), auditor: config.Auditor,
-		ttl: config.TTL, now: config.Now,
+		ttl: config.TTL, now: config.Now, observers: make(map[uint64]changeSubscriber),
 	}, nil
 }
 
-// OnChange 设置审批请求和终态观察者。观察者在 Broker 锁外调用。
-func (b *Broker) OnChange(requested func(protocol.ApprovalRequest), finished func(protocol.ApprovalRequest, Status, Resolution)) {
+// Subscribe 注册审批请求和终态观察者，并返回幂等取消函数。
+func (b *Broker) Subscribe(requested func(protocol.ApprovalRequest), finished func(protocol.ApprovalRequest, Status, Resolution)) func() {
+	return b.subscribe(func(observation Observation) {
+		if requested != nil {
+			requested(observation.Request)
+		}
+	}, func(observation Observation, status Status, resolution Resolution) {
+		if finished != nil {
+			finished(observation.Request, status, resolution)
+		}
+	})
+}
+
+// SubscribeLifecycle 注册携带统一 trace/span 的审批观察者。
+func (b *Broker) SubscribeLifecycle(requested func(Observation), finished func(Observation, Status, Resolution)) func() {
+	return b.subscribe(requested, finished)
+}
+
+func (b *Broker) subscribe(requested func(Observation), finished func(Observation, Status, Resolution)) func() {
 	b.observerMu.Lock()
-	b.requested, b.finished = requested, finished
+	b.observerID++
+	id := b.observerID
+	b.observers[id] = changeSubscriber{requested: requested, finished: finished}
 	b.observerMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			b.observerMu.Lock()
+			delete(b.observers, id)
+			b.observerMu.Unlock()
+		})
+	}
 }
 
 // SetFallbackResolver 设置 REPL 等本地裁决适配器。
@@ -104,11 +138,19 @@ func (b *Broker) Confirm(ctx context.Context, request Request) Resolution {
 		RequestID: request.RequestID, RunID: request.RunID, Tool: request.Tool,
 		Reason: request.Reason, ArgsDigest: request.ArgsDigest, ExpiresAt: now.Add(b.ttl),
 	}
-	record := AuditRecord{Request: faceRequest, Status: StatusPending, CreatedAt: now}
+	meta := request.Meta
+	if meta.TraceID == "" || meta.SpanID == "" {
+		meta = corelifecycle.NewMeta(corelifecycle.SourceMind).
+			WithConversation(request.ConversationID).WithRequest(request.RequestID).WithNode("mind")
+	} else {
+		meta = meta.ChildMeta(corelifecycle.SourceMind).
+			WithConversation(request.ConversationID).WithRequest(request.RequestID)
+	}
+	record := AuditRecord{Request: faceRequest, Meta: meta, Status: StatusPending, CreatedAt: now}
 	if err := b.auditor.CreateApproval(record); err != nil {
 		return Resolution{}
 	}
-	item := &entry{request: faceRequest, status: StatusPending, createdAt: now, done: make(chan struct{})}
+	item := &entry{request: faceRequest, meta: meta, status: StatusPending, createdAt: now, done: make(chan struct{})}
 	b.mu.Lock()
 	if b.closed {
 		b.mu.Unlock()
@@ -119,7 +161,7 @@ func (b *Broker) Confirm(ctx context.Context, request Request) Resolution {
 	b.entries[faceRequest.ApprovalID] = item
 	fallback := b.fallback
 	b.mu.Unlock()
-	b.notifyRequested(faceRequest)
+	b.notifyRequested(faceRequest, meta)
 
 	type fallbackResult struct {
 		actor    Actor
@@ -207,7 +249,7 @@ func (b *Broker) Resolve(approvalID string, actor Actor, decision protocol.FaceA
 		finishErr = b.forceFinishLocked(item, StatusExpired, Resolution{ResolvedAt: now})
 		request := item.request
 		b.mu.Unlock()
-		b.notifyFinished(request, StatusExpired, Resolution{ResolvedAt: now})
+		b.notifyFinished(request, item.meta, StatusExpired, Resolution{ResolvedAt: now})
 		close(item.done)
 		return Resolution{}, errors.Join(ErrExpired, finishErr)
 	}
@@ -225,12 +267,13 @@ func (b *Broker) Resolve(approvalID string, actor Actor, decision protocol.FaceA
 		return Resolution{}, err
 	}
 	request := item.request
+	meta := item.meta
 	accepted := hooks.Accepted == nil || hooks.Accepted(request)
 	if !accepted {
 		item.confirmResult = Resolution{}
 	}
 	b.mu.Unlock()
-	b.notifyFinished(request, StatusResolved, resolution)
+	b.notifyFinished(request, meta, StatusResolved, resolution)
 	close(item.done)
 	if !accepted {
 		return resolution, ErrNotAccepted
@@ -265,7 +308,7 @@ func (b *Broker) Pending(conversationID string) ([]protocol.ApprovalSummary, err
 	})
 	b.mu.Unlock()
 	for _, item := range expired {
-		b.notifyFinished(item.request, StatusExpired, item.resolution)
+		b.notifyFinished(item.request, item.meta, StatusExpired, item.resolution)
 		close(item.done)
 	}
 	return result, resultErr
@@ -289,7 +332,7 @@ func (b *Broker) Close() error {
 	}
 	b.mu.Unlock()
 	for _, item := range finished {
-		b.notifyFinished(item.request, StatusCancelled, item.resolution)
+		b.notifyFinished(item.request, item.meta, StatusCancelled, item.resolution)
 		close(item.done)
 	}
 	return result
@@ -304,7 +347,7 @@ func (b *Broker) finishPending(item *entry, status Status) {
 	}
 	b.mu.Unlock()
 	if finished {
-		b.notifyFinished(item.request, status, item.resolution)
+		b.notifyFinished(item.request, item.meta, status, item.resolution)
 		close(item.done)
 	}
 }
@@ -365,22 +408,40 @@ func (b *Broker) pruneLocked(now time.Time) {
 	}
 }
 
-func (b *Broker) notifyRequested(request protocol.ApprovalRequest) {
-	b.observerMu.RLock()
-	observer := b.requested
-	b.observerMu.RUnlock()
-	if observer != nil {
-		observer(request)
+func (b *Broker) notifyRequested(request protocol.ApprovalRequest, meta corelifecycle.Meta) {
+	for _, subscriber := range b.subscriberSnapshot() {
+		if subscriber.requested != nil {
+			safelyNotify(func() { subscriber.requested(Observation{Request: request, Meta: meta}) })
+		}
 	}
 }
 
-func (b *Broker) notifyFinished(request protocol.ApprovalRequest, status Status, resolution Resolution) {
-	b.observerMu.RLock()
-	observer := b.finished
-	b.observerMu.RUnlock()
-	if observer != nil {
-		observer(request, status, resolution)
+func (b *Broker) notifyFinished(request protocol.ApprovalRequest, meta corelifecycle.Meta, status Status, resolution Resolution) {
+	for _, subscriber := range b.subscriberSnapshot() {
+		if subscriber.finished != nil {
+			safelyNotify(func() { subscriber.finished(Observation{Request: request, Meta: meta}, status, resolution) })
+		}
 	}
+}
+
+func (b *Broker) subscriberSnapshot() []changeSubscriber {
+	b.observerMu.RLock()
+	defer b.observerMu.RUnlock()
+	ids := make([]uint64, 0, len(b.observers))
+	for id := range b.observers {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	result := make([]changeSubscriber, 0, len(b.observers))
+	for _, id := range ids {
+		result = append(result, b.observers[id])
+	}
+	return result
+}
+
+func safelyNotify(notify func()) {
+	defer func() { _ = recover() }()
+	notify()
 }
 
 func validDecision(decision protocol.FaceApprovalDecision) bool {

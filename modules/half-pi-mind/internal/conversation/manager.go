@@ -2,6 +2,7 @@
 package conversation
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"sync"
@@ -12,7 +13,9 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
+	mindlifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/lifecycle"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/observer"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/skill"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
@@ -23,14 +26,17 @@ var ErrNotFound = errors.New("conversation not found")
 
 // Config 是 Conversation Manager 的进程级依赖。
 type Config struct {
-	GroupID   string
-	Provider  llm.Provider
-	Store     *store.Store
-	Bus       *events.EventBus
-	Skills    *skill.Store
-	Approvals *approval.Broker
-	Authority *remoteexec.Authority
-	Tasks     *remoteexec.TaskService
+	GroupID    string
+	Provider   llm.Provider
+	ProviderID string
+	ModelID    string
+	Reviewer   mindlifecycle.Reviewer
+	Store      *store.Store
+	Bus        *events.EventBus
+	Skills     *skill.Store
+	Approvals  *approval.Broker
+	Authority  *remoteexec.Authority
+	Tasks      *remoteexec.TaskService
 }
 
 // Actor 持有一个 conversation 独占的可变运行时状态。
@@ -49,17 +55,14 @@ func (a *Actor) Bridge() *local.RemoteBridge { return a.bridge }
 type Manager struct {
 	config Config
 
-	mu         sync.Mutex
-	actors     map[string]*Actor
-	observerMu sync.RWMutex
-	observer   func(string)
+	mu      sync.Mutex
+	actors  map[string]*Actor
+	changes observer.Hub[string]
 }
 
-// OnChange 设置 conversation 持久化状态变化观察者。
-func (m *Manager) OnChange(observer func(string)) {
-	m.observerMu.Lock()
-	m.observer = observer
-	m.observerMu.Unlock()
+// Subscribe 注册 conversation 持久化状态变化观察者。
+func (m *Manager) Subscribe(subscriber func(string)) func() {
+	return m.changes.Subscribe(subscriber)
 }
 
 // NewManager 创建可由服务模式和 REPL 共用的 Conversation Manager。
@@ -76,11 +79,34 @@ func NewManager(config Config) (*Manager, error) {
 	if config.Approvals == nil || config.Authority == nil || config.Tasks == nil {
 		return nil, fmt.Errorf("remote execution services are required")
 	}
-	return &Manager{config: config, actors: make(map[string]*Actor)}, nil
+	manager := &Manager{config: config, actors: make(map[string]*Actor)}
+	config.Approvals.SubscribeLifecycle(manager.publishApprovalRequested, manager.publishApprovalFinished)
+	return manager, nil
 }
 
 // GroupID 返回新 conversation 所属的默认工作区。
 func (m *Manager) GroupID() string { return m.config.GroupID }
+
+// Close 排空并停止所有已缓存 conversation 的生命周期 Observer。
+func (m *Manager) Close(ctx context.Context) error {
+	m.mu.Lock()
+	actors := make([]*Actor, 0, len(m.actors))
+	for _, actor := range m.actors {
+		actors = append(actors, actor)
+	}
+	m.mu.Unlock()
+
+	var result error
+	for _, actor := range actors {
+		if actor == nil || actor.core == nil {
+			continue
+		}
+		if err := actor.core.CloseLifecycle(ctx); err != nil {
+			result = errors.Join(result, err)
+		}
+	}
+	return result
+}
 
 // Create 创建持久化 conversation 并返回其 Actor。
 func (m *Manager) Create(name string) (*Actor, error) {
@@ -154,9 +180,20 @@ func (m *Manager) newActor(id string) (*Actor, error) {
 		return nil, fmt.Errorf("create Agent Core: %w", err)
 	}
 	core.Bus = m.config.Bus
+	core.SetModelIdentity(m.config.ProviderID, m.config.ModelID)
+	coordinator, err := mindlifecycle.NewCoordinator(mindlifecycle.Config{
+		Bus: m.config.Bus, Auditor: mindlifecycle.NewStoreAuditor(m.config.Store),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create conversation lifecycle: %w", err)
+	}
+	if err := core.SetLifecycleRegistry(coordinator.Registry); err != nil {
+		return nil, fmt.Errorf("install conversation lifecycle: %w", err)
+	}
+	core.SetReviewer(m.config.Reviewer)
 	core.SetSkills(m.config.Skills)
 	core.SetApprover(m.config.Approvals)
-	core.SetSessionChangeObserver(func() { m.notify(id) })
+	core.SubscribeSessionChanges(func() { m.notify(id) })
 	if err := core.SetStore(m.config.Store, id); err != nil {
 		return nil, err
 	}
@@ -164,15 +201,28 @@ func (m *Manager) newActor(id string) (*Actor, error) {
 	bridge.SessionID = core.SessionID
 	bridge.Mode = core.SecurityMode
 	bridge.SetActiveHand = core.SetActiveHand
-	bridge.CheckAndConfirm = core.CheckAndConfirmRun
+	bridge.PrepareRemote = core.PrepareRemoteTool
 	return &Actor{core: core, bridge: bridge}, nil
 }
 
 func (m *Manager) notify(id string) {
-	m.observerMu.RLock()
-	observer := m.observer
-	m.observerMu.RUnlock()
-	if observer != nil {
-		observer(id)
+	m.changes.Publish(id)
+}
+
+func (m *Manager) publishApprovalRequested(observation approval.Observation) {
+	if actor := m.cachedActor(observation.Request.ConversationID); actor != nil {
+		actor.core.ObserveApprovalRequested(observation)
 	}
+}
+
+func (m *Manager) publishApprovalFinished(observation approval.Observation, status approval.Status, resolution approval.Resolution) {
+	if actor := m.cachedActor(observation.Request.ConversationID); actor != nil {
+		actor.core.ObserveApprovalFinished(observation, status, resolution)
+	}
+}
+
+func (m *Manager) cachedActor(id string) *Actor {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.actors[id]
 }

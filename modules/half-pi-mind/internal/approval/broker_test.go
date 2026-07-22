@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
 )
 
 type memoryAuditor struct {
@@ -112,7 +113,7 @@ func TestBrokerPersistsAcceptedResolutionBeforeUnblockingConfirm(t *testing.T) {
 	broker := newTestBroker(t, auditor)
 	requests := make(chan protocol.ApprovalRequest, 1)
 	order := make(chan string, 3)
-	broker.OnChange(func(request protocol.ApprovalRequest) { requests <- request }, func(_ protocol.ApprovalRequest, status Status, _ Resolution) {
+	broker.Subscribe(func(request protocol.ApprovalRequest) { requests <- request }, func(_ protocol.ApprovalRequest, status Status, _ Resolution) {
 		if status == StatusResolved {
 			order <- "finished"
 		}
@@ -156,11 +157,55 @@ func TestBrokerPersistsAcceptedResolutionBeforeUnblockingConfirm(t *testing.T) {
 	}
 }
 
+func TestBrokerLifecycleObservationsInheritFrozenToolTrace(t *testing.T) {
+	auditor := newMemoryAuditor()
+	broker := newTestBroker(t, auditor)
+	requested := make(chan Observation, 1)
+	finished := make(chan Observation, 1)
+	broker.SubscribeLifecycle(func(observation Observation) {
+		requested <- observation
+	}, func(observation Observation, status Status, _ Resolution) {
+		if status == StatusResolved {
+			finished <- observation
+		}
+	})
+	toolMeta := corelifecycle.NewMeta(corelifecycle.SourceFace).
+		WithConversation("conversation-1").WithGroup("group-1").WithPrincipal("principal-1").
+		WithRequest("request-1").WithNode("mind")
+	request := approvalRequest()
+	request.Meta = toolMeta
+	resolutionResult := make(chan Resolution, 1)
+	go func() { resolutionResult <- broker.Confirm(context.Background(), request) }()
+
+	requestedObservation := <-requested
+	if requestedObservation.Meta.TraceID != toolMeta.TraceID || requestedObservation.Meta.ParentSpanID != toolMeta.SpanID ||
+		requestedObservation.Meta.SpanID == toolMeta.SpanID || requestedObservation.Meta.GroupID != "group-1" ||
+		requestedObservation.Meta.PrincipalID != "principal-1" || requestedObservation.Meta.Source != corelifecycle.SourceMind {
+		t.Fatalf("approval requested meta = %+v, tool meta = %+v", requestedObservation.Meta, toolMeta)
+	}
+	actor := Actor{ID: "face-1", Source: "face"}
+	if _, err := broker.Resolve(requestedObservation.Request.ApprovalID, actor, protocol.FaceApprovalAllowOnce, "approved", ResolveHooks{}); err != nil {
+		t.Fatal(err)
+	}
+	finishedObservation := <-finished
+	if finishedObservation.Meta != requestedObservation.Meta {
+		t.Fatalf("approval terminal meta changed: requested=%+v finished=%+v", requestedObservation.Meta, finishedObservation.Meta)
+	}
+	resolution := receiveResolution(t, resolutionResult)
+	if !resolution.Allowed() {
+		t.Fatalf("resolution = %+v", resolution)
+	}
+	record := auditor.record(requestedObservation.Request.ApprovalID)
+	if record.Meta != requestedObservation.Meta {
+		t.Fatalf("approval audit meta = %+v, observation meta = %+v", record.Meta, requestedObservation.Meta)
+	}
+}
+
 func TestBrokerConcurrentResolutionAcceptsExactlyOneFace(t *testing.T) {
 	auditor := newMemoryAuditor()
 	broker := newTestBroker(t, auditor)
 	requests := make(chan protocol.ApprovalRequest, 1)
-	broker.OnChange(func(request protocol.ApprovalRequest) { requests <- request }, nil)
+	broker.Subscribe(func(request protocol.ApprovalRequest) { requests <- request }, nil)
 	resolutions := make(chan Resolution, 1)
 	go func() { resolutions <- broker.Confirm(context.Background(), approvalRequest()) }()
 	request := receiveRequest(t, requests)
@@ -206,7 +251,7 @@ func TestBrokerFaceResolutionCancelsLocalFallback(t *testing.T) {
 	auditor := newMemoryAuditor()
 	broker := newTestBroker(t, auditor)
 	requests := make(chan protocol.ApprovalRequest, 1)
-	broker.OnChange(func(request protocol.ApprovalRequest) { requests <- request }, nil)
+	broker.Subscribe(func(request protocol.ApprovalRequest) { requests <- request }, nil)
 	fallbackStarted := make(chan struct{})
 	fallbackCancelled := make(chan struct{})
 	broker.SetFallbackResolver(func(ctx context.Context, _ protocol.ApprovalRequest) (Actor, protocol.FaceApprovalDecision, string, bool) {
@@ -241,7 +286,7 @@ func TestBrokerRejectsExpiredAndUnownedResolution(t *testing.T) {
 	auditor := newMemoryAuditor()
 	broker := newTestBroker(t, auditor, func(config *Config) { config.Now = func() time.Time { return current } })
 	requests := make(chan protocol.ApprovalRequest, 1)
-	broker.OnChange(func(request protocol.ApprovalRequest) { requests <- request }, nil)
+	broker.Subscribe(func(request protocol.ApprovalRequest) { requests <- request }, nil)
 	resolutions := make(chan Resolution, 1)
 	go func() { resolutions <- broker.Confirm(context.Background(), approvalRequest()) }()
 	request := receiveRequest(t, requests)
@@ -274,7 +319,7 @@ func TestBrokerResolvedStatusRemainsConflictAfterExpiry(t *testing.T) {
 	auditor := newMemoryAuditor()
 	broker := newTestBroker(t, auditor, func(config *Config) { config.Now = func() time.Time { return current } })
 	requests := make(chan protocol.ApprovalRequest, 1)
-	broker.OnChange(func(request protocol.ApprovalRequest) { requests <- request }, nil)
+	broker.Subscribe(func(request protocol.ApprovalRequest) { requests <- request }, nil)
 	go broker.Confirm(context.Background(), approvalRequest())
 	request := receiveRequest(t, requests)
 	actor := Actor{ID: "face-1", Source: "face"}
@@ -292,7 +337,7 @@ func TestBrokerCancellationTerminatesLocallyWhenAuditFinishFails(t *testing.T) {
 	auditor.finishErr = errors.New("disk unavailable")
 	broker := newTestBroker(t, auditor)
 	requests := make(chan protocol.ApprovalRequest, 1)
-	broker.OnChange(func(request protocol.ApprovalRequest) { requests <- request }, nil)
+	broker.Subscribe(func(request protocol.ApprovalRequest) { requests <- request }, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	resolutions := make(chan Resolution, 1)
 	go func() { resolutions <- broker.Confirm(ctx, approvalRequest()) }()
@@ -315,7 +360,7 @@ func TestBrokerDoesNotAcceptWhenResolvedAuditFails(t *testing.T) {
 	auditor.finishErr = errors.New("disk unavailable")
 	broker := newTestBroker(t, auditor)
 	requests := make(chan protocol.ApprovalRequest, 1)
-	broker.OnChange(func(request protocol.ApprovalRequest) { requests <- request }, nil)
+	broker.Subscribe(func(request protocol.ApprovalRequest) { requests <- request }, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go broker.Confirm(ctx, approvalRequest())
@@ -336,7 +381,7 @@ func TestBrokerDoesNotAllowToolWhenAcceptedCannotBeQueued(t *testing.T) {
 	auditor := newMemoryAuditor()
 	broker := newTestBroker(t, auditor)
 	requests := make(chan protocol.ApprovalRequest, 1)
-	broker.OnChange(func(request protocol.ApprovalRequest) { requests <- request }, nil)
+	broker.Subscribe(func(request protocol.ApprovalRequest) { requests <- request }, nil)
 	resolutions := make(chan Resolution, 1)
 	go func() { resolutions <- broker.Confirm(context.Background(), approvalRequest()) }()
 	request := receiveRequest(t, requests)

@@ -19,8 +19,8 @@ func init() {
 		Parameters: &executor.ObjectSchema{
 			Properties: []executor.PropertySchema{
 				{Name: "path", Type: "string", Description: "要编辑的文件路径"},
-				{Name: "old_string", Type: "string", Description: "要被替换的原文，必须在文件中唯一出现"},
-				{Name: "new_string", Type: "string", Description: "替换后的新内容"},
+				{Name: "old_string", Type: "string", Description: "要被替换的原文，必须在文件中唯一出现", Review: executor.ReviewRedact},
+				{Name: "new_string", Type: "string", Description: "替换后的新内容", Review: executor.ReviewRedact},
 			},
 			Required: []string{"path", "old_string", "new_string"},
 		},

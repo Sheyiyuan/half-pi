@@ -15,6 +15,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/conversation"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/management"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 
@@ -83,7 +84,7 @@ func (r *Repl) printBanner(serverEnabled bool) {
 	fmt.Println("/hand task log <task_id> [offset] [limit]  read task log")
 	fmt.Println("/hand task cancel <task_id>  cancel background task")
 	fmt.Println("/peers                list connected peers")
-	fmt.Println("/mode <normal|trust|yolo>  switch mode")
+	fmt.Println("/mode <strict|normal|review|yolo>  switch mode")
 	fmt.Println("/debug                toggle debug")
 	fmt.Println("exit / quit           exit")
 	fmt.Println()
@@ -110,7 +111,8 @@ func (r *Repl) loop() bool {
 		return true
 	}
 
-	response, err := r.core.Chat(context.Background(), input)
+	ctx := requestctx.WithSource(context.Background(), "repl")
+	response, err := r.core.Chat(ctx, input)
 	if err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("error: %v", err))
 		return true

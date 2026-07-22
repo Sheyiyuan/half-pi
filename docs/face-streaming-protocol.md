@@ -31,7 +31,10 @@ Provider SSE/JSON stream
 llm.StreamingProvider        厂商事件解析、工具调用分片组装
         |
         v
-agentcore.ChatHooks          只投影可见文本和响应边界
+agentcore lifecycle          model.delta / assistant.before_deliver
+        |
+        v
+agentcore.ChatTransport      只承担可见文本、响应边界和传输背压
         |
         v
 facegateway stream broker    聚合、序列、订阅、恢复状态
@@ -198,14 +201,17 @@ Gateway 在 request registry 中保留活动流的完整可见文本，并与 Ch
 
 ## 8. Core 与工具循环
 
-`ChatHooks` 增加文本与响应完成回调。Core 为每次 LLM 调用分配 `response_index`，并保证：
+`Core.ChatWithTransport` 接收显式 `ChatTransport`。它不是 context Hook，也不能注册安全策略；Core 为每次 LLM 调用分配 `response_index`，并保证：
 
 1. 文本 delta 按 provider 顺序投影。
 2. `ResponseCompleted` 在该 response 的所有 delta 后触发。
 3. 工具参数必须完整组装后才能计算摘要并发布 `chat.tool_called`。
 4. 原始工具参数永远不进入 Chat 流。
 5. 当前 provider response 中途失败时，不把部分 assistant message 写入历史。
-6. 已完整完成的“assistant tool calls + 全部 tool results”作为一个原子消息批次持久化。
+6. 完整 assistant response 通过 `assistant.before_deliver` 后先持久化，再进入 `ChatTransport`；传输成功后才发布 `assistant.delivered`。
+7. 同一 response 的全部 tool results 在执行完成后作为后续批次持久化，再进入下一轮模型请求。
+
+只要当前 scope 匹配 `assistant.before_deliver` Guard 或 Transformer，Core 自动使用 buffered 模式：provider delta 只生成内部 lifecycle 事件，审核通过后把完整可见内容作为一个 transport delta 交付。没有完整输出拦截器时保持 passthrough 增量体验。这样完整输出策略不会在文本已经发给 Face 后才尝试撤回。
 
 ## 9. Run 输出流
 
@@ -227,6 +233,7 @@ type FaceRunProgress struct {
 - `gap` 表示 Mind 在接纳该进度前已发现来源缺口；Face 自身还必须比较本地 `last_seq`。
 - 只投影 foreground run。durable task 日志继续使用 `face.task.log` 的 offset/limit 拉取，避免同一输出出现两套恢复权威。
 - 进度审计已持久化，但首版不新增 foreground run 日志下载命令；缺口时 UI 标记输出不完整，run 终态仍由 `remote_run.changed`/`run.get` 决定。
+- Mind 为远程真实工具创建 `PreparedExternal`。如果当前 lifecycle scope 注册了 `tool.result_before_commit` Transformer，原始 `rpc_progress` 仍进入 RemoteRun 的受限 operational audit 和内部脱敏 lifecycle 事实，但 progress policy 返回 false，Face 不再收到未经同等过滤的原始输出；最终结果经过 Transformer 后再交付。
 
 ## 10. 出站调度与背压
 

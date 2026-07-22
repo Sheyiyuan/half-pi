@@ -37,14 +37,14 @@ func (r *Repl) handleCommand(input string) bool {
 	case strings.HasPrefix(input, "/mode "):
 		mode := strings.TrimSpace(strings.TrimPrefix(input, "/mode "))
 		switch mode {
-		case "strict", "normal", "trust", "yolo":
+		case "strict", "normal", "review", "trust", "ai_review", "yolo":
 			if err := r.core.SetMode(mode); err != nil {
 				r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("switch mode: %v", err))
 			} else {
-				r.emit(events.LevelInfo, events.TypeModeChange, fmt.Sprintf("mode switched to: %s", mode))
+				r.emit(events.LevelInfo, events.TypeModeChange, fmt.Sprintf("mode switched to: %s", r.core.SecurityMode()))
 			}
 		default:
-			r.emit(events.LevelWarn, events.TypeSystem, fmt.Sprintf("unknown mode: %s (strict/normal/trust/yolo)", mode))
+			r.emit(events.LevelWarn, events.TypeSystem, fmt.Sprintf("unknown mode: %s (strict/normal/review/yolo)", mode))
 		}
 		return true
 

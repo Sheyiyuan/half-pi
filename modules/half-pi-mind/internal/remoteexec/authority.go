@@ -9,6 +9,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/observer"
 )
 
 type pendingCall struct {
@@ -26,8 +27,15 @@ type Authority struct {
 	pendingMu        sync.Mutex
 	pending          map[string]*pendingCall
 	orderedMu        sync.Mutex
-	progressMu       sync.RWMutex
-	progressObserver func(ProgressObservation)
+	progressChanges  observer.Hub[ProgressObservation]
+	progressPolicyMu sync.Mutex
+	progressPolicyID uint64
+	progressPolicies map[string]progressPolicy
+}
+
+type progressPolicy struct {
+	id     uint64
+	filter func(ProgressObservation) bool
 }
 
 // ProgressObservation 是已通过来源、状态和限额校验的 foreground/run 进度。
@@ -39,14 +47,38 @@ type ProgressObservation struct {
 
 // NewAuthority 创建远程执行权威。Hub 回调由 Mind dispatcher 统一安装。
 func NewAuthority(h *hub.Hub, registry *Registry, bus *events.EventBus) *Authority {
-	return &Authority{Hub: h, Registry: registry, bus: bus, pending: make(map[string]*pendingCall)}
+	return &Authority{
+		Hub: h, Registry: registry, bus: bus, pending: make(map[string]*pendingCall),
+		progressPolicies: make(map[string]progressPolicy),
+	}
 }
 
-// OnProgress 设置结构化进度观察者。观察者必须快速返回且不得回调 Authority。
-func (a *Authority) OnProgress(observer func(ProgressObservation)) {
-	a.progressMu.Lock()
-	a.progressObserver = observer
-	a.progressMu.Unlock()
+// SubscribeProgress 注册结构化进度观察者。
+func (a *Authority) SubscribeProgress(subscriber func(ProgressObservation)) func() {
+	return a.progressChanges.Subscribe(subscriber)
+}
+
+// BindProgressPolicy 为一个 run 安装同步、只读的投影策略。
+// 返回 false 的进度仍由 Registry 接纳和审计，但不会投影给 Face/EventBus。
+func (a *Authority) BindProgressPolicy(runID string, filter func(ProgressObservation) bool) func() {
+	if runID == "" || filter == nil {
+		return func() {}
+	}
+	a.progressPolicyMu.Lock()
+	a.progressPolicyID++
+	id := a.progressPolicyID
+	a.progressPolicies[runID] = progressPolicy{id: id, filter: filter}
+	a.progressPolicyMu.Unlock()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			a.progressPolicyMu.Lock()
+			if current := a.progressPolicies[runID]; current.id == id {
+				delete(a.progressPolicies, runID)
+			}
+			a.progressPolicyMu.Unlock()
+		})
+	}
 }
 
 // HandleHandConnect 处理已认证 Hand 上线。
@@ -278,17 +310,28 @@ func (a *Authority) publishProgress(progress protocol.RPCProgress, gap bool) {
 	if !ok {
 		return
 	}
-	a.progressMu.RLock()
-	observer := a.progressObserver
-	a.progressMu.RUnlock()
-	if observer != nil {
-		observer(ProgressObservation{Run: run, Progress: progress, Gap: gap})
+	observation := ProgressObservation{Run: run, Progress: progress, Gap: gap}
+	a.progressPolicyMu.Lock()
+	policy := a.progressPolicies[progress.RunID]
+	a.progressPolicyMu.Unlock()
+	if policy.filter != nil && !safelyAllowProgress(policy.filter, observation) {
+		return
 	}
+	a.progressChanges.Publish(observation)
 	if a.bus != nil {
 		a.bus.PublishSync(events.New(run.SessionID, "remoteexec", events.LevelInfo, events.TypeToolProgress, progress.Data).WithData(
 			ToolProgressEventData{RunID: progress.RunID, Seq: progress.Seq, Kind: progress.Kind, Data: progress.Data, Gap: gap},
 		))
 	}
+}
+
+func safelyAllowProgress(filter func(ProgressObservation) bool, observation ProgressObservation) (allowed bool) {
+	defer func() {
+		if recover() != nil {
+			allowed = false
+		}
+	}()
+	return filter(observation)
 }
 
 func (a *Authority) deliverPending(peer *hub.Peer, id string, msg protocol.Envelope) {

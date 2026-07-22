@@ -16,7 +16,6 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
 
@@ -59,9 +58,7 @@ func TestUseHandConcurrentRunsDoNotCrossDeliver(t *testing.T) {
 	bridge := &RemoteBridge{
 		Hub: h, Authority: authority, Runs: runs,
 		ActiveHand: func() string { return "parallel-hand" }, SessionID: func() string { return "session-1" },
-		CheckAndConfirm: func(context.Context, string, string, json.RawMessage, string, bool) approval.CheckResult {
-			return approval.CheckResult{}
-		},
+		PrepareRemote: testRemotePreparer(nil),
 	}
 
 	const runCount = 20

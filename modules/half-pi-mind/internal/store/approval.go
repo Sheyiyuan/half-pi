@@ -24,9 +24,12 @@ func (s *Store) CreateApproval(record approval.AuditRecord) error {
 		return fmt.Errorf("approval audit fields are required")
 	}
 	_, err := s.db.Exec(`INSERT INTO approval_audits
-		(approval_id, conversation_id, request_id, run_id, tool, reason, args_digest, status, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		(approval_id, conversation_id, request_id, run_id, trace_id, span_id, parent_span_id,
+		 group_id, principal_id, lifecycle_source, node_id, tool, reason, args_digest, status, created_at, expires_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		request.ApprovalID, request.ConversationID, request.RequestID, request.RunID,
+		record.Meta.TraceID, record.Meta.SpanID, record.Meta.ParentSpanID, record.Meta.GroupID,
+		record.Meta.PrincipalID, record.Meta.Source, record.Meta.NodeID,
 		request.Tool, request.Reason, request.ArgsDigest, approval.StatusPending,
 		record.CreatedAt.UnixMilli(), request.ExpiresAt.UnixMilli())
 	if err != nil {
@@ -74,7 +77,9 @@ func (s *Store) FinishApproval(approvalID string, status approval.Status, resolu
 
 // LookupApproval 返回指定审批审计记录。
 func (s *Store) LookupApproval(approvalID string) (approval.AuditRecord, bool, error) {
-	row := s.db.QueryRow(`SELECT approval_id, conversation_id, request_id, run_id, tool, reason, args_digest,
+	row := s.db.QueryRow(`SELECT approval_id, conversation_id, request_id, run_id,
+		trace_id, span_id, parent_span_id, group_id, principal_id, lifecycle_source, node_id,
+		tool, reason, args_digest,
 		status, decision, actor_id, actor_label, source, resolution_reason, created_at, expires_at, resolved_at
 		FROM approval_audits WHERE approval_id = ?`, approvalID)
 	record, err := scanApproval(row)
@@ -108,13 +113,18 @@ func scanApproval(row approvalScanner) (approval.AuditRecord, error) {
 		record                           approval.AuditRecord
 		approvalID, conversationID       string
 		requestID, runID, tool, reason   string
+		traceID, spanID, parentSpanID    string
+		groupID, principalID, nodeID     string
+		lifecycleSource                  string
 		argsDigest, status, decision     string
 		actorID, actorLabel, source      string
 		resolutionReason                 string
 		createdAt, expiresAt, resolvedAt int64
 	)
 	if err := row.Scan(
-		&approvalID, &conversationID, &requestID, &runID, &tool, &reason, &argsDigest,
+		&approvalID, &conversationID, &requestID, &runID,
+		&traceID, &spanID, &parentSpanID, &groupID, &principalID, &lifecycleSource, &nodeID,
+		&tool, &reason, &argsDigest,
 		&status, &decision, &actorID, &actorLabel, &source, &resolutionReason,
 		&createdAt, &expiresAt, &resolvedAt,
 	); err != nil {
@@ -125,6 +135,10 @@ func scanApproval(row approvalScanner) (approval.AuditRecord, error) {
 		RunID: runID, Tool: tool, Reason: reason, ArgsDigest: argsDigest,
 		ExpiresAt: time.UnixMilli(expiresAt).UTC(),
 	}
+	record.Meta.SchemaVersion = 1
+	record.Meta.TraceID, record.Meta.SpanID, record.Meta.ParentSpanID = traceID, spanID, parentSpanID
+	record.Meta.RequestID, record.Meta.ConversationID, record.Meta.GroupID = requestID, conversationID, groupID
+	record.Meta.PrincipalID, record.Meta.Source, record.Meta.NodeID = principalID, lifecycleSource, nodeID
 	record.Status = approval.Status(status)
 	record.Decision = protocol.FaceApprovalDecision(decision)
 	record.Actor = approval.Actor{ID: actorID, Label: actorLabel, Source: source}

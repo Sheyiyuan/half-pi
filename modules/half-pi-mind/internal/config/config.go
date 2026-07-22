@@ -13,9 +13,26 @@ import (
 // ── 配置结构 ──
 
 type Config struct {
-	Server  ServerConfig  `toml:"server" json:"server"`
-	LLM     LLMConfig     `toml:"llm" json:"llm"`
-	Storage StorageConfig `toml:"storage" json:"storage"`
+	Server   ServerConfig   `toml:"server" json:"server"`
+	LLM      LLMConfig      `toml:"llm" json:"llm"`
+	Security SecurityConfig `toml:"security" json:"security"`
+	Storage  StorageConfig  `toml:"storage" json:"storage"`
+}
+
+// SecurityConfig 配置内置安全组件。
+type SecurityConfig struct {
+	Review SecurityReviewConfig `toml:"review" json:"review"`
+}
+
+// SecurityReviewConfig 配置独立 AI Reviewer。
+type SecurityReviewConfig struct {
+	Enabled       bool   `toml:"enabled" json:"enabled"`
+	Provider      string `toml:"provider" json:"provider"`
+	Model         string `toml:"model" json:"model"`
+	TimeoutMS     int    `toml:"timeout_ms" json:"timeout_ms"`
+	MaxTokens     int    `toml:"max_tokens" json:"max_tokens"`
+	PolicyVersion string `toml:"policy_version" json:"policy_version"`
+	Profile       string `toml:"profile" json:"profile"`
 }
 
 type ServerConfig struct {

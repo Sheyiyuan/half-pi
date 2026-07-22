@@ -3,14 +3,12 @@ package local
 
 import (
 	"context"
-	"encoding/json"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	_ "github.com/Sheyiyuan/half-pi/modules/half-pi-core/tools"
 )
 
 type LocalExecutor struct {
-	runner *executor.Runner
 	bridge *RemoteBridge
 }
 
@@ -21,20 +19,19 @@ func New(bridge ...*RemoteBridge) *LocalExecutor {
 		remote = bridge[0]
 	}
 	return &LocalExecutor{
-		runner: executor.NewRunner(executor.ExecutionPolicy{SkipChecks: true}),
 		bridge: remote,
 	}
 }
 
 // Tools 返回本地可用工具列表。
 func (e *LocalExecutor) Tools() []executor.Tool {
-	return e.runner.Tools()
+	return executor.RegisteredTools()
 }
 
-// ExecuteTool 执行本地工具。
-func (e *LocalExecutor) ExecuteTool(ctx context.Context, name string, args json.RawMessage) *executor.ToolResult {
+// PrepareToolContext 注入远程执行桥，但不执行或绕过任何安全检查。
+func (e *LocalExecutor) PrepareToolContext(ctx context.Context) context.Context {
 	if e.bridge != nil {
-		ctx = WithRemoteBridge(ctx, e.bridge)
+		return WithRemoteBridge(ctx, e.bridge)
 	}
-	return e.runner.ExecuteTool(ctx, name, args)
+	return ctx
 }

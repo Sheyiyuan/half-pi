@@ -2,6 +2,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -40,9 +41,17 @@ func WithProgress(ctx context.Context, fn ProgressFunc) context.Context {
 
 // ReportProgress 向 context 中的回调报告进度；未配置回调时无操作。
 func ReportProgress(ctx context.Context, progress Progress) {
-	if fn, ok := ctx.Value(progressContextKey{}).(ProgressFunc); ok {
+	if fn := progressFunc(ctx); fn != nil {
 		fn(progress)
 	}
+}
+
+func progressFunc(ctx context.Context) ProgressFunc {
+	if ctx == nil {
+		return nil
+	}
+	fn, _ := ctx.Value(progressContextKey{}).(ProgressFunc)
+	return fn
 }
 
 // WithFinalOutputLimit 限制工具为最终结果保留的输出字节数；流式进度不受影响。
@@ -93,93 +102,68 @@ type ObjectSchema struct {
 	Required   []string
 }
 
+// ReviewExposure 定义字段进入隔离 AI Reviewer 证书时的投影视图。
+type ReviewExposure string
+
+const (
+	// ReviewInclude 传递字段值；这是非敏感字段的默认值。
+	ReviewInclude ReviewExposure = "include"
+	// ReviewRedact 只传递固定占位符，不传原值。
+	ReviewRedact ReviewExposure = "redact"
+	// ReviewRequireUser 不把字段交给 Reviewer，并强制升级到用户审批。
+	ReviewRequireUser ReviewExposure = "require_user"
+)
+
 // PropertySchema 描述一个属性的 JSON Schema。
 type PropertySchema struct {
 	Name        string
 	Type        string
 	Description string
+	Review      ReviewExposure
+}
+
+// ProjectReviewArgs 按工具 schema 生成 Reviewer 可见参数投影。
+// complete=false 表示存在必须由用户查看、不能交给 Reviewer 的字段。
+func ProjectReviewArgs(tool Tool, args json.RawMessage) (projected json.RawMessage, complete bool, err error) {
+	var values map[string]any
+	decoder := json.NewDecoder(bytes.NewReader(args))
+	decoder.UseNumber()
+	if err := decoder.Decode(&values); err != nil {
+		return nil, false, fmt.Errorf("decode review args: %w", err)
+	}
+	if values == nil || decoder.Decode(&struct{}{}) == nil {
+		return nil, false, fmt.Errorf("decode review args: expected one object")
+	}
+	if tool.Parameters == nil {
+		if len(values) != 0 {
+			return json.RawMessage(`{}`), false, nil
+		}
+		return json.RawMessage(`{}`), true, nil
+	}
+	complete = true
+	for _, property := range tool.Parameters.Properties {
+		if _, exists := values[property.Name]; !exists {
+			continue
+		}
+		switch property.Review {
+		case ReviewRedact:
+			values[property.Name] = "[redacted]"
+		case ReviewRequireUser:
+			delete(values, property.Name)
+			complete = false
+		}
+	}
+	projected, err = json.Marshal(values)
+	if err != nil {
+		return nil, false, fmt.Errorf("encode review args: %w", err)
+	}
+	return projected, complete, nil
 }
 
 // ToolExecutor 是工具执行器的接口。
 type ToolExecutor interface {
 	ExecuteTool(ctx context.Context, name string, args json.RawMessage) *ToolResult
 	Tools() []Tool
-}
-
-// ConfirmDecision 表示需要确认时调用方的决策。
-type ConfirmDecision int
-
-const (
-	ConfirmDeny ConfirmDecision = iota
-	ConfirmAllow
-)
-
-// ConfirmFunc 在工具需要确认时被调用。返回 ConfirmAllow 才会继续执行。
-type ConfirmFunc func(tool Tool, args json.RawMessage, reason string) ConfirmDecision
-
-// ExecutionPolicy 控制 Runner 的安全检查行为。
-type ExecutionPolicy struct {
-	// Confirm 为空时，任何需要确认的工具都会被拒绝。
-	Confirm ConfirmFunc
-	// SkipChecks 为 true 时只查找并执行工具，不运行 Tool.Check 或 DefaultConfirm。
-	SkipChecks bool
-}
-
-// Runner 是可复用的工具执行器，统一处理查找、Check、DefaultConfirm 与执行。
-type Runner struct {
-	policy ExecutionPolicy
-}
-
-// NewRunner 创建工具执行器。
-func NewRunner(policy ExecutionPolicy) *Runner {
-	return &Runner{policy: policy}
-}
-
-// Tools 返回已注册工具快照。
-func (r *Runner) Tools() []Tool {
-	return RegisteredTools()
-}
-
-// ExecuteTool 按策略安全地执行工具。
-func (r *Runner) ExecuteTool(ctx context.Context, name string, args json.RawMessage) *ToolResult {
-	tool, ok := FindTool(name)
-	if !ok {
-		return &ToolResult{Error: fmt.Sprintf("unknown tool: %s", name)}
-	}
-
-	if !r.policy.SkipChecks {
-		if decision, reason := toolDecision(tool, args); decision != DecisionAllow {
-			return r.handleDecision(ctx, tool, args, decision, reason)
-		}
-	}
-
-	if tool.Execute == nil {
-		return &ToolResult{Error: fmt.Sprintf("tool %s has no execute function", name)}
-	}
-	return tool.Execute(ctx, args)
-}
-
-func (r *Runner) handleDecision(ctx context.Context, tool Tool, args json.RawMessage, decision Decision, reason string) *ToolResult {
-	switch decision {
-	case DecisionDeny:
-		if reason == "" {
-			reason = "blocked by tool policy"
-		}
-		return &ToolResult{Success: true, Output: fmt.Sprintf("⚠️ 操作被拒绝: %s", reason)}
-	case DecisionConfirm:
-		if reason == "" {
-			reason = "该操作需要确认"
-		}
-		if r.policy.Confirm == nil || r.policy.Confirm(tool, args, reason) != ConfirmAllow {
-			return &ToolResult{Success: true, Output: fmt.Sprintf("⚠️ 操作被拒绝: %s", reason)}
-		}
-		if tool.Execute == nil {
-			return &ToolResult{Error: fmt.Sprintf("tool %s has no execute function", tool.Name)}
-		}
-		return tool.Execute(ctx, args)
-	default:
-		return &ToolResult{Error: "unknown tool decision"}
-	}
 }
 
 // CheckTool 对工具参数执行 Tool.Check 和 DefaultConfirm，供需要自定义审批流的调用方复用。

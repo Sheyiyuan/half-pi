@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"time"
 	"unicode/utf8"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
+	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
 
 	// 注册通用工具
 	_ "github.com/Sheyiyuan/half-pi/modules/half-pi-core/tools"
@@ -23,6 +25,7 @@ type Hand struct {
 	cfg         *config.Config
 	send        func(string, any) error
 	taskManager *taskmanager.Manager
+	lifecycle   *corelifecycle.LifecycleRegistry
 
 	tasksMu sync.Mutex
 	tasks   map[string]*task
@@ -36,7 +39,7 @@ func New(conn *wss.SessionConn, cfg *config.Config) *Hand {
 // NewWithTaskManager 创建共享进程级后台任务管理器的 Hand 实例。
 func NewWithTaskManager(conn *wss.SessionConn, cfg *config.Config, manager *taskmanager.Manager) *Hand {
 	return &Hand{
-		conn: conn, cfg: cfg, taskManager: manager, tasks: make(map[string]*task),
+		conn: conn, cfg: cfg, taskManager: manager, lifecycle: corelifecycle.NewRegistry(), tasks: make(map[string]*task),
 	}
 }
 
@@ -44,6 +47,7 @@ func NewWithTaskManager(conn *wss.SessionConn, cfg *config.Config, manager *task
 func (h *Hand) Serve(ctx context.Context) error {
 	runCtx, cancelRuns := context.WithCancel(ctx)
 	defer cancelRuns()
+	defer h.closeLifecycle()
 	h.startMonitors(runCtx)
 
 	done := make(chan struct{})
@@ -91,6 +95,15 @@ func (h *Hand) Serve(ctx context.Context) error {
 			fmt.Fprintf(os.Stderr, "unhandled message type: %s\n", env.Type)
 		}
 	}
+}
+
+func (h *Hand) closeLifecycle() {
+	if h.lifecycle == nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = h.lifecycle.CloseObservers(ctx)
 }
 
 // maxOutputSize 返回输出截断上限。

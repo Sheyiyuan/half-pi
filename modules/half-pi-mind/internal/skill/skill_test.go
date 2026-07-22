@@ -3,6 +3,7 @@ package skill
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -297,6 +298,42 @@ func TestStoreIndexEmpty(t *testing.T) {
 	store, _ := LoadFromDir(dir)
 	if store.Index() != "" {
 		t.Errorf("empty store Index should be empty, got %q", store.Index())
+	}
+}
+
+func TestStoreFiltersSkillsBySessionGroup(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillFile(t, dir, "global.skill.md", `---
+name: global
+description: Shared skill
+---
+
+global content`)
+	writeSkillFile(t, dir, "private.skill.md", `---
+name: private
+description: Group A only
+groups: [group-a]
+---
+
+private content`)
+	store, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, ok := store.Get("private")
+	if !ok || len(private.Groups) != 1 || private.Groups[0] != "group-a" {
+		t.Fatalf("parsed groups = %#v", private)
+	}
+	if _, ok := store.GetForGroup("private", "group-b"); ok {
+		t.Fatal("foreign group obtained private skill")
+	}
+	if _, ok := store.GetForGroup("global", "group-b"); !ok {
+		t.Fatal("global skill should remain visible")
+	}
+	indexA := store.IndexForGroup("group-a")
+	indexB := store.IndexForGroup("group-b")
+	if !strings.Contains(indexA, "private") || strings.Contains(indexB, "private") {
+		t.Fatalf("group indexes leaked skill: group-a=%q group-b=%q", indexA, indexB)
 	}
 }
 

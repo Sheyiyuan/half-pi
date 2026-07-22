@@ -2,12 +2,11 @@ package local
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/hub"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
 
@@ -23,8 +22,8 @@ type RemoteBridge struct {
 	SetActiveHand func(string) error
 	// PendingCall 注册一次等待远程 Hand 响应的调用，并返回清理函数。
 	PendingCall func(id string, timeout time.Duration, expectedPeer string) (<-chan protocol.Envelope, func())
-	// CheckAndConfirm 复用 Mind 本地安全检查和审批流程。
-	CheckAndConfirm func(context.Context, string, string, json.RawMessage, string, bool) approval.CheckResult
+	// PrepareRemote 让真实远程工具在创建 RemoteRun 前进入 Mind ToolRuntime。
+	PrepareRemote func(context.Context, executor.Invocation, executor.Tool, executor.ExternalDigestFunc) (*executor.PreparedExternal, executor.Result)
 }
 
 type remoteBridgeKey struct{}

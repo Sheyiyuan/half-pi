@@ -68,17 +68,20 @@ half-pi/
 - Mind 特有工具放 `internal/executor/local/tool_<name>.go`
 - `Tool.Check` 用于执行前安全检查（可选）
 - `Tool.DefaultConfirm` 为 true 时每次调用需用户确认
-- `executor.Runner` 封装工具查找 → Check → 执行流程，Support `SkipChecks` 和 `ConfirmFunc`
+- 所有生产执行必须进入 `executor.ToolRuntime`；参数变换、schema 校验、freeze/digest、Authorizer、审计和执行不得拆成可绕过的两步
+- `executor.ToolRuntime` 是唯一生产工具执行入口；不存在 `Runner` 或 `SkipChecks` 旁路
 
 ### 安全策略集成
 - 安全策略放 `modules/half-pi-core/security/`，不散落在各工具中
-- `exec_command` 工具的 `Check` hook 调用 `security.Check()`
+- `exec_command` 同时提供兼容 `Check` 和基于会话克隆策略的 `PolicyCheck`
 - 新增敏感操作需同时更新 security 的黑/灰名单
+- 新增工具参数必须声明 Reviewer 投影策略；无法安全交给 Reviewer 的字段使用 `ReviewRequireUser`
 
 ### 事件发布
-- Core 层用 `c.publish()`（内部封装，nil-safe）
+- Chat/model/tool/security 事实通过 lifecycle Registry 发布；`c.publish()` 只保留兼容调试展示
 - REPL / Face 层用 `bus.PublishSync()` 保证输出顺序
 - 新增事件类型时在 `event.go` 中定义常量
+- EventBus 不承担 Guard 或必需审计；普通 lifecycle Observer 异步、有界、fail open
 
 ---
 
@@ -154,16 +157,25 @@ make test         # 运行全部 5 个模块的测试
 | `cancel_hand_task` | mind/internal/executor/local | 取消 Hand 后台任务 |
 
 ##### 安全策略 (`half-pi-core/security/`)
-- 四模式：strict / normal / trust / yolo
+- 四模式：strict / normal / review / yolo；`trust`、`ai_review` 仅为读取兼容别名，持久化统一写 `review`
 - 硬编码黑名单（rm -rf /、mkfs、fork 炸弹等）
 - Normal 模式灰名单（rm、sudo、chmod 等 → 需确认）
-- 全局 `security.Check()` 函数
+- Review 模式使用独立 AI 请求，只能返回 allow / require_user；Reviewer 故障升级用户审批，必需审计故障 fail closed
+- strict/hard deny 与 Hand 本地拒绝不能被 Reviewer 或用户审批覆盖
 
 ##### 审批流程 (`agentcore`)
 - 进程级 conversation Approval Broker，Face 与 REPL 共用同一首裁决和审计路径
 - REPL 输入适配支持 y/n/Y/N，并可在远程 Face 先裁决时取消等待
 - 自动放行/拒绝列表（autoAllow / autoDeny）
-- LLM 通过 `confirm: true` 参数主动请求确认（覆盖 trust/yolo）
+- LLM 通过 `confirm: true` 参数主动请求确认（覆盖 review/yolo 的自动放行）
+
+##### 统一 Lifecycle 与审计 (`half-pi-core/lifecycle` / Mind lifecycle)
+- Message、Model、Assistant、Tool、Security Review、Approval 和 Chat 终态共享 Meta/Phase/Outcome 契约
+- Guard / Transformer / Observer / Auditor 四类通道具有独立能力、排序、scope、timeout 和失败语义
+- `ChatTransport` 只承担 Face 流传输与背压，不是 Hook；完整输出 Guard/Transformer 自动启用 buffered delivery
+- Mind 和 Hand 各自使用 ToolRuntime/Authorizer；`use_hand` 通过一次性 `PreparedExternal` 绑定 run/Hand/tool/args/background digest
+- `security_decisions` 与 `lifecycle_outbox` 同事务提交；dispatcher/retry/dead-letter 已实现，正式 consumer 留给插件 runtime
+- Skill frontmatter `groups` allowlist、`IndexForGroup` 和 `GetForGroup` 保证 SessionGroup 隔离
 
 ##### 事件总线 (`half-pi-core/events/`)
 - `Event` 结构体（ID / Session / Source / Level / Type / Data）
@@ -220,7 +232,7 @@ make test         # 运行全部 5 个模块的测试
 
 ##### Hand 远程执行器 (`modules/half-pi-hand/`)
 - WebSocket 客户端连接 Mind Hub
-- `executor.Runner` 驱动工具执行（Mind 审批 + Hand 侧最终权限过滤）
+- node-local `executor.ToolRuntime` + Hand Authorizer 驱动工具执行（Mind 审批证明 + Hand 侧最终权限过滤）
 - RPC 消息收发（RPC → 执行工具 → RPCResult），支持 `timeout_ms`
 - Unix `exec_command` 超时取消时杀整个进程组，避免 shell 子进程残留
 - 6 个集成测试（正常执行、未知工具、安全拦截、权限拒绝、取消、远程超时）
@@ -313,13 +325,13 @@ make test         # 运行全部 5 个模块的测试
 - `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（客户端、Mind runtime 与进程 E2E 可用）
 - `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
 - `docs/mind-management-cli.md` — Mind 本地管理 CLI、在线 IPC、离线 Store 与状态锁设计/实现记录
-- `docs/lifecycle-hooks-and-security-audit.md` — 统一生命周期 Hook、安全审查、审计与插件开放前置架构提案（尚未实现）
+- `docs/lifecycle-hooks-and-security-audit.md` — 已实现的统一生命周期 Hook、隔离 Reviewer、安全审计与插件开放前置契约
 - `docs/plugin-architecture.md` — 插件契约、Goja 宿主、process/WASM 运行时与实施顺序提案（尚未实现）
 - `docs/archived/README.md` — 已完成、被替代或仅供决策追溯的设计文档索引
 
 #### ⏳ 待完成
-- [ ] Skill → 工作区集成（SessionGroup 过滤）
 - [ ] `/compact` 上下文压缩
+- [ ] 按 `docs/plugin-architecture.md` 实现首版插件 runtime
 - [ ] Windows 原生凭据/config/database ACL 发布环境验收
 - [ ] Windows ConPTY 与 macOS PTY 的全屏 TUI 原生发布验收
 
@@ -336,6 +348,7 @@ make test         # 运行全部 5 个模块的测试
 - 安全策略作为 `Tool.Check` hook，在 `agentcore` 层统一执行
 - LLM 可通过 `confirm: true` 参数要求用户确认
 - 审批不通过 exec_command 内的 `/force` hack，REPL 层直接交互
+- 此决策中的执行编排已由 2026-07-22 ToolRuntime/lifecycle 决策取代；`Tool.Check` 仍作为确定性策略输入保留
 
 ### 2026-07-13：事件系统
 - 所有输出通过 EventBus，不再是 `fmt.Fprintf`
@@ -357,17 +370,18 @@ make test         # 运行全部 5 个模块的测试
 ### 2026-07-14：Skill 系统
 - 文件系统存储，frontmatter + markdown 格式
 - 启动时扫描 → system prompt 索引 → LLM 按需 view_skill
-- 无数据库、无权限管理、无版本控制
+- 无数据库、无版本控制；2026-07-22 增加 frontmatter `groups` SessionGroup 可见性过滤
 
 ### 2026-07-14：共享核心模块
 - 提取 `executor`、`security`、`events`、`tools` 到 `half-pi-core`
 - Mind 和 Hand 共同依赖，避免代码重复
 - `executor.Runner` 封装工具查找 + Check + DefaultConfirm + 执行流程
 - 注册表加 `sync.RWMutex`，线程安全
+- Runner 的生产职责已由 2026-07-22 ToolRuntime 决策取代
 
 ### 2026-07-14：Hand 远程执行
 - 基于 gateway-core `wss.Client` 连接 Mind Hub
-- 使用 `executor.Runner{Confirm: nil}` 执行工具（nil → auto-deny 确认操作）
+- 使用 `executor.ToolRuntime` 执行工具，所有安全审批和生命周期 hook 均在统一入口完成
 - RPC/RPCResult 协议：Mind 发 RPC，Hand 执行后回送 RPCResult
 - 配置文件 `~/.half-pi/hand/config.toml`，优先级 CLI > 环境变量 > 文件
 
@@ -459,11 +473,23 @@ make test         # 运行全部 5 个模块的测试
 - `scripts/test-windows.ps1` 已将 gateway protocol/hub/wss 与 Mind dispatcher 纳入多架构编译、原生 race 和 Prebuilt 门禁
 - WinBoat 使用当前源码执行更新后的官方 `scripts/test-windows.ps1 -PrebuiltDir` 通过，11 组原生 race 测试全部 PASS，官方 stderr 为空
 
+### 2026-07-22：统一 Lifecycle、ToolRuntime 与隔离 Reviewer
+- `half-pi-core/lifecycle` 固定 Message/Model/Assistant/Tool/Security/Approval/Chat phase、Meta、Outcome 和 wire contract
+- Hook 分为 Guard、Transformer、Observer、Auditor；Guard 只能单调收紧，Observer 异步有界且不能改变业务事实
+- `executor.ToolRuntime` 成为唯一生产工具入口；freeze 后参数和工具定义不可失配，生产 `SkipChecks` 与远程预审降级路径删除
+- Mind `review` 模式调用独立无工具 AI Reviewer，只接受 allow/require_user；`trust`/`ai_review` 只读兼容并自动迁移为 `review`
+- `confirm: true` 与 `DefaultConfirm` 直接进入用户审批，Reviewer allow 不能覆盖强制审批、deterministic deny 或 Hand deny
+- `ChatTransport` 取代 context 单值 `ChatHooks`；完整 assistant 策略自动缓冲，assistant 持久化和传输事实分离
+- Mind `PreparedExternal` 与 Hand node-local ToolRuntime 保持双重守门，RemoteRun 持久化 trace/span，结果策略可抑制未过滤 progress 外投影
+- `security_decisions` 与 `lifecycle_outbox` 事务提交，可靠 dispatcher/重试/dead-letter/retention 已具备；无正式插件 consumer 时不启动空 dispatcher
+- Skill 使用 frontmatter `groups`、`IndexForGroup`、`GetForGroup` 落实 SessionGroup 可见性
+- 插件 runtime 不在本决策内，后续以 `docs/plugin-architecture.md` 为实施入口
+
 ---
 
 ## 下一步
 
 1. 实现 `/compact` 上下文压缩
-2. 完成 Skill → 工作区集成
+2. 讨论并实现首版插件 runtime
 3. 在发布环境验收 Windows 凭据/config/database ACL
 4. 完成 Windows ConPTY 与 macOS PTY 的全屏 TUI 原生发布验收

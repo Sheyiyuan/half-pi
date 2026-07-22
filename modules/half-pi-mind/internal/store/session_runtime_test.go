@@ -80,3 +80,35 @@ func TestSessionRuntimeMetadataRejectsInvalidMode(t *testing.T) {
 		t.Fatal("missing conversation mode update succeeded")
 	}
 }
+
+func TestSessionRuntimeMetadataCanonicalizesReviewAliases(t *testing.T) {
+	store := newTestStore(t)
+	group, err := store.UpsertGroup("/runtime-mode-alias")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.CreateSession(group.ID, "conversation-review"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetSessionMode("conversation-review", "review"); err != nil {
+		t.Fatal(err)
+	}
+	session, err := store.GetSession("conversation-review")
+	if err != nil || session.Mode != "review" {
+		t.Fatalf("review mode = %+v, err %v", session, err)
+	}
+	if err := store.SetSessionMode("conversation-review", "trust"); err != nil {
+		t.Fatal(err)
+	}
+	session, err = store.GetSession("conversation-review")
+	if err != nil || session.Mode != "review" {
+		t.Fatalf("legacy alias mode = %+v, err %v", session, err)
+	}
+	if err := store.SetSessionMode("conversation-review", "ai_review"); err != nil {
+		t.Fatal(err)
+	}
+	session, err = store.GetSession("conversation-review")
+	if err != nil || session.Mode != "review" {
+		t.Fatalf("ai_review alias mode = %+v, err %v", session, err)
+	}
+}

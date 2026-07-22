@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/observer"
 )
 
 // Run 是一次远程执行的内存状态。
@@ -85,10 +86,10 @@ func (r *Registry) ApplyProgressFrom(handID, connectionID string, msg protocol.R
 
 // Registry 按 run_id 原子管理远程执行状态。
 type Registry struct {
-	mu       sync.Mutex
-	runs     map[string]*Run
-	auditor  Auditor
-	observer func(Run)
+	mu      sync.Mutex
+	runs    map[string]*Run
+	auditor Auditor
+	changes observer.Hub[Run]
 }
 
 const (
@@ -105,11 +106,10 @@ func NewRegistry(auditor ...Auditor) *Registry {
 	return registry
 }
 
-// OnChange 设置 run 状态变化观察者。观察者必须快速返回且不得回调 Registry。
-func (r *Registry) OnChange(observer func(Run)) {
-	r.mu.Lock()
-	r.observer = observer
-	r.mu.Unlock()
+// Subscribe 注册 run 状态变化观察者。
+// 观察者由有界异步队列调用，不会在 Registry 锁内执行。
+func (r *Registry) Subscribe(subscriber func(Run)) func() {
+	return r.changes.Subscribe(subscriber)
 }
 
 // Create 创建 run，初始状态为 created。
@@ -262,7 +262,5 @@ func copyRun(run *Run) Run {
 }
 
 func (r *Registry) notifyLocked(run *Run) {
-	if r.observer != nil {
-		r.observer(copyRun(run))
-	}
+	r.changes.Publish(copyRun(run))
 }

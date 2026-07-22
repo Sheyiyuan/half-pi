@@ -423,5 +423,30 @@ func ValidateConfig(cfg *config.Config) error {
 	if models[cfg.LLM.DefaultModel].Provider != cfg.LLM.DefaultProvider {
 		return errorf("invalid_config", "default model %q does not use default provider %q", cfg.LLM.DefaultModel, cfg.LLM.DefaultProvider)
 	}
+	if cfg.Security.Review.Enabled {
+		review := cfg.Security.Review
+		if review.Model == "" {
+			return errorf("invalid_config", "security.review.model is required when review is enabled")
+		}
+		model, ok := models[review.Model]
+		if !ok {
+			return errorf("invalid_config", "security review model %q is not defined", review.Model)
+		}
+		if review.Provider != "" && review.Provider != model.Provider {
+			return errorf("invalid_config", "security review model %q does not use provider %q", review.Model, review.Provider)
+		}
+		if review.TimeoutMS < 100 || review.TimeoutMS > 30_000 {
+			return errorf("invalid_config", "security.review.timeout_ms must be between 100 and 30000")
+		}
+		if review.MaxTokens < 1 || review.MaxTokens > 4096 {
+			return errorf("invalid_config", "security.review.max_tokens must be between 1 and 4096")
+		}
+		if review.PolicyVersion == "" {
+			return errorf("invalid_config", "security.review.policy_version is required")
+		}
+		if review.Profile == "" {
+			return errorf("invalid_config", "security.review.profile is required")
+		}
+	}
 	return nil
 }

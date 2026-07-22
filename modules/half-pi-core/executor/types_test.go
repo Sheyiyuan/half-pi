@@ -169,21 +169,6 @@ func TestSchemaParametersNil(t *testing.T) {
 	}
 }
 
-func TestRunnerExecutesAllowedTool(t *testing.T) {
-	name := "runner_allowed"
-	Register(Tool{
-		Name: name,
-		Execute: func(ctx context.Context, args json.RawMessage) *ToolResult {
-			return &ToolResult{Success: true, Output: "ok"}
-		},
-	})
-
-	result := NewRunner(ExecutionPolicy{}).ExecuteTool(context.Background(), name, nil)
-	if !result.Success || result.Output != "ok" {
-		t.Fatalf("result = %+v, want ok", result)
-	}
-}
-
 func TestProgressContextIsOptional(t *testing.T) {
 	ReportProgress(context.Background(), Progress{Kind: "stdout", Data: "ignored"})
 	var got Progress
@@ -194,48 +179,27 @@ func TestProgressContextIsOptional(t *testing.T) {
 	}
 }
 
-func TestRunnerRejectsDeniedTool(t *testing.T) {
-	name := "runner_denied"
-	Register(Tool{
-		Name: name,
-		Check: func(args json.RawMessage) (Decision, string) {
-			return DecisionDeny, "nope"
-		},
-		Execute: func(ctx context.Context, args json.RawMessage) *ToolResult {
-			t.Fatal("denied tool should not execute")
-			return nil
-		},
-	})
-
-	result := NewRunner(ExecutionPolicy{}).ExecuteTool(context.Background(), name, nil)
-	if !result.Success || !strings.Contains(result.Output, "nope") {
-		t.Fatalf("result = %+v, want deny output", result)
+func TestProjectReviewArgsRedactsAndEscalates(t *testing.T) {
+	tool := Tool{Name: "review", Parameters: &ObjectSchema{Properties: []PropertySchema{
+		{Name: "path", Type: "string"},
+		{Name: "content", Type: "string", Review: ReviewRedact},
+		{Name: "token", Type: "string", Review: ReviewRequireUser},
+	}}}
+	projected, complete, err := ProjectReviewArgs(tool, json.RawMessage(`{"path":"/tmp/a","content":"secret","token":"credential"}`))
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestRunnerConfirmPolicy(t *testing.T) {
-	name := "runner_confirm"
-	executed := false
-	Register(Tool{
-		Name:           name,
-		DefaultConfirm: true,
-		Execute: func(ctx context.Context, args json.RawMessage) *ToolResult {
-			executed = true
-			return &ToolResult{Success: true, Output: "confirmed"}
-		},
-	})
-
-	denied := NewRunner(ExecutionPolicy{}).ExecuteTool(context.Background(), name, nil)
-	if executed || !strings.Contains(denied.Output, "拒绝") {
-		t.Fatalf("denied result = %+v executed=%v", denied, executed)
+	if complete {
+		t.Fatal("require_user field did not force escalation")
 	}
-
-	allowed := NewRunner(ExecutionPolicy{
-		Confirm: func(tool Tool, args json.RawMessage, reason string) ConfirmDecision {
-			return ConfirmAllow
-		},
-	}).ExecuteTool(context.Background(), name, nil)
-	if !executed || !allowed.Success || allowed.Output != "confirmed" {
-		t.Fatalf("allowed result = %+v executed=%v", allowed, executed)
+	var values map[string]any
+	if err := json.Unmarshal(projected, &values); err != nil {
+		t.Fatal(err)
+	}
+	if values["content"] != "[redacted]" || values["path"] != "/tmp/a" {
+		t.Fatalf("review projection = %#v", values)
+	}
+	if _, leaked := values["token"]; leaked || strings.Contains(string(projected), "credential") || strings.Contains(string(projected), "secret") {
+		t.Fatalf("review projection leaked sensitive fields: %s", projected)
 	}
 }

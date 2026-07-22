@@ -128,6 +128,14 @@ func TestValidateConfig(t *testing.T) {
 	if err := ValidateConfig(valid()); err != nil {
 		t.Fatalf("valid config rejected: %v", err)
 	}
+	reviewEnabled := valid()
+	reviewEnabled.Security.Review = config.SecurityReviewConfig{
+		Enabled: true, Provider: "provider", Model: "model", TimeoutMS: 1500,
+		MaxTokens: 256, PolicyVersion: "v1", Profile: "default",
+	}
+	if err := ValidateConfig(reviewEnabled); err != nil {
+		t.Fatalf("valid security review config rejected: %v", err)
+	}
 	tests := map[string]func(*config.Config){
 		"duplicate provider": func(cfg *config.Config) {
 			cfg.LLM.Providers = append(cfg.LLM.Providers, cfg.LLM.Providers[0])
@@ -151,6 +159,27 @@ func TestValidateConfig(t *testing.T) {
 		"default provider mismatch": func(cfg *config.Config) {
 			cfg.LLM.Providers = append(cfg.LLM.Providers, config.ProviderCfg{Name: "other", Adapter: "openai", BaseURL: "https://example.com/v1"})
 			cfg.LLM.DefaultProvider = "other"
+		},
+		"review missing model": func(cfg *config.Config) {
+			cfg.Security.Review = config.SecurityReviewConfig{Enabled: true, TimeoutMS: 1500, MaxTokens: 256, PolicyVersion: "v1", Profile: "default"}
+		},
+		"review unknown model": func(cfg *config.Config) {
+			cfg.Security.Review = config.SecurityReviewConfig{Enabled: true, Model: "missing", TimeoutMS: 1500, MaxTokens: 256, PolicyVersion: "v1", Profile: "default"}
+		},
+		"review provider mismatch": func(cfg *config.Config) {
+			cfg.Security.Review = config.SecurityReviewConfig{Enabled: true, Provider: "other", Model: "model", TimeoutMS: 1500, MaxTokens: 256, PolicyVersion: "v1", Profile: "default"}
+		},
+		"review timeout": func(cfg *config.Config) {
+			cfg.Security.Review = config.SecurityReviewConfig{Enabled: true, Model: "model", TimeoutMS: 99, MaxTokens: 256, PolicyVersion: "v1", Profile: "default"}
+		},
+		"review max tokens": func(cfg *config.Config) {
+			cfg.Security.Review = config.SecurityReviewConfig{Enabled: true, Model: "model", TimeoutMS: 1500, MaxTokens: 0, PolicyVersion: "v1", Profile: "default"}
+		},
+		"review policy version": func(cfg *config.Config) {
+			cfg.Security.Review = config.SecurityReviewConfig{Enabled: true, Model: "model", TimeoutMS: 1500, MaxTokens: 256, Profile: "default"}
+		},
+		"review profile": func(cfg *config.Config) {
+			cfg.Security.Review = config.SecurityReviewConfig{Enabled: true, Model: "model", TimeoutMS: 1500, MaxTokens: 256, PolicyVersion: "v1"}
 		},
 	}
 	for name, mutate := range tests {

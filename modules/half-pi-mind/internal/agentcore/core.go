@@ -6,12 +6,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
+	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
+	mindlifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/lifecycle"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/observer"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/skill"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
@@ -19,7 +24,9 @@ import (
 // Core 是 agent core 的主体。
 type Core struct {
 	llm               llm.Provider
-	exec              executor.ToolExecutor
+	providerID        string
+	modelID           string
+	exec              toolCatalog
 	history           []llm.Message
 	persistedMessages int
 	persistedSeq      int
@@ -28,22 +35,25 @@ type Core struct {
 	store             *store.Store
 	sessionID         string
 	Debug             bool
-	Mode              string // "normal" | "trust" | "yolo"
+	Mode              string // "strict" | "normal" | "review" | "yolo"（trust/ai_review 为兼容别名）
 	approver          Approver
-	autoAllow         map[string]bool // 本会话自动放行的工具
-	autoDeny          map[string]bool // 本会话自动拒绝的工具
-	activeHand        string          // 当前会话的默认 Hand ID
+	activeHand        string // 当前会话的默认 Hand ID
+	groupID           string
 	chatMu            sync.Mutex
 	stateMu           sync.RWMutex
 	policy            *security.Policy
-	sessionChanged    func()
+	lifecycle         *corelifecycle.LifecycleRegistry
+	authorizer        *mindlifecycle.MindAuthorizer
+	toolRuntime       *executor.ToolRuntime
+	sessionChanges    observer.Hub[struct{}]
 }
 
-// SetSessionChangeObserver 设置持久化 conversation 状态变化回调。
-func (c *Core) SetSessionChangeObserver(observer func()) {
-	c.stateMu.Lock()
-	c.sessionChanged = observer
-	c.stateMu.Unlock()
+// SubscribeSessionChanges 注册持久化 conversation 状态变化观察者。
+func (c *Core) SubscribeSessionChanges(subscriber func()) func() {
+	if subscriber == nil {
+		return func() {}
+	}
+	return c.sessionChanges.Subscribe(func(struct{}) { subscriber() })
 }
 
 // Approver 通过 conversation 级审批对象处理用户确认。
@@ -53,15 +63,28 @@ type Approver interface {
 
 const maxToolCallSteps = 10
 
-func New(llmProvider llm.Provider, exec executor.ToolExecutor) (*Core, error) {
-	return &Core{
-		llm:       llmProvider,
-		exec:      exec,
-		Mode:      "normal",
-		autoAllow: make(map[string]bool),
-		autoDeny:  make(map[string]bool),
-		policy:    security.New(),
-	}, nil
+type toolCatalog interface {
+	Tools() []executor.Tool
+}
+
+func New(llmProvider llm.Provider, exec toolCatalog) (*Core, error) {
+	policy := security.New()
+	registry := corelifecycle.NewRegistry()
+	authorizer := mindlifecycle.NewMindAuthorizer("normal", policy, nil)
+	core := &Core{
+		llm:        llmProvider,
+		exec:       exec,
+		Mode:       "normal",
+		policy:     policy,
+		lifecycle:  registry,
+		authorizer: authorizer,
+	}
+	if err := core.installLifecycleRegistry(registry); err != nil {
+		return nil, err
+	}
+	core.toolRuntime = executor.NewToolRuntime(authorizer, registry)
+	authorizer.SetReviewObserver(core.observeSecurityReview)
+	return core, nil
 }
 
 // SetMode 切换并持久化安全模式，同时在对话历史中记录。
@@ -69,6 +92,7 @@ func (c *Core) SetMode(mode string) error {
 	if !validSecurityMode(mode) {
 		return fmt.Errorf("invalid security mode %q", mode)
 	}
+	mode = canonicalSecurityMode(mode)
 	c.chatMu.Lock()
 	defer c.chatMu.Unlock()
 	c.stateMu.RLock()
@@ -82,7 +106,9 @@ func (c *Core) SetMode(mode string) error {
 	c.stateMu.Lock()
 	c.Mode = mode
 	c.policy.Mode = modeToSecurityMode(mode)
+	policy := c.policy.Clone()
 	c.stateMu.Unlock()
+	c.authorizer.SetMode(mode, policy)
 	c.history = append(c.history, llm.Message{
 		Role:    llm.RoleSystem,
 		Content: fmt.Sprintf("安全模式已切换为: %s", mode),
@@ -92,19 +118,14 @@ func (c *Core) SetMode(mode string) error {
 }
 
 func (c *Core) notifySessionChanged() {
-	c.stateMu.RLock()
-	observer := c.sessionChanged
-	c.stateMu.RUnlock()
-	if observer != nil {
-		observer()
-	}
+	c.sessionChanges.Publish(struct{}{})
 }
 
 func modeToSecurityMode(mode string) security.Mode {
-	switch mode {
+	switch canonicalSecurityMode(mode) {
 	case "strict":
 		return security.ModeStrict
-	case "trust":
+	case "review":
 		return security.ModeTrust
 	case "yolo":
 		return security.ModeYOLO
@@ -113,9 +134,18 @@ func modeToSecurityMode(mode string) security.Mode {
 	}
 }
 
+func canonicalSecurityMode(mode string) string {
+	switch mode {
+	case "trust", "ai_review":
+		return "review"
+	default:
+		return mode
+	}
+}
+
 func validSecurityMode(mode string) bool {
 	switch mode {
-	case "strict", "normal", "trust", "yolo":
+	case "strict", "normal", "review", "ai_review", "trust", "yolo":
 		return true
 	default:
 		return false
@@ -136,6 +166,66 @@ func (c *Core) SetApprover(a Approver) {
 	c.stateMu.Lock()
 	c.approver = a
 	c.stateMu.Unlock()
+	c.authorizer.SetApprover(a)
+}
+
+// SetReviewer 设置与会话模型隔离的安全 Reviewer。
+func (c *Core) SetReviewer(reviewer mindlifecycle.Reviewer) {
+	c.authorizer.SetReviewer(reviewer)
+}
+
+// SetModelIdentity 设置只用于脱敏生命周期和审计关联的 provider/model 标识。
+func (c *Core) SetModelIdentity(providerID, modelID string) {
+	c.stateMu.Lock()
+	c.providerID = providerID
+	c.modelID = modelID
+	c.stateMu.Unlock()
+}
+
+// SetLifecycleRegistry 替换会话生命周期注册表、安装内置 Transformer 并重建 ToolRuntime。
+func (c *Core) SetLifecycleRegistry(registry *corelifecycle.LifecycleRegistry) error {
+	if registry == nil {
+		registry = corelifecycle.NewRegistry()
+	}
+	c.stateMu.RLock()
+	current := c.lifecycle
+	c.stateMu.RUnlock()
+	if current == registry {
+		return nil
+	}
+	if err := c.installLifecycleRegistry(registry); err != nil {
+		return err
+	}
+	c.stateMu.Lock()
+	c.lifecycle = registry
+	c.toolRuntime = executor.NewToolRuntime(c.authorizer, registry)
+	c.stateMu.Unlock()
+	if current != nil {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = current.CloseObservers(closeCtx)
+		cancel()
+	}
+	return nil
+}
+
+// CloseLifecycle 排空并停止当前会话的生命周期 Observer worker。
+func (c *Core) CloseLifecycle(ctx context.Context) error {
+	c.stateMu.RLock()
+	registry := c.lifecycle
+	c.stateMu.RUnlock()
+	if registry == nil {
+		return nil
+	}
+	return registry.CloseObservers(ctx)
+}
+
+func (c *Core) installLifecycleRegistry(registry *corelifecycle.LifecycleRegistry) error {
+	return registry.RegisterTransformer(corelifecycle.Registration{
+		ID: "builtin.agentcore-model-context", Kind: corelifecycle.KindTransformer,
+		Phases: []corelifecycle.Phase{corelifecycle.PhaseModelBeforeRequest}, Order: -1000,
+		FailureMode:  corelifecycle.FailureFailClosed,
+		Capabilities: []corelifecycle.Capability{corelifecycle.CapabilityTransform},
+	}, coreModelContextTransformer{core: c})
 }
 
 func (c *Core) SetSkills(s *skill.Store) {
@@ -158,6 +248,12 @@ func (c *Core) SetStore(s *store.Store, sessionID string) error {
 	if !validSecurityMode(session.Mode) {
 		return fmt.Errorf("session %q has invalid mode %q", sessionID, session.Mode)
 	}
+	mode := canonicalSecurityMode(session.Mode)
+	if mode != session.Mode {
+		if err := s.SetSessionMode(sessionID, mode); err != nil {
+			return fmt.Errorf("migrate session security mode: %w", err)
+		}
+	}
 	msgs, err := s.GetMessages(sessionID)
 	if err != nil {
 		return fmt.Errorf("load session: %w", err)
@@ -166,8 +262,10 @@ func (c *Core) SetStore(s *store.Store, sessionID string) error {
 	defer c.stateMu.Unlock()
 	c.store = s
 	c.sessionID = sessionID
-	c.Mode = session.Mode
-	c.policy.Mode = modeToSecurityMode(session.Mode)
+	c.Mode = mode
+	c.policy.Mode = modeToSecurityMode(mode)
+	policy := c.policy.Clone()
+	c.groupID = session.GroupID
 	c.activeHand = session.ActiveHand
 	c.history = storeMsgToLLM(msgs)
 	c.persistedMessages = len(msgs)
@@ -176,6 +274,7 @@ func (c *Core) SetStore(s *store.Store, sessionID string) error {
 	} else {
 		c.persistedSeq = 0
 	}
+	c.authorizer.SetMode(mode, policy)
 	return nil
 }
 
@@ -202,10 +301,54 @@ func (c *Core) ToggleDebug() bool {
 
 // ExecuteTool 通过当前会话执行器调用工具，供非 LLM 入口复用。
 func (c *Core) ExecuteTool(ctx context.Context, name string, args json.RawMessage) *executor.ToolResult {
-	if blocked, reason := c.CheckAndConfirm(ctx, name, args, false); blocked {
-		return &executor.ToolResult{Error: fmt.Sprintf("操作被拒绝: %s", reason)}
+	return c.executeTool(ctx, name, args, false, "")
+}
+
+type toolContextPreparer interface {
+	PrepareToolContext(context.Context) context.Context
+}
+
+func (c *Core) executeTool(ctx context.Context, name string, args json.RawMessage, forceApproval bool, purpose string) *executor.ToolResult {
+	return c.executeToolWithMeta(ctx, name, args, forceApproval, purpose, corelifecycle.Meta{})
+}
+
+func (c *Core) executeToolWithMeta(ctx context.Context, name string, args json.RawMessage, forceApproval bool, purpose string, meta corelifecycle.Meta) *executor.ToolResult {
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	return c.exec.ExecuteTool(ctx, name, args)
+	if preparer, ok := c.exec.(toolContextPreparer); ok {
+		ctx = preparer.PrepareToolContext(ctx)
+	}
+	c.stateMu.RLock()
+	runtime := c.toolRuntime
+	sessionID, groupID := c.sessionID, c.groupID
+	c.stateMu.RUnlock()
+	if meta.TraceID == "" {
+		meta = corelifecycle.NewMeta(corelifecycle.SourceMind).
+			WithConversation(sessionID).
+			WithGroup(groupID).
+			WithRequest(requestctx.RequestID(ctx)).
+			WithNode("mind")
+	}
+	result := runtime.Execute(ctx, executor.Invocation{
+		Meta: meta, Tool: name, Args: args, ForceUserApproval: forceApproval, Purpose: purpose,
+	})
+	toolResult := &executor.ToolResult{Data: result.Data}
+	if result.ExecutionOutcome == executor.ExecutionSucceeded && result.DeliveryOutcome == corelifecycle.OutcomeSucceeded {
+		toolResult.Success = true
+		toolResult.Output = result.Output
+		return toolResult
+	}
+	if result.DeliveryOutcome == corelifecycle.OutcomeDenied {
+		toolResult.Output = result.Output
+		toolResult.Error = result.Output
+		return toolResult
+	}
+	toolResult.Error = result.Output
+	if toolResult.Error == "" {
+		toolResult.Error = result.ErrorCode
+	}
+	return toolResult
 }
 
 func truncate(s string) string {

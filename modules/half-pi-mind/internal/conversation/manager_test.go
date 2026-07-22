@@ -44,6 +44,7 @@ func newTestManager(t *testing.T) (*Manager, *store.Store) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		_ = manager.Close(context.Background())
 		_ = approvals.Close()
 		_ = authority.Close()
 		_ = db.Close()
@@ -83,6 +84,7 @@ func TestManagerCreateAndRestoreConversationState(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
+		_ = second.Close(context.Background())
 		_ = secondApprovals.Close()
 		_ = secondAuthority.Close()
 	})
@@ -90,7 +92,7 @@ func TestManagerCreateAndRestoreConversationState(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if restored.Core().SecurityMode() != "trust" || restored.Core().ActiveHand() != "hand-a" {
+	if restored.Core().SecurityMode() != "review" || restored.Core().ActiveHand() != "hand-a" {
 		t.Fatalf("restored state = mode %q, hand %q", restored.Core().SecurityMode(), restored.Core().ActiveHand())
 	}
 	messages, err := db.GetMessages(id)
@@ -98,7 +100,7 @@ func TestManagerCreateAndRestoreConversationState(t *testing.T) {
 		t.Fatalf("restored messages = %+v, err %v", messages, err)
 	}
 	session, err := db.GetSession(id)
-	if err != nil || session.Name != "restored" || session.Mode != "trust" || session.ActiveHand != "hand-a" || session.UpdatedAt.IsZero() {
+	if err != nil || session.Name != "restored" || session.Mode != "review" || session.ActiveHand != "hand-a" || session.UpdatedAt.IsZero() {
 		t.Fatalf("session metadata = %+v, err %v", session, err)
 	}
 }
@@ -139,5 +141,20 @@ func TestManagerRejectsMissingConversation(t *testing.T) {
 	manager, _ := newTestManager(t)
 	if _, err := manager.Get("missing"); err != ErrNotFound {
 		t.Fatalf("Get missing error = %v", err)
+	}
+}
+
+func TestManagerCloseLifecycleIsIdempotent(t *testing.T) {
+	manager, _ := newTestManager(t)
+	if _, err := manager.Create("close"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := manager.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Close(ctx); err != nil {
+		t.Fatal(err)
 	}
 }

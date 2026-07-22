@@ -59,7 +59,9 @@ func (s *Store) UpdateSessionName(id, name string) error {
 // SetSessionMode 更新 conversation 安全模式。
 func (s *Store) SetSessionMode(id, mode string) error {
 	switch mode {
-	case "strict", "normal", "trust", "yolo":
+	case "trust", "ai_review":
+		mode = "review"
+	case "strict", "normal", "review", "yolo":
 	default:
 		return fmt.Errorf("invalid session mode %q", mode)
 	}

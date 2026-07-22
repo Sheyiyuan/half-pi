@@ -87,6 +87,15 @@ log_dir = ""
 default_provider = "deepseek"
 default_model = "ds-v4-flash"
 
+[security.review]
+enabled = false
+provider = ""
+model = ""
+timeout_ms = 1500
+max_tokens = 256
+policy_version = "v1"
+profile = "default"
+
   # ── Provider 定义 ──
   # name    内部标识
   # base_url  API 地址

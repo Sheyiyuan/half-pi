@@ -43,8 +43,9 @@ func (g *Gateway) runChat(record *requestRecord, actor *conversation.Actor, cont
 	requestID := record.key.requestID
 	stream := newChatStreamWriter(g, record)
 	ctx := requestctx.WithRequestID(record.ctx, requestID)
-	ctx = agentcore.WithChatHooks(ctx, agentcore.ChatHooks{
-		RequestID:         requestID,
+	ctx = requestctx.WithPrincipalID(ctx, record.key.identityID)
+	ctx = requestctx.WithSource(ctx, "face")
+	transport := agentcore.ChatTransport{
 		TextDelta:         stream.Write,
 		ResponseCompleted: stream.Complete,
 		ToolCalled: func(call agentcore.ChatToolCall) {
@@ -59,8 +60,8 @@ func (g *Gateway) runChat(record *requestRecord, actor *conversation.Actor, cont
 					RequestID: requestID, Tool: result.Tool, Success: result.Success,
 				})
 		},
-	})
-	reply, err := actor.Core().Chat(ctx, content)
+	}
+	reply, err := actor.Core().ChatWithTransport(ctx, content, transport)
 	if closeErr := stream.Close(); err == nil && closeErr != nil {
 		err = closeErr
 	}

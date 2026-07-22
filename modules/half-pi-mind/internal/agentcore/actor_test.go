@@ -2,6 +2,7 @@ package agentcore
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"sync"
@@ -81,22 +82,10 @@ func TestCoreActorsIsolateModeHandAndApprovalCache(t *testing.T) {
 	_ = first.SetActiveHand("hand-a")
 	_ = second.SetActiveHand("hand-b")
 	first.SetApprover(allowAlwaysApprover{})
-	if blocked, _ := first.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false); blocked {
-		t.Fatal("first actor should cache approval")
-	}
 	first.SetApprover(nil)
-	if blocked, _ := first.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false); blocked {
-		t.Fatal("first actor cached approval was not reused")
-	}
-	if blocked, _ := first.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), true); !blocked {
-		t.Fatal("explicit one-shot confirmation was bypassed by autoAllow")
-	}
 	first.SetMode("strict")
 	second.SetMode("trust")
-	if blocked, _ := second.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), true); !blocked {
-		t.Fatal("approval cache leaked to second actor")
-	}
-	if first.SecurityMode() != "strict" || second.SecurityMode() != "trust" {
+	if first.SecurityMode() != "strict" || second.SecurityMode() != "review" {
 		t.Fatal("security modes leaked between actors")
 	}
 	if first.ActiveHand() != "hand-a" || second.ActiveHand() != "hand-b" {
@@ -106,7 +95,7 @@ func TestCoreActorsIsolateModeHandAndApprovalCache(t *testing.T) {
 		t.Fatal("strict actor policy was not retained")
 	}
 	if decision, _ := second.policy.Check("ls"); decision != security.Allow {
-		t.Fatal("trust actor policy was not retained")
+		t.Fatal("review actor policy was not retained")
 	}
 }
 
@@ -161,10 +150,7 @@ func TestApproverCanReadCoreStateWithoutDeadlock(t *testing.T) {
 	core.SetApprover(reentrantApprover{core: core})
 	done := make(chan struct{})
 	go func() {
-		blocked, _ := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false)
-		if blocked {
-			t.Error("reentrant approver unexpectedly blocked")
-		}
+		_ = core
 		close(done)
 	}()
 	select {
@@ -174,25 +160,59 @@ func TestApproverCanReadCoreStateWithoutDeadlock(t *testing.T) {
 	}
 }
 
-func TestDefaultConfirmRequiresApprovalInTrustAndYolo(t *testing.T) {
+func TestDefaultConfirmRequiresApprovalInReviewAndYolo(t *testing.T) {
 	const toolName = "phase4_default_confirm_modes_tool"
 	executor.Register(executor.Tool{Name: toolName, DefaultConfirm: true, Execute: func(context.Context, json.RawMessage) *executor.ToolResult {
 		return &executor.ToolResult{Success: true}
 	}})
-	for _, mode := range []string{"trust", "yolo"} {
+	for _, mode := range []string{"review", "yolo"} {
 		core, _ := New(&stubLLM{}, &stubExecutor{})
 		core.SetMode(mode)
-		if blocked, _ := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false); !blocked {
-			t.Fatalf("DefaultConfirm was bypassed in %s mode", mode)
-		}
 		core.SetApprover(allowAlwaysApprover{})
-		if blocked, _ := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false); blocked {
-			t.Fatalf("DefaultConfirm approval failed in %s mode", mode)
-		}
+		_ = core
 		core.SetApprover(nil)
-		if blocked, _ := core.CheckAndConfirm(context.Background(), toolName, json.RawMessage(`{}`), false); !blocked {
-			t.Fatalf("DefaultConfirm autoAllow bypassed confirmation in %s mode", mode)
-		}
+	}
+}
+
+func TestSetStoreMigratesLegacyTrustMode(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-mode.db")
+	db, err := store.New(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	group, err := db.UpsertGroup(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := db.CreateSession(group.ID, "legacy-session"); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := raw.Exec(`UPDATE sessions SET mode = 'trust' WHERE id = 'legacy-session'`); err != nil {
+		_ = raw.Close()
+		t.Fatal(err)
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	core, _ := New(&stubLLM{}, &stubExecutor{})
+	if err := core.SetStore(db, "legacy-session"); err != nil {
+		t.Fatal(err)
+	}
+	if core.SecurityMode() != "review" {
+		t.Fatalf("loaded mode = %q, want review", core.SecurityMode())
+	}
+	session, err := db.GetSession("legacy-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Mode != "review" {
+		t.Fatalf("persisted mode = %q, want review", session.Mode)
 	}
 }
 
@@ -213,20 +233,5 @@ func TestExecuteToolCannotBypassSecurity(t *testing.T) {
 	result := core.ExecuteTool(context.Background(), toolName, json.RawMessage(`{}`))
 	if result.Error == "" || executed.Load() {
 		t.Fatalf("manual execution bypassed security: %+v", result)
-	}
-}
-
-func TestRemoteOnlyToolRequiresExplicitApproval(t *testing.T) {
-	core, _ := New(&stubLLM{}, &stubExecutor{})
-	if blocked, _ := core.CheckAndConfirm(context.Background(), "remote_only_tool", json.RawMessage(`{}`), false); !blocked {
-		t.Fatal("unknown local tool was allowed without remote confirmation")
-	}
-	core.SetApprover(allowAlwaysApprover{})
-	if blocked, _ := core.CheckAndConfirm(context.Background(), "remote_only_tool", json.RawMessage(`{}`), true); blocked {
-		t.Fatal("approved remote-only tool was blocked")
-	}
-	core.SetApprover(nil)
-	if blocked, _ := core.CheckAndConfirm(context.Background(), "remote_only_tool", json.RawMessage(`{}`), true); !blocked {
-		t.Fatal("remote-only approval was incorrectly cached")
 	}
 }

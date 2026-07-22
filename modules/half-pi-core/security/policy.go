@@ -23,6 +23,15 @@ type Policy struct {
 	whitelist []rule
 }
 
+// RiskClass 是与安全模式无关的确定性风险分类。
+type RiskClass string
+
+const (
+	RiskSafe      RiskClass = "safe"
+	RiskSensitive RiskClass = "sensitive"
+	RiskForbidden RiskClass = "forbidden"
+)
+
 // rule 是一条黑白名单规则。
 type rule struct {
 	pattern string // 匹配模式
@@ -52,6 +61,43 @@ func New() *Policy {
 	}
 }
 
+// Clone 返回可独立修改 mode 的策略副本。
+func (p *Policy) Clone() *Policy {
+	if p == nil {
+		return New()
+	}
+	clone := *p
+	clone.blacklist = append([]rule(nil), p.blacklist...)
+	clone.whitelist = append([]rule(nil), p.whitelist...)
+	return &clone
+}
+
+// WithMode 返回使用指定模式的策略副本。
+func (p *Policy) WithMode(mode Mode) *Policy {
+	clone := p.Clone()
+	clone.Mode = mode
+	return clone
+}
+
+// Classify 仅做确定性风险分类，不执行 mode routing。
+func (p *Policy) Classify(cmd string) (RiskClass, string) {
+	if p == nil {
+		p = New()
+	}
+	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
+	for _, r := range p.blacklist {
+		if strings.Contains(cmdLower, r.pattern) {
+			return RiskForbidden, r.desc
+		}
+	}
+	for _, r := range sensitiveRules {
+		if strings.Contains(cmdLower, r.pattern) {
+			return RiskSensitive, r.desc
+		}
+	}
+	return RiskSafe, ""
+}
+
 // Decision 是安全检查的结果。
 type Decision int
 
@@ -65,11 +111,9 @@ const (
 func (p *Policy) Check(cmd string) (Decision, string) {
 	cmdLower := strings.ToLower(strings.TrimSpace(cmd))
 
-	// 黑名单：直接拒绝
-	for _, r := range p.blacklist {
-		if strings.Contains(cmdLower, r.pattern) {
-			return Deny, r.desc
-		}
+	risk, riskReason := p.Classify(cmdLower)
+	if risk == RiskForbidden {
+		return Deny, riskReason
 	}
 
 	switch p.Mode {
@@ -86,35 +130,33 @@ func (p *Policy) Check(cmd string) (Decision, string) {
 		return Allow, ""
 
 	case ModeTrust:
-		// Trust 模式 AI 自行判断，全放行但记录
+		// Reviewer routing 由 Mind Authorizer 处理；Policy 只保留硬拒绝。
 		return Allow, ""
 
 	default: // ModeNormal
-		// 普通模式包含写入、删除、网络等敏感操作需审批
-		sensitive := []rule{
-			{pattern: "rm ", desc: "删除操作"},
-			{pattern: "mv ", desc: "移动/重命名"},
-			{pattern: "> ", desc: "输出重定向到文件"},
-			{pattern: ">>", desc: "追加到文件"},
-			{pattern: "dd ", desc: "磁盘操作"},
-			{pattern: "sudo ", desc: "提权操作"},
-			{pattern: "apt ", desc: "包管理操作"},
-			{pattern: "apt-get", desc: "包管理操作"},
-			{pattern: "pip ", desc: "安装依赖"},
-			{pattern: "npm ", desc: "安装依赖"},
-			{pattern: "chmod", desc: "修改权限"},
-			{pattern: "chown", desc: "修改所有者"},
-			{pattern: "kill ", desc: "终止进程"},
-			{pattern: "systemctl", desc: "系统服务管理"},
-			{pattern: "docker ", desc: "容器操作"},
-		}
-		for _, r := range sensitive {
-			if strings.Contains(cmdLower, r.pattern) {
-				return NeedApproval, r.desc
-			}
+		if risk == RiskSensitive {
+			return NeedApproval, riskReason
 		}
 		return Allow, ""
 	}
+}
+
+var sensitiveRules = []rule{
+	{pattern: "rm ", desc: "删除操作"},
+	{pattern: "mv ", desc: "移动/重命名"},
+	{pattern: "> ", desc: "输出重定向到文件"},
+	{pattern: ">>", desc: "追加到文件"},
+	{pattern: "dd ", desc: "磁盘操作"},
+	{pattern: "sudo ", desc: "提权操作"},
+	{pattern: "apt ", desc: "包管理操作"},
+	{pattern: "apt-get", desc: "包管理操作"},
+	{pattern: "pip ", desc: "安装依赖"},
+	{pattern: "npm ", desc: "安装依赖"},
+	{pattern: "chmod", desc: "修改权限"},
+	{pattern: "chown", desc: "修改所有者"},
+	{pattern: "kill ", desc: "终止进程"},
+	{pattern: "systemctl", desc: "系统服务管理"},
+	{pattern: "docker ", desc: "容器操作"},
 }
 
 // ── 全局默认策略 ──

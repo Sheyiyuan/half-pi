@@ -104,18 +104,19 @@ sent
 
 ## 审批证明
 
-`SkipChecks` 应替换为结构化审批证明。它表达“Mind 已经完成了哪些审批”，不表达“Hand 可以跳过所有检查”。
+`SkipChecks` 已被结构化审批证明替换。它表达“Mind 已经完成了哪些审批”，不表达“Hand 可以跳过所有检查”。Mind 与 Hand 现在分别使用自己的 ToolRuntime/Authorizer。
 
 ```go
 type Approval struct {
 	Approved   bool      `json:"approved"`
 	Source     string    `json:"source"` // user, policy, auto_allow, mode
-	Mode       string    `json:"mode"`   // strict, normal, trust, yolo
+	Mode       string    `json:"mode"`   // strict, normal, review, yolo
 	Approver   string    `json:"approver,omitempty"`
 	Reason     string    `json:"reason,omitempty"`
 	OneShot    bool      `json:"one_shot"`
 	ArgsDigest string    `json:"args_digest"`
-	ApprovedAt time.Time `json:"approved_at"`
+	ApprovedAt int64     `json:"approved_at"` // Unix 毫秒
+	ExpiresAt  int64     `json:"expires_at"`  // Unix 毫秒
 }
 ```
 
@@ -241,17 +242,19 @@ type RPCCancelResult struct {
 use_hand.Execute()
   1. 解析 hand_id：参数指定 || session activeHand
   2. 校验 Hand 在线
-  3. 对目标 tool 做 Mind 侧 CheckTool
-  4. 如需确认，走 Approver
-  5. 生成 ArgsDigest 和 Approval
-  6. 创建 RemoteRun，状态 created / approved
-  7. 注册 pendingRuns[runID]
-  8. 发送 RPC{RunID, Tool, Args, TimeoutMs, Approval}
-  9. 状态改为 sent
- 10. 等待 terminal 状态
+  3. 分配 run_id，构造真实远程 Invocation
+  4. ToolRuntime.PrepareExternal：transform、schema、freeze
+  5. 对最终 RPC contract 计算 run/Hand/tool/args/background digest
+  6. Mind Authorizer：deterministic policy -> Reviewer 或用户审批
+  7. admission audit 提交后创建 RemoteRun，状态 created / approved
+  8. 发送 RPC{RunID, Tool, Args, DeadlineAt, Approval}
+  9. 状态改为 sent，等待 terminal 状态
+ 10. rpc_progress 进入 run audit 和 lifecycle projection policy
  11. 本地 context 取消或 timeout 时发送 rpc_cancel
- 12. 返回结构化结果给 LLM
+ 12. PreparedExternal.Complete 过滤并审计终态，返回结构化结果给 LLM
 ```
+
+旧 `RemoteBridge.CheckAndConfirm` 降级执行分支已删除。远程调用必须提供 `PrepareRemote`，因此新入口不能退回“先检查、后直接发送”的两步约定。Hand 收到 RPC 后再次通过 node-local ToolRuntime 完成工具存在性、allow/deny、`Tool.Check`、审批证明和 deadline 校验；Mind allow 不能覆盖 Hand deny。
 
 Mind 接收 Hand 消息：
 
@@ -429,11 +432,11 @@ Mind 返回给 LLM 的结果也应包含来源信息：
 }
 ```
 
-## 与现有 MVP 的迁移
+## 从 MVP 的迁移记录
 
 第一阶段保持用户可见行为不变：`use_hand` 仍阻塞直到终态，再把结果返回给 LLM。
 
-内部迁移顺序：
+以下内部迁移已经完成：
 
 1. 在 `gateway-core/protocol` 增加新消息结构。
 2. 将 `RPC.ID` 直接替换为 `RunID`。
@@ -444,7 +447,7 @@ Mind 返回给 LLM 的结果也应包含来源信息：
 7. 增加 SQLite 审计表。
 8. 再接入进度流和后台任务。
 
-## 测试计划
+## 测试覆盖
 
 协议测试：
 
@@ -474,7 +477,7 @@ Race 测试：
 - Hub result 与 session 切换同时发生。
 - cancel 与 result 竞争到达时只产生一个终态。
 
-## 建议优先级
+## 已完成优先级
 
 1. 审批语义：`SkipChecks` → `Approval`。
 2. RemoteRun 状态机和 run registry。
@@ -484,4 +487,4 @@ Race 测试：
 6. 进度流。
 7. 后台任务模式。
 
-这个顺序能先关闭最关键的安全和生命周期缺口，再逐步增强用户体验。
+这些阶段均已完成；后续远程执行改动必须继续复用 ToolRuntime、Approval proof、Authority 和现有状态机，不能重新引入 `SkipChecks` 或预审降级路径。
