@@ -38,7 +38,7 @@ func (r *Repl) handleCommand(input string) bool {
 		mode := strings.TrimSpace(strings.TrimPrefix(input, "/mode "))
 		switch mode {
 		case "strict", "normal", "review", "trust", "ai_review", "yolo":
-			if err := r.core.SetMode(mode); err != nil {
+			if err := r.actor.SetMode(mode); err != nil {
 				r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("switch mode: %v", err))
 			} else {
 				r.emit(events.LevelInfo, events.TypeModeChange, fmt.Sprintf("mode switched to: %s", r.core.SecurityMode()))
@@ -179,7 +179,7 @@ func (r *Repl) handleSessionSwitch(targetPrefix string) {
 		return
 	}
 	targetID := sessions[0].ID
-	if err := r.core.SaveSession(); err != nil {
+	if err := r.actor.SaveSession(); err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("save session: %v", err))
 	}
 	actor, err := r.switchActor(targetID)

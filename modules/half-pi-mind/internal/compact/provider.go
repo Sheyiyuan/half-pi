@@ -230,6 +230,11 @@ func buildProviderMessages(messages []store.Message, active *store.ContextSummar
 	return result, nil
 }
 
+// BuildProviderMessages 构造只包含单个活动摘要和原始后缀的 provider 视图。
+func BuildProviderMessages(messages []store.Message, active *store.ContextSummary) ([]llm.Message, error) {
+	return buildProviderMessages(messages, active)
+}
+
 func validateActiveSummary(snapshot store.CompactSnapshot) (*store.ContextSummary, ErrorCode) {
 	if snapshot.Runtime.ActiveSummaryID == "" {
 		return nil, ""
@@ -252,6 +257,11 @@ func validateActiveSummary(snapshot store.CompactSnapshot) (*store.ContextSummar
 	}
 	copy := *active
 	return &copy, ""
+}
+
+// ValidateActiveSummary 验证活动摘要；失败时返回完整原始历史应使用的 degraded 分类。
+func ValidateActiveSummary(snapshot store.CompactSnapshot) (*store.ContextSummary, ErrorCode) {
+	return validateActiveSummary(snapshot)
 }
 
 func encodeJSONNoHTML(value any) (string, error) {

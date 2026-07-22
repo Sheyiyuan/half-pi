@@ -81,12 +81,12 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 		return CompactResult{}, e.fail(ctx, request, startedAt, rangePlan{}, compactError(ErrInternal, err))
 	}
 	active, degradedReason := validateActiveSummary(snapshot)
-	currentRequest, err := e.mainRequest(snapshot.Messages, active, environment)
+	currentRequest, err := e.mainRequest(ctx, snapshot.Messages, active, environment)
 	if err != nil {
 		return CompactResult{}, e.fail(ctx, request, startedAt, rangePlan{}, compactError(ErrInternal, err))
 	}
 	beforeTokens := e.estimator.EstimateRequest(currentRequest)
-	evaluator := e.candidateEvaluator(snapshot, active, request, environment)
+	evaluator := e.candidateEvaluator(ctx, snapshot, active, request, environment)
 	activeToSeq := 0
 	if active != nil {
 		activeToSeq = active.ToSeq
@@ -153,7 +153,7 @@ func (e *Engine) Compact(ctx context.Context, request CompactRequest) (CompactRe
 		candidate.InputTokens, candidate.OutputTokens = int64(usage.InputTokens), int64(usage.OutputTokens)
 	}
 
-	afterTokens, err := e.estimateCandidateRequest(snapshot.Messages, candidate, environment)
+	afterTokens, err := e.estimateCandidateRequest(ctx, snapshot.Messages, candidate, environment)
 	if err != nil {
 		return CompactResult{}, e.fail(ctx, request, startedAt, plan, compactError(ErrInvalidResponse, err))
 	}
@@ -212,7 +212,7 @@ func (e *Engine) Status(ctx context.Context, request CompactStatusRequest) (Comp
 		return CompactStatus{}, compactError(ErrInternal, err)
 	}
 	active, degradedReason := validateActiveSummary(snapshot)
-	view, err := e.mainRequest(snapshot.Messages, active, environment)
+	view, err := e.mainRequest(ctx, snapshot.Messages, active, environment)
 	if err != nil {
 		return CompactStatus{}, compactError(ErrInternal, err)
 	}
@@ -274,7 +274,7 @@ func (e *Engine) Status(ctx context.Context, request CompactStatusRequest) (Comp
 				DefaultTargetTokens: e.cfg.LowTarget(), InputBudget: e.cfg.InputBudget(),
 				HighWatermark: e.cfg.HighWatermark, Protection: protection,
 				ActiveRequestID: environment.ActiveRequestID,
-				Evaluate:        e.candidateEvaluator(snapshot, active, CompactRequest{Target: DefaultTarget{}}, environment),
+				Evaluate:        e.candidateEvaluator(ctx, snapshot, active, CompactRequest{Target: DefaultTarget{}}, environment),
 			})
 			status.RequiredSummaryInputEstimatedTokens = plan.RequiredSummaryInput
 			status.CandidateGenerationMode = plan.Cost.GenerationMode
@@ -289,7 +289,33 @@ func (e *Engine) Status(ctx context.Context, request CompactStatusRequest) (Comp
 	return status, nil
 }
 
-func (e *Engine) candidateEvaluator(snapshot store.CompactSnapshot, active *store.ContextSummary, request CompactRequest, environment EnvironmentSnapshot) candidateEvaluator {
+// EnsureAutomaticPending 原子建立 durable 自动压缩需求；重复调用只合并。
+func (e *Engine) EnsureAutomaticPending(ctx context.Context, sessionID string) (store.CompactPendingResult, error) {
+	if sessionID == "" || !e.cfg.Enabled || !e.cfg.Automatic || e.cfg.MainContextWindow == 0 {
+		return store.CompactPendingResult{}, compactError(ErrUnavailable, nil)
+	}
+	pendingID := newUUIDv7()
+	return e.store.EnsureCompactPending(ctx, sessionID, pendingID,
+		newLifecycleEventWithTrace("compact.requested", sessionID, pendingID,
+			compactRequestedPayload{Trigger: TriggerAutomatic}))
+}
+
+// NewAutomaticPendingMutation 构造可与工具消息批次同事务提交的 durable pending 身份和事件。
+func NewAutomaticPendingMutation(sessionID string) (string, store.LifecycleEvent) {
+	pendingID := newUUIDv7()
+	return pendingID, newLifecycleEventWithTrace("compact.requested", sessionID, pendingID,
+		compactRequestedPayload{Trigger: TriggerAutomatic})
+}
+
+// ClearAutomaticPending 按 durable ID/attempt 清除重新评估后已不需要的 hint。
+func (e *Engine) ClearAutomaticPending(ctx context.Context, sessionID string, pending store.PendingExpectation) (store.SessionRuntime, error) {
+	if sessionID == "" || !pending.Required || pending.ID == "" || pending.Attempt < 0 {
+		return store.SessionRuntime{}, compactError(ErrInternal, nil)
+	}
+	return e.store.ClearCompactPending(ctx, sessionID, pending.ID, pending.Attempt)
+}
+
+func (e *Engine) candidateEvaluator(ctx context.Context, snapshot store.CompactSnapshot, active *store.ContextSummary, request CompactRequest, environment EnvironmentSnapshot) candidateEvaluator {
 	return func(toSeq int) (candidateCost, error) {
 		mode, parent, summaryRequest, required, blocker, err := e.summaryInputForRange(
 			snapshot.Messages, active, snapshot.Runtime.ActiveSummaryID != "", request.Target, toSeq)
@@ -310,7 +336,7 @@ func (e *Engine) candidateEvaluator(snapshot store.CompactSnapshot, active *stor
 		if parent != nil {
 			candidate.ParentSummaryID = parent.ID
 		}
-		cost.WorstAfterTokens, err = e.estimateWorstCandidate(snapshot.Messages, candidate, environment)
+		cost.WorstAfterTokens, err = e.estimateWorstCandidate(ctx, snapshot.Messages, candidate, environment)
 		return cost, err
 	}
 }
@@ -399,7 +425,10 @@ func (e *Engine) prepareCandidate(snapshot store.CompactSnapshot, active *store.
 	return candidate, summaryRequest, nil
 }
 
-func (e *Engine) mainRequest(messages []store.Message, active *store.ContextSummary, environment EnvironmentSnapshot) (llm.LLMRequest, error) {
+func (e *Engine) mainRequest(ctx context.Context, messages []store.Message, active *store.ContextSummary, environment EnvironmentSnapshot) (llm.LLMRequest, error) {
+	if environment.BuildRequest != nil {
+		return environment.BuildRequest(ctx, messages, active)
+	}
 	view, err := buildProviderMessages(messages, active)
 	if err != nil {
 		return llm.LLMRequest{}, err
@@ -410,17 +439,17 @@ func (e *Engine) mainRequest(messages []store.Message, active *store.ContextSumm
 	}, nil
 }
 
-func (e *Engine) estimateCandidateRequest(messages []store.Message, candidate store.ContextSummary, environment EnvironmentSnapshot) (int64, error) {
-	request, err := e.mainRequest(messages, &candidate, environment)
+func (e *Engine) estimateCandidateRequest(ctx context.Context, messages []store.Message, candidate store.ContextSummary, environment EnvironmentSnapshot) (int64, error) {
+	request, err := e.mainRequest(ctx, messages, &candidate, environment)
 	if err != nil {
 		return 0, err
 	}
 	return e.estimator.EstimateRequest(request), nil
 }
 
-func (e *Engine) estimateWorstCandidate(messages []store.Message, candidate *store.ContextSummary, environment EnvironmentSnapshot) (int64, error) {
+func (e *Engine) estimateWorstCandidate(ctx context.Context, messages []store.Message, candidate *store.ContextSummary, environment EnvironmentSnapshot) (int64, error) {
 	candidate.Summary = "x"
-	request, err := e.mainRequest(messages, candidate, environment)
+	request, err := e.mainRequest(ctx, messages, candidate, environment)
 	if err != nil {
 		return 0, err
 	}
@@ -679,3 +708,4 @@ func minInt(a, b int) int {
 }
 
 var _ Compactor = (*Engine)(nil)
+var _ AutomaticCompactor = (*Engine)(nil)

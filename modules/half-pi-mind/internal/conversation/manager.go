@@ -12,6 +12,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/compact"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	mindlifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/lifecycle"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
@@ -23,6 +24,9 @@ import (
 
 // ErrNotFound 表示 conversation 不存在。
 var ErrNotFound = errors.New("conversation not found")
+
+// ErrBusy 表示 conversation 正由另一个 mutation operation 占用。
+var ErrBusy = errors.New("conversation busy")
 
 // Config 是 Conversation Manager 的进程级依赖。
 type Config struct {
@@ -41,8 +45,20 @@ type Config struct {
 
 // Actor 持有一个 conversation 独占的可变运行时状态。
 type Actor struct {
-	core   *agentcore.Core
-	bridge *local.RemoteBridge
+	core        *agentcore.Core
+	bridge      *local.RemoteBridge
+	compactor   compact.Compactor
+	runtime     compact.RuntimeConfig
+	onChange    func()
+	operationMu sync.Mutex
+	operation   OperationState
+	requestID   string
+	workerMu    sync.Mutex
+	workerLive  bool
+	workerAgain bool
+	workerCtx   context.Context
+	workerStop  context.CancelFunc
+	workerWG    sync.WaitGroup
 }
 
 // Core 返回该 conversation 独占的 Agent Core。
@@ -55,9 +71,43 @@ func (a *Actor) Bridge() *local.RemoteBridge { return a.bridge }
 type Manager struct {
 	config Config
 
-	mu      sync.Mutex
-	actors  map[string]*Actor
-	changes observer.Hub[string]
+	mu        sync.Mutex
+	actors    map[string]*Actor
+	changes   observer.Hub[string]
+	compactor compact.Compactor
+	runtime   compact.RuntimeConfig
+}
+
+// SetCompactor 安装进程共享的 Compactor，并为既有 Actor 启用预算编排。
+func (m *Manager) SetCompactor(compactor compact.Compactor, runtime compact.RuntimeConfig) {
+	m.mu.Lock()
+	m.compactor, m.runtime = compactor, runtime
+	actors := make([]*Actor, 0, len(m.actors))
+	for _, actor := range m.actors {
+		actor.compactor, actor.runtime = compactor, runtime
+		actor.core.SetCompactRuntime(runtime, actor)
+		actors = append(actors, actor)
+	}
+	m.mu.Unlock()
+	for _, actor := range actors {
+		actor.schedulePendingWorker()
+	}
+}
+
+// Snapshot 实现 compact.EnvironmentSource，返回指定 Actor 的最终请求环境。
+func (m *Manager) Snapshot(ctx context.Context, sessionID string) (compact.EnvironmentSnapshot, error) {
+	actor := m.cachedActor(sessionID)
+	if actor == nil {
+		return compact.EnvironmentSnapshot{}, fmt.Errorf("conversation environment is unavailable")
+	}
+	snapshot, err := actor.core.CompactEnvironmentSnapshot(ctx)
+	if err != nil {
+		return compact.EnvironmentSnapshot{}, err
+	}
+	actor.operationMu.Lock()
+	snapshot.ActiveRequestID = actor.requestID
+	actor.operationMu.Unlock()
+	return snapshot, nil
 }
 
 // Subscribe 注册 conversation 持久化状态变化观察者。
@@ -100,6 +150,10 @@ func (m *Manager) Close(ctx context.Context) error {
 	for _, actor := range actors {
 		if actor == nil || actor.core == nil {
 			continue
+		}
+		actor.stopPendingWorker()
+		if err := actor.waitPendingWorker(ctx); err != nil {
+			result = errors.Join(result, err)
 		}
 		if err := actor.core.CloseLifecycle(ctx); err != nil {
 			result = errors.Join(result, err)
@@ -164,6 +218,7 @@ func (m *Manager) Get(id string) (*Actor, error) {
 		return nil, err
 	}
 	m.actors[id] = actor
+	actor.schedulePendingWorker()
 	return actor, nil
 }
 
@@ -202,7 +257,14 @@ func (m *Manager) newActor(id string) (*Actor, error) {
 	bridge.Mode = core.SecurityMode
 	bridge.SetActiveHand = core.SetActiveHand
 	bridge.PrepareRemote = core.PrepareRemoteTool
-	return &Actor{core: core, bridge: bridge}, nil
+	workerCtx, workerStop := context.WithCancel(context.Background())
+	actor := &Actor{
+		core: core, bridge: bridge, compactor: m.compactor, runtime: m.runtime,
+		operation: OperationIdle, onChange: func() { m.notify(id) },
+		workerCtx: workerCtx, workerStop: workerStop,
+	}
+	core.SetCompactRuntime(m.runtime, actor)
+	return actor, nil
 }
 
 func (m *Manager) notify(id string) {

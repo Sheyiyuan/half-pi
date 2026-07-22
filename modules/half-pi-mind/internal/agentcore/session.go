@@ -13,10 +13,14 @@ import (
 func (c *Core) SaveSession() error {
 	c.chatMu.Lock()
 	defer c.chatMu.Unlock()
-	return c.saveSessionLocked()
+	return c.saveSessionLockedWithPending(nil)
 }
 
 func (c *Core) saveSessionLocked() error {
+	return c.saveSessionLockedWithPending(nil)
+}
+
+func (c *Core) saveSessionLockedWithPending(pending *ToolBatchPending) error {
 	c.stateMu.RLock()
 	store, sessionID := c.store, c.sessionID
 	c.stateMu.RUnlock()
@@ -45,8 +49,14 @@ func (c *Core) saveSessionLocked() error {
 	for i := range newMessages {
 		newMessages[i].Seq = c.persistedSeq + i + 1
 	}
-	if err := store.AppendMessages(sessionID, c.persistedSeq, newMessages); err != nil {
-		return fmt.Errorf("save session: append messages: %w", err)
+	var appendErr error
+	if pending != nil {
+		_, appendErr = store.AppendMessagesWithCompactPending(sessionID, c.persistedSeq, newMessages, pending.ID, pending.Event)
+	} else {
+		appendErr = store.AppendMessages(sessionID, c.persistedSeq, newMessages)
+	}
+	if appendErr != nil {
+		return fmt.Errorf("save session: append messages: %w", appendErr)
 	}
 	c.persistedMessages = len(c.history)
 	c.persistedSeq += len(newMessages)

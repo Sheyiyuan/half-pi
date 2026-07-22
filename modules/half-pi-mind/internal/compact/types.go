@@ -66,6 +66,12 @@ func compactError(code ErrorCode, cause error) error {
 	return &Error{Code: code, cause: cause}
 }
 
+// NewError 返回不携带内部详情的稳定 Compact 错误。
+func NewError(code ErrorCode) error { return compactError(code, nil) }
+
+// ErrorCodeOf 返回 Compact typed error 的稳定分类。
+func ErrorCodeOf(err error) ErrorCode { return errorCodeOf(err) }
+
 // Target 是 Compact 目标的内部 sealed union。
 type Target interface {
 	compactTarget()
@@ -245,6 +251,7 @@ type EnvironmentSnapshot struct {
 	Revision        uint64
 	Digest          string
 	ActiveRequestID string
+	BuildRequest    func(context.Context, []store.Message, *store.ContextSummary) (llm.LLMRequest, error)
 }
 
 // EnvironmentSource 提供 Compact 开始与提交前可重读的环境。
@@ -260,6 +267,8 @@ type ProtectionSource interface {
 // Store 是 Engine 需要的持久化事务接口。
 type Store interface {
 	GetCompactSnapshot(context.Context, string) (store.CompactSnapshot, error)
+	EnsureCompactPending(context.Context, string, string, store.LifecycleEvent) (store.CompactPendingResult, error)
+	ClearCompactPending(context.Context, string, string, int64) (store.SessionRuntime, error)
 	FindContextSummaryByContract(context.Context, string, int, int, string) (*store.ContextSummary, error)
 	AdmitCompactAttemptWithEvent(context.Context, string, string, int64, store.LifecycleEvent) (store.SessionRuntime, error)
 	FinishCompactFailure(context.Context, store.CompactFailure) (store.CompactFailureResult, error)
@@ -342,4 +351,11 @@ type CompactStatus struct {
 type Compactor interface {
 	Compact(context.Context, CompactRequest) (CompactResult, error)
 	Status(context.Context, CompactStatusRequest) (CompactStatus, error)
+}
+
+// AutomaticCompactor 暴露 durable pending 的建立和清理操作。
+type AutomaticCompactor interface {
+	Compactor
+	EnsureAutomaticPending(context.Context, string) (store.CompactPendingResult, error)
+	ClearAutomaticPending(context.Context, string, store.PendingExpectation) (store.SessionRuntime, error)
 }

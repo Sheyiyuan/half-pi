@@ -93,11 +93,30 @@ func (c *Core) ChatWithTransport(ctx context.Context, input string, transport Ch
 	for step := 0; step < maxToolCallSteps; step++ {
 		responseIndex := step + 1
 		modelMeta := traceMeta.ChildMeta(corelifecycle.SourceMind).WithNode("mind")
-		req, prepareErr := c.prepareModelRequest(ctx, modelMeta)
+		preflight, prepareErr := c.preflightModelRequest(ctx, modelMeta)
 		if prepareErr != nil {
 			err = prepareErr
 			return "", err
 		}
+		if changed, compactErr := c.observeModelBudget(ctx, step == 0, preflight); compactErr != nil {
+			err = compactErr
+			return "", err
+		} else if changed {
+			preflight, prepareErr = c.preflightModelRequest(ctx, modelMeta)
+			if prepareErr != nil {
+				err = prepareErr
+				return "", err
+			}
+		}
+		if budgetErr := c.enforceModelBudget(preflight); budgetErr != nil {
+			err = budgetErr
+			return "", err
+		}
+		if prepareErr = c.admitModelRequest(ctx, modelMeta, preflight); prepareErr != nil {
+			err = prepareErr
+			return "", err
+		}
+		req := preflight.request
 		registry := c.lifecycleRegistry()
 		buffered := registry != nil && registry.RequiresBufferedDelivery(modelMeta)
 		c.publishLifecycle(ctx, modelMeta, corelifecycle.PhaseModelRequested, corelifecycle.RedactedEvent{
@@ -135,6 +154,7 @@ func (c *Core) ChatWithTransport(ctx context.Context, input string, transport Ch
 			ProviderID: c.modelProviderID(), ModelID: c.modelName(),
 			Sensitive: map[string]any{"content": resp.Content},
 		})
+		c.recordUsageAnchor(preflight, resp.Usage)
 		content, deliveryErr := c.prepareAssistantDelivery(ctx, modelMeta, resp.Content)
 		if deliveryErr != nil {
 			err = deliveryErr
@@ -146,8 +166,10 @@ func (c *Core) ChatWithTransport(ctx context.Context, input string, transport Ch
 			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, llm.ToolCall{ID: call.ID, Name: call.Name, Args: call.Args})
 		}
 		c.history = append(c.history, assistantMsg)
-		if err = c.saveSessionLocked(); err != nil {
-			return "", err
+		if len(resp.ToolCalls) == 0 {
+			if err = c.saveSessionLocked(); err != nil {
+				return "", err
+			}
 		}
 		if buffered && transport.TextDelta != nil && content != "" {
 			if callbackErr := transport.TextDelta(ChatTextDelta{ResponseIndex: responseIndex, Delta: content}); callbackErr != nil {
@@ -196,7 +218,8 @@ func (c *Core) ChatWithTransport(ctx context.Context, input string, transport Ch
 				CompactProjection: compact.ProjectToolResult(call.Name, result, output),
 			})
 		}
-		if err = c.saveSessionLocked(); err != nil {
+		pending := c.prepareToolBatchPending(ctx)
+		if err = c.saveSessionLockedWithPending(pending); err != nil {
 			return "", err
 		}
 	}
@@ -241,8 +264,17 @@ func (c *Core) admitMessage(ctx context.Context, meta corelifecycle.Meta, input 
 	return input, nil
 }
 
-func (c *Core) prepareModelRequest(ctx context.Context, meta corelifecycle.Meta) (*llm.LLMRequest, error) {
-	req := &llm.LLMRequest{Messages: cloneMessages(c.history), Tools: toolsToDefs(c.exec.Tools())}
+func (c *Core) transformModelRequest(ctx context.Context, meta corelifecycle.Meta, messages []llm.Message) (*llm.LLMRequest, error) {
+	c.stateMu.RLock()
+	runtime := c.compactRuntime
+	c.stateMu.RUnlock()
+	req := &llm.LLMRequest{Messages: cloneMessages(messages), Tools: toolsToDefs(c.exec.Tools())}
+	if runtime.MainMaxTokens > 0 {
+		req.MaxTokens = runtime.MainMaxTokens
+		if reserved := int(runtime.ReservedOutputTokens); reserved > 0 && reserved < req.MaxTokens {
+			req.MaxTokens = reserved
+		}
+	}
 	registry := c.lifecycleRegistry()
 	if registry == nil {
 		return nil, fmt.Errorf("model request lifecycle is unavailable")
@@ -278,14 +310,81 @@ func (c *Core) prepareModelRequest(ctx context.Context, meta corelifecycle.Meta)
 	if err != nil || verdict == corelifecycle.VerdictDeny || verdict == corelifecycle.VerdictRequireApproval {
 		return nil, fmt.Errorf("model request denied")
 	}
+	return req, nil
+}
+
+func (c *Core) preflightModelRequest(ctx context.Context, meta corelifecycle.Meta) (modelPreflight, error) {
+	messages, contextVersion, degraded, err := c.rawContextView(ctx)
+	if err != nil {
+		return modelPreflight{}, err
+	}
+	req, err := c.transformModelRequest(ctx, meta, messages)
+	if err != nil {
+		return modelPreflight{}, err
+	}
+	c.stateMu.RLock()
+	anchor := c.usageAnchor
+	providerID, modelID := c.providerID, c.modelID
+	c.stateMu.RUnlock()
+	estimator := compact.TokenEstimator{}
+	estimated, _ := estimator.EstimateWithAnchor(*req, providerID, modelID, anchor)
+	return modelPreflight{
+		request: req, fingerprint: estimator.Fingerprint(*req),
+		environment: c.captureModelEnvironment(contextVersion), estimated: estimated, degraded: degraded,
+	}, nil
+}
+
+func (c *Core) admitModelRequest(ctx context.Context, meta corelifecycle.Meta, preflight modelPreflight) error {
+	if preflight.request == nil || !c.modelEnvironmentUnchanged(preflight.environment) ||
+		(compact.TokenEstimator{}).Fingerprint(*preflight.request) != preflight.fingerprint {
+		return fmt.Errorf("model request context changed before admission")
+	}
 	if err := c.commitLifecycleAudit(ctx, meta, corelifecycle.PhaseModelRequested, corelifecycle.AuditMutation{
 		ActionKind: "model_request", ResourceName: "llm",
-		InputDigest: corelifecycle.HashString(req.System), Decision: "allow", ReasonCode: "model_request_admitted",
+		InputDigest: corelifecycle.HashString(preflight.request.System), Decision: "allow", ReasonCode: "model_request_admitted",
 		Details: map[string]any{"provider_id": c.modelProviderID(), "model_id": c.modelName()},
 	}); err != nil {
-		return nil, fmt.Errorf("model request admission audit failed: %w", err)
+		return fmt.Errorf("model request admission audit failed: %w", err)
 	}
-	return req, nil
+	return nil
+}
+
+func (c *Core) observeModelBudget(ctx context.Context, first bool, preflight modelPreflight) (bool, error) {
+	c.stateMu.RLock()
+	runtime, coordinator := c.compactRuntime, c.compaction
+	c.stateMu.RUnlock()
+	if coordinator == nil {
+		return false, nil
+	}
+	return coordinator.ObserveModelBudget(ctx, BudgetObservation{
+		FirstRequest: first, EstimatedTokens: preflight.estimated,
+		HighLimit: runtime.HighLimit(), HardLimit: runtime.InputBudget(), Degraded: preflight.degraded != "",
+	})
+}
+
+func (c *Core) enforceModelBudget(preflight modelPreflight) error {
+	c.stateMu.RLock()
+	runtime := c.compactRuntime
+	c.stateMu.RUnlock()
+	if runtime.MainContextWindow == 0 || preflight.estimated <= runtime.InputBudget() {
+		return nil
+	}
+	if preflight.degraded != "" {
+		return compact.NewError(compact.ErrRepairRequired)
+	}
+	return compact.NewError(compact.ErrContextLimit)
+}
+
+func (c *Core) recordUsageAnchor(preflight modelPreflight, usage llm.Usage) {
+	if usage.InputTokens <= 0 {
+		return
+	}
+	c.stateMu.Lock()
+	c.usageAnchor = &compact.UsageAnchor{
+		ProviderID: c.providerID, ModelID: c.modelID,
+		Fingerprint: preflight.fingerprint, InputTokens: int64(usage.InputTokens),
+	}
+	c.stateMu.Unlock()
 }
 
 func (c *Core) modelProviderID() string {

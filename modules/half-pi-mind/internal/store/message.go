@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -47,70 +48,111 @@ func (s *Store) GetMessages(sessionID string) ([]Message, error) {
 
 // AppendMessages 在 expectedLastSeq 未变化时原子追加一个连续消息批次。
 func (s *Store) AppendMessages(sessionID string, expectedLastSeq int, messages []Message) error {
+	_, err := s.appendMessages(sessionID, expectedLastSeq, messages, "", LifecycleEvent{})
+	return err
+}
+
+// AppendMessagesWithCompactPending 原子追加完整工具批次，并在尚无 pending 时建立自动 Compact hint。
+func (s *Store) AppendMessagesWithCompactPending(sessionID string, expectedLastSeq int, messages []Message,
+	pendingID string, requestedEvent LifecycleEvent,
+) (CompactPendingResult, error) {
+	if !validUUIDv7(pendingID) || requestedEvent.SubjectID != sessionID {
+		return CompactPendingResult{}, fmt.Errorf("invalid compact pending message append")
+	}
+	return s.appendMessages(sessionID, expectedLastSeq, messages, pendingID, requestedEvent)
+}
+
+func (s *Store) appendMessages(sessionID string, expectedLastSeq int, messages []Message,
+	pendingID string, requestedEvent LifecycleEvent,
+) (CompactPendingResult, error) {
 	if sessionID == "" {
-		return fmt.Errorf("sessionID cannot be empty")
+		return CompactPendingResult{}, fmt.Errorf("sessionID cannot be empty")
 	}
 	if expectedLastSeq < 0 {
-		return fmt.Errorf("expected last seq must not be negative")
+		return CompactPendingResult{}, fmt.Errorf("expected last seq must not be negative")
 	}
 	if len(messages) == 0 {
-		return nil
+		return CompactPendingResult{}, nil
 	}
 	for i, message := range messages {
 		if message.Seq != expectedLastSeq+i+1 {
-			return fmt.Errorf("message batch must have contiguous seq values")
+			return CompactPendingResult{}, fmt.Errorf("message batch must have contiguous seq values")
 		}
 		if err := validateCompactProjection(message); err != nil {
-			return err
+			return CompactPendingResult{}, err
 		}
 	}
 	tx, err := s.db.Begin()
 	if err != nil {
-		return fmt.Errorf("begin append messages: %w", err)
+		return CompactPendingResult{}, fmt.Errorf("begin append messages: %w", err)
 	}
 	defer tx.Rollback()
 	var lastSeq int
-	if err := tx.QueryRow(`SELECT history_generation FROM session_runtime WHERE session_id = ?`, sessionID).Scan(&lastSeq); err != nil {
-		return fmt.Errorf("read message generation: %w", err)
+	var pending bool
+	if err := tx.QueryRow(`SELECT history_generation, pending_compact FROM session_runtime WHERE session_id = ?`, sessionID).Scan(&lastSeq, &pending); err != nil {
+		return CompactPendingResult{}, fmt.Errorf("read message generation: %w", err)
 	}
 	if lastSeq != expectedLastSeq {
-		return fmt.Errorf("message sequence conflict: got %d, expected %d", lastSeq, expectedLastSeq)
+		return CompactPendingResult{}, fmt.Errorf("message sequence conflict: got %d, expected %d", lastSeq, expectedLastSeq)
 	}
 	stmt, err := tx.Prepare(`INSERT INTO messages
 		(session_id, role, content, request_id, tool_id, tool_calls, compact_projection, seq)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
-		return fmt.Errorf("prepare append messages: %w", err)
+		return CompactPendingResult{}, fmt.Errorf("prepare append messages: %w", err)
 	}
 	defer stmt.Close()
 	for _, message := range messages {
 		if _, err := stmt.Exec(sessionID, message.Role, message.Content, message.RequestID, message.ToolID,
 			message.ToolCalls, message.CompactProjection, message.Seq); err != nil {
-			return fmt.Errorf("append message: %w", err)
+			return CompactPendingResult{}, fmt.Errorf("append message: %w", err)
 		}
 	}
 	result, err := tx.Exec(`UPDATE sessions SET updated_at = datetime('now') WHERE id = ?`, sessionID)
 	if err != nil {
-		return fmt.Errorf("touch session: %w", err)
+		return CompactPendingResult{}, fmt.Errorf("touch session: %w", err)
 	}
 	if err := requireSessionUpdated(result, sessionID); err != nil {
-		return err
+		return CompactPendingResult{}, err
 	}
 	newLastSeq := expectedLastSeq + len(messages)
-	result, err = tx.Exec(`UPDATE session_runtime SET history_generation = ?,
-		history_view_generation = history_view_generation + ?, snapshot_version = snapshot_version + ?, updated_at = ?
-		WHERE session_id = ? AND history_generation = ?`,
-		newLastSeq, len(messages), len(messages), time.Now().UTC().UnixMilli(), sessionID, expectedLastSeq)
+	createdPending := pendingID != "" && !pending
+	snapshotAdvance := len(messages)
+	if createdPending {
+		snapshotAdvance++
+	}
+	query := `UPDATE session_runtime SET history_generation = ?,
+		history_view_generation = history_view_generation + ?, snapshot_version = snapshot_version + ?, updated_at = ?`
+	args := []any{newLastSeq, len(messages), snapshotAdvance, time.Now().UTC().UnixMilli()}
+	if createdPending {
+		query += `, pending_compact = 1, pending_compact_id = ?, pending_attempt = 0, pending_not_before = 0`
+		args = append(args, pendingID)
+	}
+	query += ` WHERE session_id = ? AND history_generation = ?`
+	args = append(args, sessionID, expectedLastSeq)
+	if createdPending {
+		query += ` AND pending_compact = 0`
+	}
+	result, err = tx.Exec(query, args...)
 	if err != nil {
-		return fmt.Errorf("advance message generation: %w", err)
+		return CompactPendingResult{}, fmt.Errorf("advance message generation: %w", err)
 	}
 	if affected, err := result.RowsAffected(); err != nil || affected != 1 {
-		return fmt.Errorf("advance message generation: concurrent runtime mutation")
+		return CompactPendingResult{}, fmt.Errorf("advance message generation: concurrent runtime mutation")
+	}
+	if createdPending {
+		if err := insertLifecycleEvent(context.Background(), tx, requestedEvent); err != nil {
+			return CompactPendingResult{}, err
+		}
+	}
+	runtime, err := getSessionRuntime(context.Background(), tx, sessionID)
+	if err != nil {
+		return CompactPendingResult{}, err
 	}
 	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit append messages: %w", err)
+		return CompactPendingResult{}, fmt.Errorf("commit append messages: %w", err)
 	}
-	return nil
+	return CompactPendingResult{Runtime: runtime, Created: createdPending}, nil
 }
 
 func validateCompactProjection(message Message) error {

@@ -211,6 +211,46 @@ func TestCompactAttemptAndStartedOutboxCommitTogether(t *testing.T) {
 	}
 }
 
+func TestToolBatchAndCompactPendingCommitTogether(t *testing.T) {
+	store, sessionID := newCompactSession(t)
+	pendingID := newUUIDv7(t)
+	event := compactEvent(t, "compact.requested", sessionID)
+	result, err := store.AppendMessagesWithCompactPending(sessionID, 0, []Message{
+		{Role: "assistant", Content: "calling", ToolCalls: `[{"ID":"call-1","Name":"tool","Args":"{}"}]`, Seq: 1},
+		{Role: "tool", Content: "done", ToolID: "call-1", Seq: 2},
+	}, pendingID, event)
+	if err != nil || !result.Created || result.Runtime.HistoryGeneration != 2 ||
+		!result.Runtime.PendingCompact || result.Runtime.PendingCompactID != pendingID {
+		t.Fatalf("append result = %+v, err=%v", result, err)
+	}
+
+	secondEvent := compactEvent(t, "compact.requested", sessionID)
+	merged, err := store.AppendMessagesWithCompactPending(sessionID, 2, []Message{
+		{Role: "user", Content: "next", Seq: 3},
+	}, newUUIDv7(t), secondEvent)
+	if err != nil || merged.Created || merged.Runtime.PendingCompactID != pendingID || merged.Runtime.HistoryGeneration != 3 {
+		t.Fatalf("merged append = %+v, err=%v", merged, err)
+	}
+
+	rollbackStore, rollbackSession := newCompactSession(t)
+	duplicate := compactEvent(t, "compact.requested", rollbackSession)
+	if err := rollbackStore.AppendLifecycleEvent(context.Background(), duplicate); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rollbackStore.AppendMessagesWithCompactPending(rollbackSession, 0, []Message{
+		{Role: "user", Content: "must roll back", Seq: 1},
+	}, newUUIDv7(t), duplicate); err == nil {
+		t.Fatal("duplicate requested event did not roll back message batch")
+	}
+	if messages, _ := rollbackStore.GetMessages(rollbackSession); len(messages) != 0 {
+		t.Fatalf("message batch escaped rollback: %+v", messages)
+	}
+	runtime, _ := rollbackStore.GetSessionRuntime(context.Background(), rollbackSession)
+	if runtime.PendingCompact || runtime.HistoryGeneration != 0 {
+		t.Fatalf("runtime escaped rollback: %+v", runtime)
+	}
+}
+
 func TestContextSummaryCommitReuseRebaseAndCoverage(t *testing.T) {
 	store, sessionID := newCompactSessionWithMessages(t, 4)
 	ctx := context.Background()

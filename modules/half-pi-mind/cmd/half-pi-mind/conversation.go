@@ -7,6 +7,7 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
+	compactpkg "github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/compact"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/conversation"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
@@ -83,9 +84,41 @@ func newConversationManager(env *setup.Env, cfg *config.Config, db *store.Store,
 	if err != nil {
 		return nil, fmt.Errorf("initialize conversation group: %w", err)
 	}
-	return conversation.NewManager(conversation.Config{
+	manager, err := conversation.NewManager(conversation.Config{
 		GroupID: group.ID, Provider: provider, ProviderID: model.Provider, ModelID: model.ID,
 		Reviewer: reviewer, Store: db, Bus: bus,
 		Skills: skills, Approvals: approvals, Authority: authority, Tasks: tasks,
 	})
+	if err != nil {
+		return nil, err
+	}
+	var summaryModel *config.ResolvedModel
+	var summaryProvider llm.Provider
+	if cfg.Compact.Enabled {
+		summaryModel, err = cfg.ResolveModel(cfg.Compact.Model)
+		if err != nil {
+			return nil, fmt.Errorf("resolve Compact summary model: %w", err)
+		}
+		if cfg.Compact.Provider != summaryModel.Provider {
+			return nil, fmt.Errorf("Compact provider %q does not own model %q", cfg.Compact.Provider, cfg.Compact.Model)
+		}
+		if summaryModel.Adapter == "scripted" {
+			summaryProvider, err = llm.NewScriptedProviderFromFile(summaryModel.ScriptPath)
+		} else {
+			summaryProvider, err = llm.New(summaryModel.Adapter, summaryModel.Endpoint, summaryModel.APIKey, summaryModel.Name)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("create Compact summary provider: %w", err)
+		}
+	}
+	runtime, err := compactpkg.ResolveRuntimeConfig(cfg.Compact, model, summaryModel)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Compact runtime: %w", err)
+	}
+	compactor, err := compactpkg.New(runtime, summaryProvider, db, manager, tasks)
+	if err != nil {
+		return nil, fmt.Errorf("create Compact engine: %w", err)
+	}
+	manager.SetCompactor(compactor, runtime)
+	return manager, nil
 }

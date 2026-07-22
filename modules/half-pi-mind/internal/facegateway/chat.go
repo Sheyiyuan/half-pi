@@ -61,7 +61,7 @@ func (g *Gateway) runChat(record *requestRecord, actor *conversation.Actor, cont
 				})
 		},
 	}
-	reply, err := actor.Core().ChatWithTransport(ctx, content, transport)
+	reply, err := actor.ChatWithTransport(ctx, content, transport)
 	if closeErr := stream.Close(); err == nil && closeErr != nil {
 		err = closeErr
 	}

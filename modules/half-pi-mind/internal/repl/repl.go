@@ -103,7 +103,7 @@ func (r *Repl) loop() bool {
 		return true
 	}
 	if input == "exit" || input == "quit" {
-		if err := r.core.SaveSession(); err != nil {
+		if err := r.actor.SaveSession(); err != nil {
 			r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("save session: %v", err))
 		}
 		fmt.Println("bye")
@@ -120,7 +120,7 @@ func (r *Repl) loop() bool {
 	}
 	ctx := requestctx.WithRequestID(context.Background(), requestID.String())
 	ctx = requestctx.WithSource(ctx, "repl")
-	response, err := r.core.Chat(ctx, input)
+	response, err := r.actor.Chat(ctx, input)
 	if err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("error: %v", err))
 		return true

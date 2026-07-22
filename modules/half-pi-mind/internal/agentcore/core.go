@@ -13,6 +13,7 @@ import (
 	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/compact"
 	mindlifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/lifecycle"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/observer"
@@ -46,6 +47,34 @@ type Core struct {
 	authorizer        *mindlifecycle.MindAuthorizer
 	toolRuntime       *executor.ToolRuntime
 	sessionChanges    observer.Hub[struct{}]
+	compactRuntime    compact.RuntimeConfig
+	compaction        CompactionCoordinator
+	usageAnchor       *compact.UsageAnchor
+}
+
+// BudgetObservation 是一次最终主模型请求的上下文预算事实。
+type BudgetObservation struct {
+	FirstRequest    bool
+	EstimatedTokens int64
+	HighLimit       int64
+	HardLimit       int64
+	Degraded        bool
+}
+
+// CompactionCoordinator 由 Conversation Actor 实现首次自动压缩和 durable pending 编排。
+type CompactionCoordinator interface {
+	ObserveModelBudget(context.Context, BudgetObservation) (bool, error)
+}
+
+// ToolBatchPending 是与完整 tool-result 批次同事务提交的自动 Compact hint。
+type ToolBatchPending struct {
+	ID    string
+	Event store.LifecycleEvent
+}
+
+// ToolBatchCompactionCoordinator 可在工具批次持久化前生成 durable pending mutation。
+type ToolBatchCompactionCoordinator interface {
+	PrepareToolBatchPending(context.Context, BudgetObservation) (*ToolBatchPending, error)
 }
 
 // SubscribeSessionChanges 注册持久化 conversation 状态变化观察者。
@@ -175,6 +204,14 @@ func (c *Core) SetModelIdentity(providerID, modelID string) {
 	c.stateMu.Lock()
 	c.providerID = providerID
 	c.modelID = modelID
+	c.stateMu.Unlock()
+}
+
+// SetCompactRuntime 设置主模型预算以及 Actor 自动压缩编排入口。
+func (c *Core) SetCompactRuntime(runtime compact.RuntimeConfig, coordinator CompactionCoordinator) {
+	c.stateMu.Lock()
+	c.compactRuntime = runtime
+	c.compaction = coordinator
 	c.stateMu.Unlock()
 }
 
