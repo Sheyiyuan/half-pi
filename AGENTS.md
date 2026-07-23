@@ -330,7 +330,7 @@ make test         # 运行全部 5 个模块的测试
 - `docs/archived/README.md` — 已完成、被替代或仅供决策追溯的设计文档索引
 
 #### ⏳ 待完成
-- [ ] `/compact` 上下文压缩
+- [x] `/compact` 上下文压缩
 - [ ] 按 `docs/plugin-architecture.md` 实现首版插件 runtime
 - [ ] Windows 原生凭据/config/database ACL 发布环境验收
 - [ ] Windows ConPTY 与 macOS PTY 的全屏 TUI 原生发布验收
@@ -489,7 +489,7 @@ make test         # 运行全部 5 个模块的测试
 
 ## 下一步
 
-1. 实现 `/compact` 上下文压缩
+1. ~~实现 `/compact` 上下文压缩~~ ✅ 已完成
 2. 讨论并实现首版插件 runtime
 3. 在发布环境验收 Windows 凭据/config/database ACL
 4. 完成 Windows ConPTY 与 macOS PTY 的全屏 TUI 原生发布验收

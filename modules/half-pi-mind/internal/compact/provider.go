@@ -71,26 +71,18 @@ type summaryInjection struct {
 	Summary           string `json:"summary"`
 }
 
-func buildSummaryRequest(cfg RuntimeConfig, messages []store.Message, summary store.ContextSummary) (llm.LLMRequest, error) {
-	var envelope any
-	switch summary.GenerationMode {
-	case "full", "rebase":
-		projected, err := projectSource(messages, 1, summary.ToSeq)
-		if err != nil {
-			return llm.LLMRequest{}, err
-		}
-		envelope = fullSummaryEnvelope{
-			ProjectionVersion: summary.ProjectionVersion, PolicyVersion: summary.PolicyVersion,
-			Profile: summary.Profile, Mode: summary.GenerationMode, FromSeq: 1, ToSeq: summary.ToSeq,
-			Messages: projected,
-		}
-	case "incremental":
-		if summary.ParentSummaryID == "" {
-			return llm.LLMRequest{}, fmt.Errorf("incremental summary has no parent")
-		}
-		return llm.LLMRequest{}, fmt.Errorf("incremental parent body is required")
-	default:
+func buildFullSummaryRequest(cfg RuntimeConfig, messages []store.Message, summary store.ContextSummary) (llm.LLMRequest, error) {
+	if summary.GenerationMode != "full" && summary.GenerationMode != "rebase" {
 		return llm.LLMRequest{}, fmt.Errorf("unknown summary generation mode")
+	}
+	projected, err := projectSource(messages, 1, summary.ToSeq)
+	if err != nil {
+		return llm.LLMRequest{}, err
+	}
+	envelope := fullSummaryEnvelope{
+		ProjectionVersion: summary.ProjectionVersion, PolicyVersion: summary.PolicyVersion,
+		Profile: summary.Profile, Mode: summary.GenerationMode, FromSeq: 1, ToSeq: summary.ToSeq,
+		Messages: projected,
 	}
 	encoded, err := encodeJSONNoHTML(envelope)
 	if err != nil {

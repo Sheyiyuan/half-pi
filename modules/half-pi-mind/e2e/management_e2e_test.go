@@ -189,6 +189,7 @@ func prepareManagementRuntime(t *testing.T, root string, hubEnabled bool) (strin
 	}
 	writeFile(t, filepath.Join(halfPiHome, "config.toml"), config, 0600)
 	writeFile(t, filepath.Join(fixtureDir, "face-e2e.json"), scriptedFixture(), 0600)
+	writeFile(t, filepath.Join(fixtureDir, "compact-e2e.json"), compactScriptedFixture(), 0600)
 	return home, workDir
 }
 

@@ -206,6 +206,103 @@ func TestEngineLifecycleEventsShareOperationTrace(t *testing.T) {
 	}
 }
 
+func TestEngineWorstCandidateUsesSummaryBodyReserveWithoutMutatingCandidate(t *testing.T) {
+	cfg := engineRuntimeConfig()
+	environment := EnvironmentSnapshot{System: "system", Revision: 1, Digest: "env-1"}
+	engine := &Engine{cfg: cfg, estimator: TokenEstimator{}}
+	messages := []store.Message{
+		{Role: "user", Content: "current", Seq: 1},
+		{Role: "assistant", Content: "answer", Seq: 2},
+	}
+	candidate := &store.ContextSummary{
+		FromSeq: 1, ToSeq: 2, Summary: "original summary body",
+		ProjectionVersion: ProjectionVersion, PolicyVersion: cfg.PolicyVersion, Profile: cfg.Profile,
+	}
+	got, err := engine.estimateWorstCandidate(context.Background(), messages, candidate, environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidate.Summary != "original summary body" {
+		t.Fatalf("candidate summary mutated to %q", candidate.Summary)
+	}
+	probe := *candidate
+	probe.Summary = ""
+	request, err := engine.mainRequest(context.Background(), messages, &probe, environment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := engine.estimator.EstimateRequest(request) + summaryBodyReserveTokens(cfg)
+	if got != want {
+		t.Fatalf("worst candidate estimate = %d, want %d", got, want)
+	}
+}
+
+func TestEngineUsesIncrementalSummaryWhenActiveParentCompatible(t *testing.T) {
+	db, sessionID := newEngineStore(t)
+	environment := &mutableEnvironment{snapshot: EnvironmentSnapshot{
+		System: "system", Revision: 1, Digest: digestDomain("environment", "one"),
+	}}
+	var calls atomic.Int64
+	provider := providerFunc(func(_ context.Context, request *llm.LLMRequest) (*llm.LLMResponse, error) {
+		call := calls.Add(1)
+		if len(request.Messages) != 1 || request.Messages[0].Role != llm.RoleUser {
+			t.Fatalf("summary request = %+v", request)
+		}
+		content := request.Messages[0].Content
+		switch call {
+		case 1:
+			if !strings.Contains(content, `"mode":"full"`) {
+				t.Fatalf("first summary request was not full: %s", content)
+			}
+			return &llm.LLMResponse{Content: `{"summary":"parent summary"}`}, nil
+		case 2:
+			for _, required := range []string{
+				`"mode":"incremental"`, `"summary":"parent summary"`, `"from_seq":3`, `"to_seq":4`,
+			} {
+				if !strings.Contains(content, required) {
+					t.Fatalf("incremental request omitted %q: %s", required, content)
+				}
+			}
+			return &llm.LLMResponse{Content: `{"summary":"incremental summary"}`}, nil
+		default:
+			t.Fatalf("unexpected summary provider call %d", call)
+		}
+		return nil, nil
+	})
+	engine, err := New(engineRuntimeConfig(), provider, db, environment, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := engine.Compact(context.Background(), CompactRequest{
+		SessionID: sessionID, RequestID: newTestUUIDv7(t), Principal: "repl",
+		Target: DefaultTarget{}, Trigger: TriggerManual,
+	})
+	if err != nil || first.GenerationMode != "full" || first.ToSeq != 2 {
+		t.Fatalf("first compact = %+v, err=%v", first, err)
+	}
+	if err := db.AppendMessages(sessionID, 4, []store.Message{
+		{Role: "user", Content: strings.Repeat("third context ", 300), RequestID: "request-3", Seq: 5},
+		{Role: "assistant", Content: strings.Repeat("third response ", 300), RequestID: "request-3", Seq: 6},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := engine.Compact(context.Background(), CompactRequest{
+		SessionID: sessionID, RequestID: newTestUUIDv7(t), Principal: "repl",
+		Target: DefaultTarget{}, Trigger: TriggerManual,
+	})
+	if err != nil || second.GenerationMode != "incremental" || second.ToSeq != 4 {
+		t.Fatalf("second compact = %+v, err=%v", second, err)
+	}
+	snapshot, err := db.GetCompactSnapshot(context.Background(), sessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ActiveSummary == nil || snapshot.ActiveSummary.ParentSummaryID != first.SummaryID ||
+		snapshot.ActiveSummary.Summary != "incremental summary" {
+		t.Fatalf("active summary = %+v, first = %+v", snapshot.ActiveSummary, first)
+	}
+}
+
 func newEngineStore(t *testing.T) (*store.Store, string) {
 	t.Helper()
 	db, err := store.New(filepath.Join(t.TempDir(), "compact-engine.db"))

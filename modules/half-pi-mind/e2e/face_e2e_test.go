@@ -3,6 +3,7 @@
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -22,10 +23,12 @@ import (
 const (
 	handID = "e2e-hand"
 
-	simpleRequestID = "chat-persist"
-	markerRequestID = "chat-remote-marker"
-	cancelRequestID = "chat-cancel-run"
-	taskRequestID   = "chat-background-task"
+	simpleRequestID  = "chat-persist"
+	markerRequestID  = "chat-remote-marker"
+	cancelRequestID  = "chat-cancel-run"
+	taskRequestID    = "chat-background-task"
+	compactRequestID = "compact-default"
+	rebaseRequestID  = "compact-rebase"
 
 	simplePrompt = "persist across faces"
 	markerPrompt = "write remote marker"
@@ -188,6 +191,59 @@ func TestFaceAlphaRealProcessE2E(t *testing.T) {
 		t.Fatalf("cancel run views disagree: event=%+v get=%+v", cancelChanged, cancelRunView)
 	}
 
+	negotiateCompactFeature(t, faceA, "capabilities-compact-a")
+	compactBefore := getCompactStatus(t, faceA, "compact-status-before", conversationID)
+	if !compactBefore.Enabled || compactBefore.SummaryID != "" || compactBefore.ConfiguredSummaryModelID != "summary-model" {
+		t.Fatalf("pre-Compact status = %+v", compactBefore)
+	}
+	subscribe(t, faceA, "subscribe-a-compact", conversationID, []protocol.FaceEventType{
+		protocol.FaceEventCompactRequested, protocol.FaceEventCompactStarted, protocol.FaceEventCompactCompleted,
+	})
+	compactKeep := 4
+	compactRequest := protocol.FaceConversationCompact{
+		RequestID: compactRequestID, ConversationID: conversationID,
+		Target: protocol.FaceCompactTarget{Mode: protocol.FaceCompactTargetKeep, KeepMessages: &compactKeep},
+	}
+	faceA.send(t, protocol.TypeFaceConversationCompact, compactRequest)
+	awaitAccepted(t, faceA, compactRequestID, protocol.FaceOperationConversationCompact)
+	compactCompleted := awaitEvent(t, faceA, protocol.FaceEventCompactCompleted, func(event protocol.FaceEvent) bool {
+		return event.RequestID == compactRequestID
+	})
+	compactEvent := decodeEventData[protocol.CompactCompletedEventData](t, compactCompleted)
+	compactTerminal := awaitResult(t, faceA, compactRequestID)
+	requireSuccessfulResult(t, compactTerminal, protocol.FaceOperationConversationCompact)
+	compactResult := decodeCompactResult(t, compactTerminal)
+	if compactResult.GenerationMode != protocol.FaceCompactGenerationFull || compactResult.ToSeq <= 2 ||
+		compactResult.SummaryID == "" || compactResult.SummaryID != compactEvent.SummaryID ||
+		compactResult.AfterEstimatedTokens >= compactResult.BeforeEstimatedTokens ||
+		compactResult.RetainedMessageCount == nil || *compactResult.RetainedMessageCount != compactKeep {
+		t.Fatalf("Compact result = %+v, event = %+v", compactResult, compactEvent)
+	}
+	faceA.send(t, protocol.TypeFaceConversationCompact, compactRequest)
+	replayedCompact := decodeCompactResult(t, awaitResult(t, faceA, compactRequestID))
+	if replayedCompact.SummaryID != compactResult.SummaryID || replayedCompact.ContextVersion != compactResult.ContextVersion {
+		t.Fatalf("Compact replay = %+v, original = %+v", replayedCompact, compactResult)
+	}
+	rebaseRequest := protocol.FaceConversationCompact{
+		RequestID: rebaseRequestID, ConversationID: conversationID,
+		Target: protocol.FaceCompactTarget{Mode: protocol.FaceCompactTargetRebase},
+	}
+	faceA.send(t, protocol.TypeFaceConversationCompact, rebaseRequest)
+	awaitAccepted(t, faceA, rebaseRequestID, protocol.FaceOperationConversationCompact)
+	rebaseCompact := decodeCompactResult(t, awaitResult(t, faceA, rebaseRequestID))
+	if rebaseCompact.GenerationMode != protocol.FaceCompactGenerationRebase || rebaseCompact.ToSeq != compactResult.ToSeq ||
+		rebaseCompact.SummaryID == compactResult.SummaryID {
+		t.Fatalf("rebase Compact = %+v, previous = %+v", rebaseCompact, compactResult)
+	}
+	faceA.stop(t)
+	faceA = startHeadlessFace(t, binaries.face, fixture.workDir, fixture.home, fixture.faceConfig["face-a"], "face-a-compact-reconnect")
+	negotiateCompactFeature(t, faceA, "capabilities-compact-reconnect")
+	compactAfterReconnect := getCompactStatus(t, faceA, "compact-status-reconnect", conversationID)
+	if compactAfterReconnect.SummaryID != rebaseCompact.SummaryID || compactAfterReconnect.CoveredToSeq != rebaseCompact.ToSeq ||
+		compactAfterReconnect.ContextVersion != rebaseCompact.ContextVersion {
+		t.Fatalf("reconnected Compact status = %+v, rebase = %+v", compactAfterReconnect, rebaseCompact)
+	}
+
 	faceA.send(t, protocol.TypeFaceChat, protocol.FaceChat{
 		RequestID: taskRequestID, ConversationID: conversationID, Content: taskPrompt,
 	})
@@ -276,6 +332,8 @@ func TestFaceAlphaRealProcessE2E(t *testing.T) {
 			markerRequestID: markerRunView, cancelRequestID: cancelRunView, taskRequestID: backgroundRunView,
 		},
 		terminalTask,
+		rebaseCompact.SummaryID,
+		rebaseCompact.ToSeq,
 	)
 }
 
@@ -328,6 +386,7 @@ func prepareProcessFixture(t *testing.T, root string) processFixture {
 		t.Fatal(err)
 	}
 	writeFile(t, filepath.Join(fixtureDir, "face-e2e.json"), scriptedFixture(), 0600)
+	writeFile(t, filepath.Join(fixtureDir, "compact-e2e.json"), compactScriptedFixture(), 0600)
 	writeFile(t, filepath.Join(halfPiHome, "config.toml"), mindConfig(), 0600)
 	faceConfig := make(map[string]string, len(credentials))
 	for label := range credentials {
@@ -367,14 +426,38 @@ name = "fixture"
 adapter = "scripted"
 script_path = "fixtures/face-e2e.json"
 
+[[llm.providers]]
+name = "summary-fixture"
+adapter = "scripted"
+script_path = "fixtures/compact-e2e.json"
+
 [[llm.models]]
 id = "fixture-model"
 provider = "fixture"
 capabilities = []
+context_window = 32768
 max_tokens = 4096
 temperature = 0
 input_price_per_1k = 0
 output_price_per_1k = 0
+
+[[llm.models]]
+id = "summary-model"
+provider = "summary-fixture"
+capabilities = []
+context_window = 16384
+max_tokens = 512
+temperature = 0
+input_price_per_1k = 0
+output_price_per_1k = 0
+
+[compact]
+enabled = true
+automatic = false
+provider = "summary-fixture"
+model = "summary-model"
+timeout_ms = 5000
+max_tokens = 128
 `
 }
 
@@ -403,6 +486,21 @@ func scriptedFixture() string {
 				"args":            map[string]any{"command": "while [ ! -f release-background ]; do sleep 0.05; done; printf background-done"},
 			})),
 			scriptStep("tool", "", "background-run", map[string]any{"content": taskAnswer}),
+		},
+	}
+	encoded, err := json.MarshalIndent(fixture, "", "  ")
+	if err != nil {
+		panic(err)
+	}
+	return string(encoded) + "\n"
+}
+
+func compactScriptedFixture() string {
+	fixture := map[string]any{
+		"version": 1,
+		"steps": []any{
+			map[string]any{"response": map[string]any{"content": `{"summary":"process compacted simple round"}`}},
+			map[string]any{"response": map[string]any{"content": `{"summary":"process compacted simple round rebased"}`}},
 		},
 	}
 	encoded, err := json.MarshalIndent(fixture, "", "  ")
@@ -620,6 +718,57 @@ func getConversationMessages(
 	return data
 }
 
+func negotiateCompactFeature(t *testing.T, face *faceClient, requestID string) {
+	t.Helper()
+	face.send(t, protocol.TypeFaceCapabilitiesGet, protocol.FaceCapabilitiesGet{
+		RequestID: requestID, AcceptFeatures: []string{string(protocol.FaceFeatureContextCompaction)},
+	})
+	awaitAccepted(t, face, requestID, protocol.FaceOperationCapabilitiesGet)
+	result := awaitResult(t, face, requestID)
+	requireSuccessfulResult(t, result, protocol.FaceOperationCapabilitiesGet)
+	data, err := protocol.StrictDecode[protocol.FaceCapabilitiesResult](result.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsFaceFeature(data.Features, protocol.FaceFeatureContextCompaction) {
+		t.Fatalf("Compact feature was not negotiated: %+v", data.Features)
+	}
+}
+
+func containsFaceFeature(features []protocol.FaceFeature, target protocol.FaceFeature) bool {
+	for _, feature := range features {
+		if feature == target {
+			return true
+		}
+	}
+	return false
+}
+
+func getCompactStatus(t *testing.T, face *faceClient, requestID, conversationID string) protocol.FaceCompactStatus {
+	t.Helper()
+	face.send(t, protocol.TypeFaceCompactStatus, protocol.FaceCompactStatusGet{
+		RequestID: requestID, ConversationID: conversationID,
+	})
+	awaitAccepted(t, face, requestID, protocol.FaceOperationCompactStatus)
+	result := awaitResult(t, face, requestID)
+	requireSuccessfulResult(t, result, protocol.FaceOperationCompactStatus)
+	data, err := protocol.StrictDecode[protocol.FaceCompactStatus](result.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
+func decodeCompactResult(t *testing.T, result protocol.FaceResult) protocol.FaceCompactResult {
+	t.Helper()
+	requireSuccessfulResult(t, result, protocol.FaceOperationConversationCompact)
+	data, err := protocol.StrictDecode[protocol.FaceCompactResult](result.Data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
+}
+
 func requireSnapshotContents(t *testing.T, snapshot protocol.ConversationSnapshot, contents ...string) {
 	t.Helper()
 	counts := make(map[string]int)
@@ -814,6 +963,8 @@ func auditProcessState(
 	approvals map[string]protocol.ApprovalRequest,
 	runViews map[string]protocol.RemoteRunSummary,
 	taskView protocol.TaskSummary,
+	compactSummaryID string,
+	compactToSeq int,
 ) {
 	t.Helper()
 	db, err := store.New(fixture.database)
@@ -821,6 +972,17 @@ func auditProcessState(
 		t.Fatal(err)
 	}
 	defer db.Close()
+	compactSnapshot, err := db.GetCompactSnapshot(context.Background(), conversationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if compactSnapshot.Runtime.ActiveSummaryID != compactSummaryID || compactSnapshot.ActiveSummary == nil ||
+		compactSnapshot.ActiveSummary.ID != compactSummaryID || compactSnapshot.ActiveSummary.GenerationMode != "rebase" ||
+		compactSnapshot.ActiveSummary.FromSeq != 1 || compactSnapshot.ActiveSummary.ToSeq != compactToSeq ||
+		compactSnapshot.SummaryNodeCount < 2 {
+		t.Fatalf("persisted Compact state = %+v active=%+v, want summary %q",
+			compactSnapshot.Runtime, compactSnapshot.ActiveSummary, compactSummaryID)
+	}
 	messages, err := db.GetMessages(conversationID)
 	if err != nil {
 		t.Fatal(err)

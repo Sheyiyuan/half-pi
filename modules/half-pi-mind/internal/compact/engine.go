@@ -394,7 +394,7 @@ func (e *Engine) summaryInputForRange(messages []store.Message, active *store.Co
 		}
 		candidate := store.ContextSummary{FromSeq: 1, ToSeq: toSeq, ProjectionVersion: ProjectionVersion,
 			PolicyVersion: e.cfg.PolicyVersion, Profile: e.cfg.Profile, GenerationMode: "rebase"}
-		full, err := buildSummaryRequest(e.cfg, messages, candidate)
+		full, err := buildFullSummaryRequest(e.cfg, messages, candidate)
 		if err != nil {
 			return "", nil, llm.LLMRequest{}, 0, ErrInternal, compactError(ErrInternal, err)
 		}
@@ -410,7 +410,7 @@ func (e *Engine) summaryInputForRange(messages []store.Message, active *store.Co
 	}
 	candidate := store.ContextSummary{FromSeq: 1, ToSeq: toSeq, ProjectionVersion: ProjectionVersion,
 		PolicyVersion: e.cfg.PolicyVersion, Profile: e.cfg.Profile, GenerationMode: mode}
-	full, err := buildSummaryRequest(e.cfg, messages, candidate)
+	full, err := buildFullSummaryRequest(e.cfg, messages, candidate)
 	if err != nil {
 		return "", nil, llm.LLMRequest{}, 0, ErrInternal, compactError(ErrInternal, err)
 	}
@@ -486,13 +486,18 @@ func (e *Engine) estimateCandidateRequest(ctx context.Context, messages []store.
 }
 
 func (e *Engine) estimateWorstCandidate(ctx context.Context, messages []store.Message, candidate *store.ContextSummary, environment EnvironmentSnapshot) (int64, error) {
-	candidate.Summary = "x"
-	request, err := e.mainRequest(ctx, messages, candidate, environment)
+	probe := *candidate
+	probe.Summary = ""
+	request, err := e.mainRequest(ctx, messages, &probe, environment)
 	if err != nil {
 		return 0, err
 	}
 	base := e.estimator.EstimateRequest(request)
-	return base + ceilDiv(int64(2*e.cfg.MaxSummaryBytes())*110, 100), nil
+	return base + summaryBodyReserveTokens(e.cfg), nil
+}
+
+func summaryBodyReserveTokens(cfg RuntimeConfig) int64 {
+	return ceilDiv(int64(2*cfg.MaxSummaryBytes())*110, 100)
 }
 
 func (e *Engine) protectionSnapshot(sessionID string) (remoteexec.ProtectionSnapshot, error) {
