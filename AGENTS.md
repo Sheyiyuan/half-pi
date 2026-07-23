@@ -321,13 +321,9 @@ make test         # 运行全部 5 个模块的测试
 ##### 设计文档
 - `docs/README.md` — 当前文档索引、归档入口与维护约定
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
-- `docs/face-streaming-protocol.md` — Face revision 2 流式传输、背压、恢复和终态语义
 - `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（客户端、Mind runtime 与进程 E2E 可用）
-- `docs/remote-execution-closed-loop.md` — Mind → Hand 闭环架构设计（含进度流和持久化后台任务）
-- `docs/mind-management-cli.md` — Mind 本地管理 CLI、在线 IPC、离线 Store 与状态锁设计/实现记录
-- `docs/lifecycle-hooks-and-security-audit.md` — 已实现的统一生命周期 Hook、隔离 Reviewer、安全审计与插件开放前置契约
 - `docs/plugin-architecture.md` — 插件契约、Goja 宿主、process/WASM 运行时与实施顺序提案（尚未实现）
-- `docs/archived/README.md` — 已完成、被替代或仅供决策追溯的设计文档索引
+- `docs/archive/README.md` — 已完成、被替代或仅供决策追溯的设计文档索引
 
 #### ⏳ 待完成
 - [x] `/compact` 上下文压缩

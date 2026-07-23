@@ -1,6 +1,6 @@
 # Face 全屏 TUI 设计
 
-> 状态：已完成并归档。T1-T4 已实现，Linux 构建、race、reducer、布局、输入和真实 PTY 进程测试已通过；Windows ConPTY 与 macOS PTY 原生发布矩阵仍由项目路线图跟踪。本文保留产品决策与实施规格，当前 Face 行为以 [`../face-protocol.md`](../face-protocol.md)、[`../face-streaming-protocol.md`](../face-streaming-protocol.md) 和代码为准。
+> 状态：已完成并归档。T1-T4 已实现，Linux 构建、race、reducer、布局、输入和真实 PTY 进程测试已通过；Windows ConPTY 与 macOS PTY 原生发布矩阵仍由项目路线图跟踪。本文保留产品决策与实施规格，当前 Face 行为以 [`../face-protocol.md`](../face-protocol.md)、[`face-streaming-protocol.md`](face-streaming-protocol.md) 和代码为准。
 
 ## 1. 背景
 

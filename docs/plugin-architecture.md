@@ -2,14 +2,14 @@
 
 > 状态：插件 runtime 提案（2026-07-22），尚未实现；所依赖的 lifecycle、ToolRuntime、安全 Reviewer、审计/outbox 和 SessionGroup Skill 前置契约已经实现。
 >
-> 本文定义 Half-Pi 插件的信任分层、运行时选型、capability、scope、manifest、Goja 宿主 API、process/WASM 边界、失败语义和实施顺序。插件依赖的统一生命周期、安全审查、审计和 ToolRuntime 前置工作，以 [`lifecycle-hooks-and-security-audit.md`](lifecycle-hooks-and-security-audit.md) 为权威来源。
+> 本文定义 Half-Pi 插件的信任分层、运行时选型、capability、scope、manifest、Goja 宿主 API、process/WASM 边界、失败语义和实施顺序。插件依赖的统一生命周期、安全审查、审计和 ToolRuntime 前置工作，以归档规格 [`lifecycle-hooks-and-security-audit.md`](archive/lifecycle-hooks-and-security-audit.md) 为权威来源。
 
 相关文档：
 
-- [`lifecycle-hooks-and-security-audit.md`](lifecycle-hooks-and-security-audit.md)：插件开放前必须完成的生命周期、安全、审计和隔离基础；
+- [`lifecycle-hooks-and-security-audit.md`](archive/lifecycle-hooks-and-security-audit.md)：插件开放前必须完成的生命周期、安全、审计和隔离基础；
 - [`face-protocol.md`](face-protocol.md)：Face identity、scope、conversation ownership 和审批投影；
-- [`remote-execution-closed-loop.md`](remote-execution-closed-loop.md)：插件工具涉及远程执行时必须复用的 RemoteRun 与 Hand 最终守门；
-- [`mind-management-cli.md`](mind-management-cli.md)：未来插件安装、启用、禁用和授权应复用的本地管理与审计边界。
+- [`remote-execution-closed-loop.md`](archive/remote-execution-closed-loop.md)：插件工具涉及远程执行时必须复用的 RemoteRun 与 Hand 最终守门；
+- [`mind-management-cli.md`](archive/mind-management-cli.md)：未来插件安装、启用、禁用和授权应复用的本地管理与审计边界。
 
 ## 1. 摘要
 
@@ -47,7 +47,7 @@ Outbox dispatcher 当前不随 Mind 启动，因为还没有正式插件 consume
 
 ### 3.1 两层接口
 
-[`lifecycle-hooks-and-security-audit.md`](lifecycle-hooks-and-security-audit.md) 先完成进程内 internal Hook API 和 fake consumer 验收。插件层只在这些接口稳定后定义外部协议，不能一边重构核心生命周期，一边把临时 Go 类型公开给脚本。
+[`lifecycle-hooks-and-security-audit.md`](archive/lifecycle-hooks-and-security-audit.md) 先完成进程内 internal Hook API 和 fake consumer 验收。插件层只在这些接口稳定后定义外部协议，不能一边重构核心生命周期，一边把临时 Go 类型公开给脚本。
 
 外部插件不建议直接使用 Go `plugin`：
 

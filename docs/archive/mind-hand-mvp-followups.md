@@ -8,7 +8,7 @@
 
 当前协议足够支撑一版 demo，但还不是长期稳定协议。本文件记录 demo 后优先收敛的设计债。
 
-远程执行闭环的集中方案见 [`../remote-execution-closed-loop.md`](../remote-execution-closed-loop.md)。
+远程执行闭环的集中方案见 [`remote-execution-closed-loop.md`](remote-execution-closed-loop.md)。
 
 ## 1. 审批语义与 Hand 最终守门
 

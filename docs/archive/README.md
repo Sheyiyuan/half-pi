@@ -17,5 +17,10 @@
 | [`face-core-closure-plan.md`](face-core-closure-plan.md) | Face wire、身份与加密收口实施已经完成 |
 | [`next-development-plan.md`](next-development-plan.md) | Face Alpha P0-P4 与远程执行 R0-R3 收尾已经完成 |
 | [`face-tui-design.md`](face-tui-design.md) | 全屏 Face TUI 的 T1-T4 产品与实施规格已经落地 |
+| [`face-streaming-protocol.md`](face-streaming-protocol.md) | Face revision 2 流式传输、背压、恢复和终态语义已经落地 |
+| [`remote-execution-closed-loop.md`](remote-execution-closed-loop.md) | Mind → Hand 闭环、进度流和持久化任务已经落地 |
+| [`mind-management-cli.md`](mind-management-cli.md) | Mind 本地管理 CLI、在线 IPC、离线 Store 与状态锁已经落地 |
+| [`lifecycle-hooks-and-security-audit.md`](lifecycle-hooks-and-security-audit.md) | 统一 Lifecycle、ToolRuntime、隔离 Reviewer、安全审计和插件前置契约已经落地 |
+| [`context-compaction.md`](context-compaction.md) | 会话级手动/自动 Compact、存储、Actor 编排和 Face 协议已经落地 |
 
 归档文档中的阶段性限制和未来时态应按其历史时间点理解；当前能力声明以活动文档和仓库代码为准。Windows ConPTY、macOS PTY 等尚未完成的发布环境验收继续由 [`AGENTS.md`](../../AGENTS.md) 跟踪，不会使已完成的实施规格重新成为活动文档。

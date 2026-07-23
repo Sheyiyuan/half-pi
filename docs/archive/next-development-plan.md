@@ -2,7 +2,7 @@
 
 ## 状态
 
-已归档。本文制定于 2026-07-17，所列 Face Alpha P0-P4 和远程执行 R0-R3 均已完成；原生 Windows 进程树取消也已在 2026-07-19 验收。当前协议与架构分别以 [`../face-protocol.md`](../face-protocol.md) 和 [`../remote-execution-closed-loop.md`](../remote-execution-closed-loop.md) 为准。
+已归档。本文制定于 2026-07-17，所列 Face Alpha P0-P4 和远程执行 R0-R3 均已完成；原生 Windows 进程树取消也已在 2026-07-19 验收。当前协议与架构分别以 [`../face-protocol.md`](../face-protocol.md) 和 [`remote-execution-closed-loop.md`](remote-execution-closed-loop.md) 为准。
 
 ## 现状结论
 
@@ -207,7 +207,7 @@ R0-R3 已完成；其 run、task 和 Hand 状态现在通过 P1 Face Gateway 投
 
 ## 后续衔接
 
-本计划已经完成并归档。后续开发入口为 [`../mind-management-cli.md`](../mind-management-cli.md)，`/compact` 和 Skill 工作区集成继续按独立主线推进。
+本计划已经完成并归档。后续开发入口为 [`mind-management-cli.md`](mind-management-cli.md)，`/compact` 和 Skill 工作区集成继续按独立主线推进。
 
 ## 完成判定
 

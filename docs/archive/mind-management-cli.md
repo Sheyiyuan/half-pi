@@ -18,9 +18,9 @@
 
 相关文档：
 
-- [`archived/face-core-closure-plan.md`](archived/face-core-closure-plan.md)：Face/Hand 凭据、scope 和即时撤销边界的已完成实施规格。
-- [`face-protocol.md`](face-protocol.md)：Face identity、scope 和连接生命周期。
-- [`archived/mind-service-mode.md`](archived/mind-service-mode.md)：Mind service mode 与 PID 文件的历史设计。
+- [`face-core-closure-plan.md`](face-core-closure-plan.md)：Face/Hand 凭据、scope 和即时撤销边界的已完成实施规格。
+- [`face-protocol.md`](../face-protocol.md)：Face identity、scope 和连接生命周期。
+- [`mind-service-mode.md`](mind-service-mode.md)：Mind service mode 与 PID 文件的历史设计。
 
 ## 背景
 

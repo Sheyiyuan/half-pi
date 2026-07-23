@@ -2,7 +2,7 @@
 
 ## 状态
 
-核心与增强能力已落地。本文承接 [`archived/remote-execution.md`](archived/remote-execution.md) 的 MVP 设计。审批证明、accepted/rejected、显式取消、唯一终态、服务级 Authority、SQLite 审计、会话隔离、有界 `rpc_progress`、持久化后台任务和 Windows 进程树取消均已实现并完成验收。实施与收尾记录见 [`archived/remote-execution-implementation-plan.md`](archived/remote-execution-implementation-plan.md) 和 [`archived/next-development-plan.md`](archived/next-development-plan.md)。
+核心与增强能力已落地。本文承接 [`remote-execution.md`](remote-execution.md) 的 MVP 设计。审批证明、accepted/rejected、显式取消、唯一终态、服务级 Authority、SQLite 审计、会话隔离、有界 `rpc_progress`、持久化后台任务和 Windows 进程树取消均已实现并完成验收。实施与收尾记录见 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md) 和 [`next-development-plan.md`](next-development-plan.md)。
 
 ## 背景
 
@@ -342,7 +342,7 @@ Mind 在同一 SQLite transaction 中创建 run、created event 和 `remote_task
 
 闭环协议只解决单次 run 的生命周期，不解决会话并发。Face/TUI/IM Bot 接入前需要明确状态边界。
 
-统一 Face 的连接、鉴权、command/response、快照、事件投影和 Headless Agent Face 方案见 [`face-protocol.md`](face-protocol.md)。其中 Face payload 使用 `conversation_id`；本节历史设计中的业务 `session_id` 均指持久化对话，不是 `Envelope.SessionID` 的连接级防重放会话。
+统一 Face 的连接、鉴权、command/response、快照、事件投影和 Headless Agent Face 方案见 [`face-protocol.md`](../face-protocol.md)。其中 Face payload 使用 `conversation_id`；本节历史设计中的业务 `session_id` 均指持久化对话，不是 `Envelope.SessionID` 的连接级防重放会话。
 
 建议拆成两类状态：
 

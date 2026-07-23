@@ -2,7 +2,7 @@
 
 ## 状态
 
-已归档。本文记录 2026-07-16 的远程执行 MVP 设计，其中 `SkipChecks`、裸 `pendingCalls` 和无显式取消等描述已被后续闭环实现取代；当前行为以 [`../remote-execution-closed-loop.md`](../remote-execution-closed-loop.md) 为准，实施记录见 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md)。
+已归档。本文记录 2026-07-16 的远程执行 MVP 设计，其中 `SkipChecks`、裸 `pendingCalls` 和无显式取消等描述已被后续闭环实现取代；当前行为以 [`remote-execution-closed-loop.md`](remote-execution-closed-loop.md) 为准，实施记录见 [`remote-execution-implementation-plan.md`](remote-execution-implementation-plan.md)。
 
 MVP 实现保持 `Core.Chat()` 主循环不变，通过四个本地工具让 LLM 感知、选择并调用远程 Hand：
 

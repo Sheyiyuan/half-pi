@@ -1,10 +1,10 @@
 # Face 接入与统一协议设计
 
-> Face 核心 wire contract、身份凭据、四步挑战握手、应用层加密和后台 task 协议以本文及 [`ai-face-protocol.md`](ai-face-protocol.md) 为准。全屏人类终端的历史产品与实施规格见归档的 [`face-tui-design.md`](archived/face-tui-design.md)；当前实现复用本文定义的正式协议，不存在 TUI 专用旁路。归档的 [`face-core-closure-plan.md`](archived/face-core-closure-plan.md) 记录历史 v1 实施，已被 v2 安全升级替代。
+> Face 核心 wire contract、身份凭据、四步挑战握手、应用层加密和后台 task 协议以本文及 [`ai-face-protocol.md`](ai-face-protocol.md) 为准。全屏人类终端的历史产品与实施规格见归档的 [`face-tui-design.md`](archive/face-tui-design.md)；当前实现复用本文定义的正式协议，不存在 TUI 专用旁路。归档的 [`face-core-closure-plan.md`](archive/face-core-closure-plan.md) 记录历史 v1 实施，已被 v2 安全升级替代。
 
 ## 状态
 
-Face Alpha P0-P4 runtime 和应用协议 revision 2 流式增强已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、分级有界队列、可恢复 Chat 流、run progress、Chat/cancel、异步审批、run/task cancel 以及结构化事件；Headless JSONL 与人类终端 Face 已通过真实 Mind/Hand/Face 进程级 E2E。流式细节见 [`face-streaming-protocol.md`](face-streaming-protocol.md)，AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。
+Face Alpha P0-P4 runtime 和应用协议 revision 2 流式增强已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、分级有界队列、可恢复 Chat 流、run progress、Chat/cancel、异步审批、run/task cancel 以及结构化事件；Headless JSONL 与人类终端 Face 已通过真实 Mind/Hand/Face 进程级 E2E。流式细节见归档规格 [`face-streaming-protocol.md`](archive/face-streaming-protocol.md)，AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。
 
 2026-07-19 的 v2 安全升级已通过 Unix 五模块 race/E2E、Windows `386/amd64/arm64` 交叉编译，以及 WinBoat Windows 11 Pro AMD64 原生 protocol/wss/hub/dispatcher race 测试和 Mind/Hand/Face 进程链路。原生链路验证 version 2 encrypted `registered`、Face/Hand 同时在线、凭据撤销立即断连和日志秘密扫描；更新后的官方 `scripts/test-windows.ps1 -PrebuiltDir` 使用当前源码运行，11 组测试全部 PASS 且 stderr 为空。
 
@@ -432,7 +432,7 @@ connect and authenticate
   → consume face.event
 ```
 
-声明 `chat_stream_resume.v1` 的客户端在订阅安装后，对快照中的 pending Chat 调用 `face.chat.stream.get`，以 `last_seq` 为边界合并查询期间缓存的 delta。Chat 结束后改用 `face.conversation.messages` 读取 append-only 权威历史。完整算法和限额见 [`face-streaming-protocol.md`](face-streaming-protocol.md)。
+声明 `chat_stream_resume.v1` 的客户端在订阅安装后，对快照中的 pending Chat 调用 `face.chat.stream.get`，以 `last_seq` 为边界合并查询期间缓存的 delta。Chat 结束后改用 `face.conversation.messages` 读取 append-only 权威历史。完整算法和限额见归档规格 [`face-streaming-protocol.md`](archive/face-streaming-protocol.md)。
 
 ## Face Event
 
