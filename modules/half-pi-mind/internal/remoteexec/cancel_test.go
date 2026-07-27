@@ -44,7 +44,15 @@ func newCancelAuthority(t *testing.T, handID string, registry *Registry) (*Autho
 		_ = session.Conn.Close()
 		_ = authority.Close()
 	})
-	peer := wsHub.PeerByType(hub.PeerHand, handID)
+	// Hub 在发送 registered 之后才把 peer 提升进注册表，客户端可能先于提升返回，
+	// 因此这里等待提升完成而不是假设它已经发生。
+	var peer *hub.Peer
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if peer = wsHub.PeerByType(hub.PeerHand, handID); peer != nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if peer == nil {
 		t.Fatal("registered Hand peer was not retained")
 	}
