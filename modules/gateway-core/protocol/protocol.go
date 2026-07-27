@@ -41,7 +41,7 @@ const (
 
 const (
 	// ProtocolVersion 是当前唯一支持的 wire protocol 版本。
-	ProtocolVersion = 2
+	ProtocolVersion = 3
 	// HandshakeAlgorithm 是注册证明和会话 payload 使用的算法。
 	HandshakeAlgorithm = "AES-128-GCM"
 )
@@ -88,10 +88,12 @@ func (e *Envelope) AAD() []byte {
 }
 
 // Register 是 Face 或 Hand 首次连接时发送的公开路由信息，不包含长期秘密。
+// ClientShare 是客户端一次性 X25519 公钥，公开无害，用于保证会话密钥新鲜性。
 type Register struct {
 	ProtocolVersion int      `json:"protocol_version"`
 	ClientID        string   `json:"client_id"`
 	Type            PeerType `json:"type"`
+	ClientShare     string   `json:"client_share"`
 }
 
 // HandInfo 是 Hand 在加密注册证明中上报的静态设备信息。
@@ -111,6 +113,7 @@ type Registered struct {
 }
 
 // RegisterChallenge 是服务端绑定当前连接发出的单次挑战。
+// ServerShare 是服务端一次性 X25519 公钥，公开无害。
 type RegisterChallenge struct {
 	ProtocolVersion int    `json:"protocol_version"`
 	HandshakeID     string `json:"handshake_id"`
@@ -119,6 +122,7 @@ type RegisterChallenge struct {
 	Challenge       string `json:"challenge"`
 	ExpiresAt       int64  `json:"expires_at"`
 	Algorithm       string `json:"algorithm"`
+	ServerShare     string `json:"server_share"`
 }
 
 // RegisterProof 是客户端对注册挑战的持钥证明。
@@ -135,7 +139,12 @@ type RegisterProofClaims struct {
 	HandInfo  *HandInfo `json:"hand_info,omitempty"`
 }
 
-// HandshakeTranscript 是会话密钥派生使用的规范 transcript。
+// HandshakeTranscript 是会话密钥派生使用的规范 transcript，
+// 覆盖 register 与 register_challenge 两帧的全部字段。
+//
+// 不变量：新增任何握手帧字段时必须同步加入本结构，否则该字段既不参与
+// 密钥派生也不被认证，攻击者可任意改写。该不变量由
+// TestTranscriptCoversHandshakeFrames 强制。
 type HandshakeTranscript struct {
 	ProtocolVersion int      `json:"protocol_version"`
 	PeerType        PeerType `json:"peer_type"`
@@ -144,6 +153,10 @@ type HandshakeTranscript struct {
 	ServerID        string   `json:"server_id"`
 	SessionID       string   `json:"session_id"`
 	Challenge       string   `json:"challenge"`
+	ExpiresAt       int64    `json:"expires_at"`
+	Algorithm       string   `json:"algorithm"`
+	ClientShare     string   `json:"client_share"`
+	ServerShare     string   `json:"server_share"`
 }
 
 // RegisterProofAAD 是 register proof 的固定附加认证数据。

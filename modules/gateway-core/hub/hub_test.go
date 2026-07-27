@@ -160,7 +160,11 @@ func TestProofStagePeerIsNotVisible(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer conn.Close()
-	reg, _ := protocol.NewEnvelope("r", protocol.TypeRegister, protocol.Register{ProtocolVersion: protocol.ProtocolVersion, ClientID: "pending", Type: protocol.PeerFace})
+	_, clientShare, err := wss.NewEphemeralShare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reg, _ := protocol.NewEnvelope("r", protocol.TypeRegister, protocol.Register{ProtocolVersion: protocol.ProtocolVersion, ClientID: "pending", Type: protocol.PeerFace, ClientShare: clientShare})
 	if err := conn.WriteJSON(reg); err != nil {
 		t.Fatal(err)
 	}
