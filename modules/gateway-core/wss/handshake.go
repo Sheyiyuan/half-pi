@@ -15,7 +15,19 @@ const (
 	proofInfo = "half-pi/v2/register-proof/"
 	c2sInfo   = "half-pi/v2/client-to-server/"
 	s2cInfo   = "half-pi/v2/server-to-client/"
+
+	// challengeSize 是服务端挑战的固定字节数。
+	challengeSize = 32
 )
+
+// decodeCanonicalBase64 解码标准 base64 并要求编码规范且长度精确匹配。
+func decodeCanonicalBase64(value string, size int) ([]byte, error) {
+	raw, err := base64.StdEncoding.DecodeString(value)
+	if err != nil || len(raw) != size || base64.StdEncoding.EncodeToString(raw) != value {
+		return nil, fmt.Errorf("value must be canonical base64 of %d bytes", size)
+	}
+	return raw, nil
+}
 
 // SessionKeys 是注册 transcript 派生的三把用途隔离密钥。
 type SessionKeys struct {
@@ -38,9 +50,9 @@ func DeriveSessionKeys(token, applicationKey string, transcript protocol.Handsha
 	root := make([]byte, 0, len(tokenBytes)+len(applicationKeyBytes))
 	root = append(root, tokenBytes...)
 	root = append(root, applicationKeyBytes...)
-	challenge, err := base64.StdEncoding.DecodeString(transcript.Challenge)
-	if err != nil || len(challenge) != 32 || base64.StdEncoding.EncodeToString(challenge) != transcript.Challenge {
-		return keys, fmt.Errorf("challenge must be canonical base64 of 32 bytes")
+	challenge, err := decodeCanonicalBase64(transcript.Challenge, challengeSize)
+	if err != nil {
+		return keys, fmt.Errorf("challenge must be canonical base64 of %d bytes", challengeSize)
 	}
 	transcriptJSON, err := json.Marshal(transcript)
 	if err != nil {
@@ -147,8 +159,7 @@ func decodeHandshakeSecret(name, value string) ([]byte, error) {
 }
 
 func validateProofClaims(peerType protocol.PeerType, claims protocol.RegisterProofClaims, handInfoPresent bool) error {
-	challenge, err := base64.StdEncoding.DecodeString(claims.Challenge)
-	if err != nil || len(challenge) != 32 || base64.StdEncoding.EncodeToString(challenge) != claims.Challenge {
+	if _, err := decodeCanonicalBase64(claims.Challenge, challengeSize); err != nil {
 		return fmt.Errorf("invalid proof challenge")
 	}
 	switch peerType {

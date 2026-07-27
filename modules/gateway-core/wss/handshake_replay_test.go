@@ -74,7 +74,7 @@ func recordSession(t *testing.T, label string) recordedSession {
 	}))
 	defer proxy.Close()
 
-	session, err := wss.NewClient("ws"+strings.TrimPrefix(proxy.URL, "http")).ConnectAndRegister(handCredentials(label))
+	session, err := wss.NewClient("ws" + strings.TrimPrefix(proxy.URL, "http")).ConnectAndRegister(handCredentials(label))
 	if err != nil {
 		t.Fatalf("录制握手失败: %v", err)
 	}
