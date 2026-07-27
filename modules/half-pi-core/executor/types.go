@@ -4,12 +4,8 @@ package executor
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
-	"sort"
-	"sync"
-	"sync/atomic"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 )
@@ -195,9 +191,14 @@ type ToolExecutor interface {
 	Tools() []Tool
 }
 
-// CheckTool 对工具参数执行 Tool.Check 和 DefaultConfirm，供需要自定义审批流的调用方复用。
+// CheckTool 在进程默认目录中对工具参数执行 Tool.Check 和 DefaultConfirm。
 func CheckTool(name string, args json.RawMessage) (Tool, Decision, string, bool) {
-	tool, ok := FindTool(name)
+	return DefaultCatalog().CheckTool(name, args)
+}
+
+// CheckTool 对工具参数执行 Tool.Check 和 DefaultConfirm，供需要自定义审批流的调用方复用。
+func (c *Catalog) CheckTool(name string, args json.RawMessage) (Tool, Decision, string, bool) {
+	tool, ok := c.Find(name)
 	if !ok {
 		return Tool{}, DecisionDeny, fmt.Sprintf("unknown tool: %s", name), false
 	}
@@ -205,9 +206,14 @@ func CheckTool(name string, args json.RawMessage) (Tool, Decision, string, bool)
 	return tool, decision, reason, true
 }
 
-// CheckToolWithPolicy 使用显式策略检查工具，避免不同会话共享全局安全模式。
+// CheckToolWithPolicy 在进程默认目录中使用显式策略检查工具。
 func CheckToolWithPolicy(name string, args json.RawMessage, policy *security.Policy) (Tool, Decision, string, bool) {
-	tool, ok := FindTool(name)
+	return DefaultCatalog().CheckToolWithPolicy(name, args, policy)
+}
+
+// CheckToolWithPolicy 使用显式策略检查工具，避免不同会话共享全局安全模式。
+func (c *Catalog) CheckToolWithPolicy(name string, args json.RawMessage, policy *security.Policy) (Tool, Decision, string, bool) {
+	tool, ok := c.Find(name)
 	if !ok {
 		return Tool{}, DecisionDeny, "unknown tool: " + name, false
 	}
@@ -233,101 +239,6 @@ func toolDecision(tool Tool, args json.RawMessage) (Decision, string) {
 		return DecisionConfirm, "该操作默认需用户确认"
 	}
 	return DecisionAllow, ""
-}
-
-// ── 全局注册表 ──
-
-var (
-	registryMu       sync.RWMutex
-	registeredTools  []Tool
-	registryRevision atomic.Uint64
-)
-
-// ToolRegistrySnapshot 是工具定义在一个 revision 上的不可变规范视图。
-type ToolRegistrySnapshot struct {
-	Revision uint64
-	Tools    []Tool
-	Digest   string
-}
-
-// Register 在 init() 中调用，注册工具到全局列表。
-func Register(t Tool) {
-	if t.Name == "" {
-		panic("executor: tool name cannot be empty")
-	}
-	registryMu.Lock()
-	defer registryMu.Unlock()
-	for _, existing := range registeredTools {
-		if existing.Name == t.Name {
-			panic(fmt.Sprintf("executor: duplicate tool registration: %s", t.Name))
-		}
-	}
-	registeredTools = append(registeredTools, t)
-	registryRevision.Add(1)
-}
-
-// RegisteredTools 返回所有已注册的工具。
-func RegisteredTools() []Tool {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-	tools := make([]Tool, len(registeredTools))
-	for i := range registeredTools {
-		tools[i] = cloneTool(registeredTools[i])
-	}
-	return tools
-}
-
-// RegisteredToolsSnapshot 返回深拷贝工具定义、单调 revision 和规范摘要。
-func RegisteredToolsSnapshot() ToolRegistrySnapshot {
-	registryMu.RLock()
-	tools := make([]Tool, len(registeredTools))
-	for i := range registeredTools {
-		tools[i] = cloneTool(registeredTools[i])
-	}
-	revision := registryRevision.Load()
-	registryMu.RUnlock()
-
-	type digestTool struct {
-		Name           string
-		Description    string
-		Parameters     map[string]any
-		DefaultConfirm bool
-		OwnsConfirm    bool
-	}
-	digestTools := make([]digestTool, len(tools))
-	for i := range tools {
-		digestTools[i] = digestTool{
-			Name: tools[i].Name, Description: tools[i].Description,
-			Parameters:     tools[i].SchemaParameters(),
-			DefaultConfirm: tools[i].DefaultConfirm, OwnsConfirm: tools[i].OwnsConfirm,
-		}
-	}
-	sort.Slice(digestTools, func(i, j int) bool { return digestTools[i].Name < digestTools[j].Name })
-	encoded, _ := json.Marshal(digestTools)
-	digest := sha256.Sum256(append([]byte("half-pi:tool-registry:v1\x00"), encoded...))
-	return ToolRegistrySnapshot{Revision: revision, Tools: tools, Digest: fmt.Sprintf("sha256:%x", digest[:])}
-}
-
-func cloneTool(tool Tool) Tool {
-	if tool.Parameters != nil {
-		parameters := *tool.Parameters
-		parameters.Properties = append([]PropertySchema(nil), tool.Parameters.Properties...)
-		parameters.Required = append([]string(nil), tool.Parameters.Required...)
-		tool.Parameters = &parameters
-	}
-	return tool
-}
-
-// FindTool 按名称查找已注册的工具。
-func FindTool(name string) (Tool, bool) {
-	registryMu.RLock()
-	defer registryMu.RUnlock()
-	for i := range registeredTools {
-		if registeredTools[i].Name == name {
-			return registeredTools[i], true
-		}
-	}
-	return Tool{}, false
 }
 
 // SchemaParameters 返回参数的 JSON Schema。

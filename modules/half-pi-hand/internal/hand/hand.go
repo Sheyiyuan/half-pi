@@ -11,6 +11,7 @@ import (
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/wss"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
 
 	// 注册通用工具
@@ -26,6 +27,7 @@ type Hand struct {
 	send        func(string, any) error
 	taskManager *taskmanager.Manager
 	lifecycle   *corelifecycle.LifecycleRegistry
+	catalog     *executor.Catalog
 
 	tasksMu sync.Mutex
 	tasks   map[string]*task
@@ -39,8 +41,18 @@ func New(conn *wss.SessionConn, cfg *config.Config) *Hand {
 // NewWithTaskManager 创建共享进程级后台任务管理器的 Hand 实例。
 func NewWithTaskManager(conn *wss.SessionConn, cfg *config.Config, manager *taskmanager.Manager) *Hand {
 	return &Hand{
-		conn: conn, cfg: cfg, taskManager: manager, lifecycle: corelifecycle.NewRegistry(), tasks: make(map[string]*task),
+		conn: conn, cfg: cfg, taskManager: manager, lifecycle: corelifecycle.NewRegistry(),
+		catalog: executor.DefaultCatalog(), tasks: make(map[string]*task),
 	}
+}
+
+// toolCatalog 返回本节点解析工具所用的目录。
+// 目录只描述本节点存在哪些工具；allow/deny 权限过滤始终由 Hand Authorizer 负责。
+func (h *Hand) toolCatalog() *executor.Catalog {
+	if h.catalog == nil {
+		return executor.DefaultCatalog()
+	}
+	return h.catalog
 }
 
 // Serve 启动消息读取循环，阻塞直到连接断开或 ctx 取消。

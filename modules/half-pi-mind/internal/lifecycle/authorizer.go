@@ -32,6 +32,7 @@ type MindAuthorizer struct {
 	autoDeny       map[authorizationKey]bool
 	policyVersion  string
 	reviewObserver ReviewObserver
+	catalog        *coreexec.Catalog
 }
 
 // ReviewObserver 接收独立 Reviewer 的脱敏生命周期事实。
@@ -89,6 +90,13 @@ func (a *MindAuthorizer) SetReviewObserver(observer ReviewObserver) {
 	a.mu.Unlock()
 }
 
+// SetCatalog 设置用于 Reviewer 参数投影的工具目录；nil 表示回退到进程默认目录。
+func (a *MindAuthorizer) SetCatalog(catalog *coreexec.Catalog) {
+	a.mu.Lock()
+	a.catalog = catalog
+	a.mu.Unlock()
+}
+
 // Authorize 实现 executor.Authorizer。
 func (a *MindAuthorizer) Authorize(ctx context.Context, frozen coreexec.FrozenInvocation) (authorization coreexec.Authorization) {
 	a.mu.Lock()
@@ -100,6 +108,7 @@ func (a *MindAuthorizer) Authorize(ctx context.Context, frozen coreexec.FrozenIn
 	policyVersion := a.policyVersion
 	key := authorizationKey{GroupID: frozen.Meta.GroupID, Tool: frozen.Tool, TargetNode: frozen.TargetNode, Policy: policyVersion}
 	autoAllow, autoDeny := a.autoAllow[key], a.autoDeny[key]
+	catalog := a.catalog
 	a.mu.Unlock()
 	defer func() {
 		if authorization.PolicyVersion == "" {
@@ -141,7 +150,7 @@ func (a *MindAuthorizer) Authorize(ctx context.Context, frozen coreexec.FrozenIn
 	case "review":
 		if !needsUser && reviewCandidate(found, tool, frozen.Args, policy) {
 			_ = notifyReview(reviewObserver, ctx, corelifecycle.PhaseSecurityReviewRequested, frozen, reviewerMetadata(reviewer, policyVersion), nil)
-			verdict, err := reviewSafely(ctx, reviewer, frozen, policyVersion)
+			verdict, err := reviewSafely(ctx, reviewer, frozen, policyVersion, catalog)
 			if err != nil {
 				_ = notifyReview(reviewObserver, ctx, corelifecycle.PhaseSecurityReviewFailed, frozen, verdict, err)
 			} else {
@@ -238,7 +247,7 @@ func reviewCandidate(found bool, tool coreexec.Tool, args []byte, policy *securi
 	return decision == coreexec.DecisionConfirm
 }
 
-func reviewSafely(ctx context.Context, reviewer Reviewer, frozen coreexec.FrozenInvocation, policyVersion string) (verdict ReviewVerdict, err error) {
+func reviewSafely(ctx context.Context, reviewer Reviewer, frozen coreexec.FrozenInvocation, policyVersion string, catalog *coreexec.Catalog) (verdict ReviewVerdict, err error) {
 	started := time.Now()
 	metadata := reviewerMetadata(reviewer, policyVersion)
 	defer func() {
@@ -264,7 +273,7 @@ func reviewSafely(ctx context.Context, reviewer Reviewer, frozen coreexec.Frozen
 			err = fmt.Errorf("reviewer panic: %v", recovered)
 		}
 	}()
-	request := NewReviewRequest(frozen, policyVersion)
+	request := NewReviewRequest(frozen, policyVersion, catalog)
 	if !request.ProjectionComplete {
 		return ReviewVerdict{
 			SchemaVersion: 1, Decision: ReviewRequireUser, ReasonCode: "sensitive_argument",

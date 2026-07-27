@@ -55,7 +55,7 @@ func (c *Core) rawContextView(ctx context.Context) ([]llm.Message, int64, compac
 
 func (c *Core) captureModelEnvironment(contextVersion int64) modelEnvironmentToken {
 	c.stateMu.RLock()
-	mode, registry, skills := c.Mode, c.lifecycle, c.skills
+	mode, registry, skills, catalog := c.Mode, c.lifecycle, c.skills, c.catalog
 	c.stateMu.RUnlock()
 	token := modelEnvironmentToken{ContextVersion: contextVersion, Mode: mode}
 	if registry != nil {
@@ -66,7 +66,10 @@ func (c *Core) captureModelEnvironment(contextVersion int64) modelEnvironmentTok
 		snapshot := skills.Snapshot()
 		token.SkillRevision, token.SkillDigest = snapshot.Revision, snapshot.Digest
 	}
-	tools := executor.RegisteredToolsSnapshot()
+	if catalog == nil {
+		catalog = executor.DefaultCatalog()
+	}
+	tools := catalog.Snapshot()
 	token.ToolRevision, token.ToolDigest = tools.Revision, tools.Digest
 	return token
 }

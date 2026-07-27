@@ -194,7 +194,7 @@ func (c *Core) ChatWithTransport(ctx context.Context, input string, transport Ch
 			return content, nil
 		}
 		for _, call := range resp.ToolCalls {
-			cleanArgs, forceApproval := prepareToolArgs(call.Name, call.Args)
+			cleanArgs, forceApproval := c.prepareToolArgs(call.Name, call.Args)
 			if c.Debug {
 				c.publish(events.LevelDebug, events.TypeToolCall, fmt.Sprintf("%s(%s)", call.Name, corelifecycle.HashDigest(cleanArgs)))
 			}
@@ -515,13 +515,16 @@ func (c *Core) prepareAssistantDelivery(ctx context.Context, meta corelifecycle.
 	return transformed, nil
 }
 
-func prepareToolArgs(toolName, encoded string) (json.RawMessage, bool) {
+func (c *Core) prepareToolArgs(toolName, encoded string) (json.RawMessage, bool) {
 	var rawArgs map[string]any
 	if err := json.Unmarshal([]byte(encoded), &rawArgs); err != nil || rawArgs == nil {
 		return json.RawMessage(encoded), false
 	}
 	forceApproval, _ := rawArgs["confirm"].(bool)
-	if tool, ok := executor.FindTool(toolName); !ok || !tool.OwnsConfirm {
+	c.stateMu.RLock()
+	catalog := c.catalog
+	c.stateMu.RUnlock()
+	if tool, ok := catalog.Find(toolName); !ok || !tool.OwnsConfirm {
 		delete(rawArgs, "confirm")
 	} else {
 		forceApproval = false
