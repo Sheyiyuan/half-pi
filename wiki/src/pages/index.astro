@@ -1,0 +1,415 @@
+---
+import StarlightPage from "@astrojs/starlight/components/StarlightPage.astro";
+import {
+    ArrowDown,
+    ArrowRight,
+    BookOpen,
+    BrainCircuit,
+    ChartNetwork,
+    Github,
+    Hand,
+    LockKeyhole,
+    MessagesSquare,
+    MonitorSmartphone,
+    Network,
+    RefreshCw,
+    Server,
+    ShieldCheck,
+    SquareTerminal,
+} from "lucide-astro";
+
+const frontmatter = {
+    title: "Half Pi · 半派",
+    description:
+        "自托管、跨设备、始终在线的个人 AI 助理。产品介绍、架构手册与学习教程。",
+    template: "splash" as const,
+    editUrl: false,
+    lastUpdated: false,
+    prev: false,
+    next: false,
+};
+---
+
+<StarlightPage frontmatter={frontmatter}>
+    <section class="home-hero" aria-labelledby="home-title">
+        <div class="home-hero-grid" aria-hidden="true"></div>
+        <div class="home-hero-scan" aria-hidden="true"></div>
+        <div class="home-hero-orbits" aria-hidden="true">
+            <span class="home-orbit is-outer"></span>
+            <span class="home-orbit is-inner"></span>
+        </div>
+        <div class="home-hero-particles" aria-hidden="true">
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+            <span></span>
+        </div>
+
+        <div class="home-hero-center">
+            <div class="home-hero-logo-wrap" aria-hidden="true">
+                <span class="home-logo-ring is-outer"></span>
+                <span class="home-logo-ring is-inner"></span>
+                <svg
+                    class="home-logo-layer is-arc-small"
+                    viewBox="0 0 1.2 1.2"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                        fill="none"
+                        stroke="#2a6b8a"
+                        stroke-width="0.024"
+                        d="M 0.1151884,1.0086553 A 0.30285823,0.31001002 0 0 1 -0.18665203,1.3173442 0.30285823,0.31001002 0 0 1 -0.49050713,1.0107333"
+                        transform="matrix(0.58665367,-0.80983793,0.84304364,0.53784516,0,0)"
+                    ></path>
+                </svg>
+                <svg
+                    class="home-logo-layer is-pi"
+                    viewBox="0 0 1.2 1.2"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                        fill="#66ccff"
+                        d="m 0.60985613,0.63445645 c 0.0139625,0 0.0279837,0.004499 0.0333299,-0.005405 0.004937,-0.009146 0.004474,-0.0287763 -0.005855,-0.0315283 -0.009742,-0.002596 -0.0153137,0.002702 -0.0193674,0.002702 -0.0153137,0 -0.0229706,-0.006756 -0.0229706,-0.0238714 0,-0.0238714 4.504e-4,-0.10269211 0.003603,-0.1585422 0,0 0.0261878,-1.679e-4 0.049094,0 0.0112596,8.253e-5 0.0112596,-0.0337018 0,-0.0337797 -0.0676666,-4.6828e-4 -0.23556125,0 -0.23556125,0 0,0 -0.0221057,2.0397e-4 -0.0351315,0.002252 -0.009103,0.001431 -0.0105078,0.0317105 0,0.0315283 0.0209618,-3.6336e-4 0.0567509,0 0.0567509,0 0,0.0662094 -0.0117841,0.11640876 -0.0175657,0.21078906 -8.4577e-4,0.0138067 0.0397147,0.0159771 0.0414372,0.002252 0.009734,-0.0775627 0.0139625,-0.14412927 0.0139625,-0.21304108 h 0.0878288 c -9.008e-4,0.0540485 -0.003153,0.13016675 -0.003153,0.15583978 0,0.0391851 0.0148633,0.0608045 0.0535982,0.0608045 z"
+                    ></path>
+                </svg>
+                <svg
+                    class="home-logo-layer is-line"
+                    viewBox="0 0 1.2 1.2"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                        fill="#55b8e6"
+                        d="M 0.99804688,0.27539063 0.44335938,1.046875 c -0.0180755,0.026917 0.0171035,0.037816 0.0292969,0.021484 L 1.0273437,0.296875 c 0.014653,-0.0202007 -0.00926,-0.0437283 -0.0292968,-0.0214844 z"
+                    ></path>
+                </svg>
+                <svg
+                    class="home-logo-layer is-square"
+                    viewBox="0 0 1.2 1.2"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                        fill="#a8e3ff"
+                        d="m 0.88681211,0.7776714 c 0.0111171,-0.0115869 0.0184763,-0.0236434 0.0184763,-0.0377355 0,-0.0225474 -0.0155013,-0.0382053 -0.0419632,-0.0382053 -0.0242697,1.5658e-4 -0.037579,0.0137789 -0.043529,0.0272448 l 0.022704,0.0155013 c 0.004541,-0.0106474 0.0106474,-0.0161276 0.0198855,-0.0161276 0.008768,0 0.0131526,0.00548 0.0131526,0.0131526 0,0.006576 -0.002505,0.0123697 -0.0114303,0.0216079 l -0.0441553,0.0452513 v 0.0192592 h 0.0878408 V 0.8003754 h -0.0429026 z"
+                    ></path>
+                </svg>
+                <svg
+                    class="home-logo-layer is-arc-large"
+                    viewBox="0 0 1.2 1.2"
+                    xmlns="http://www.w3.org/2000/svg"
+                >
+                    <path
+                        fill="#80d9ff"
+                        d="m 0.6015625,-0.84375 c 0,0.24737354 -0.19633615,0.446193 -0.4375,0.44726562 -0.24116385,0.001073 -0.43735046,-0.19599523 -0.43945313,-0.44335937 h -0.0351563 c 0.002263,0.2661855 0.21374853,0.47967585 0.47460938,0.47851562 C 0.4249233,-0.36248813 0.6367187,-0.57755448 0.6367187,-0.84375 Z"
+                        transform="matrix(-0.58600935,0.81030429,-0.84263491,-0.5384853,0,0)"
+                    ></path>
+                    <ellipse
+                        fill="#80d9ff"
+                        cx="0.88025743"
+                        cy="0.21570173"
+                        rx="0.017"
+                        ry="0.0179"></ellipse>
+                    <circle
+                        fill="#80d9ff"
+                        cx="0.34807181"
+                        cy="0.95605254"
+                        r="0.0172"></circle>
+                </svg>
+                <span class="home-logo-spark"></span>
+            </div>
+
+            <p class="home-hero-kicker">
+                <span aria-hidden="true"></span>
+                Self-hosted personal AI
+            </p>
+
+            <h1 id="home-title">
+                <span class="is-accent">Half</span>
+                <i aria-hidden="true"></i>
+                <span> Pi</span>
+                <i aria-hidden="true"></i>
+                <i aria-hidden="true"></i>
+                <span class="is-accent">半</span><span>派</span>
+            </h1>
+
+            <p class="home-hero-tagline">One Mind. Many Faces. Many Hands.</p>
+            <p class="home-hero-lead">
+                她不该被困在某一台设备上。<br />
+                你所有的设备，都是同一个 AI 助理双手的延伸。
+            </p>
+
+            <div class="home-hero-actions">
+                <a class="home-hero-action" href="./tutorial/">
+                    <BookOpen aria-hidden="true" size={18} />
+                    <span>开始学习</span>
+                    <ArrowRight aria-hidden="true" size={17} />
+                </a>
+                <a class="home-hero-action is-secondary" href="./architecture/">
+                    <ChartNetwork aria-hidden="true" size={18} />
+                    <span>架构手册</span>
+                </a>
+                <a
+                    class="home-hero-action is-tertiary"
+                    href="https://github.com/Sheyiyuan/half-pi"
+                    target="_blank"
+                    rel="noreferrer"
+                >
+                    <Github aria-hidden="true" size={18} />
+                    <span>GitHub</span>
+                </a>
+            </div>
+        </div>
+
+        <a class="home-scroll-cue" href="#why-half-pi" aria-label="继续浏览">
+            <ArrowDown aria-hidden="true" size={22} />
+        </a>
+    </section>
+
+    <section id="why-half-pi" class="home-section home-story">
+        <header class="home-section-heading">
+            <p class="home-section-kicker">Why Half Pi</p>
+            <h2>一个跟着你走、从不停机的灵魂</h2>
+            <p>
+                同一个助理，跨越你拥有的所有设备；会话、任务和共同回忆不再被某一块硬盘困住。
+            </p>
+        </header>
+
+        <div class="home-story-layout">
+            <div class="home-story-copy">
+                <p>
+                    你有没有想过——你的 AI
+                    助理其实挺可怜的？她在手机上和你聊了一半的话题，坐到电脑前——她不记得了。你在轻薄本上和她推敲了半天的方案，回家打开
+                    PC——她一无所知。
+                </p>
+                <p>
+                    她被囚禁在「本地设备」这座铁屋子里。Half Pi
+                    的目标便是要把她解放出来。
+                </p>
+                <p>
+                    一个持续运行的 <strong>Mind</strong>
+                    保存着你们的会话、消息和任务状态。每台设备通过
+                    <strong>Hand</strong> 与她相连，而桌面、手机与浏览器只是不同的
+                    <strong>Face</strong>。
+                </p>
+                <p class="home-story-claim">
+                    <strong>你在哪，她就在哪。</strong>
+                </p>
+            </div>
+
+            <div
+                class="home-signal-flow"
+                aria-label="Face 连接 Mind，Mind 调度 Hand"
+            >
+                <div class="home-signal-node">
+                    <span>Face</span>
+                    <small>进入对话</small>
+                </div>
+                <span class="home-signal-link" aria-hidden="true"></span>
+                <div class="home-signal-node is-core">
+                    <span>Mind</span>
+                    <small>保持连续</small>
+                </div>
+                <span class="home-signal-link" aria-hidden="true"></span>
+                <div class="home-signal-node">
+                    <span>Hand</span>
+                    <small>执行动作</small>
+                </div>
+            </div>
+        </div>
+
+        <div class="home-pillars">
+            <div class="home-pillar">
+                <div class="home-card-title">
+                    <span class="home-card-icon">
+                        <BrainCircuit aria-hidden="true" size={21} />
+                    </span>
+                    <h3>Mind · 灵魂</h3>
+                </div>
+                <p>
+                    常驻的智能与状态中心。保存会话、驱动 LLM
+                    决策、调度设备、管理审批与审计。不管你从哪台终端进入，她都能恢复对话和正在处理的任务。
+                </p>
+            </div>
+
+            <div class="home-pillar">
+                <div class="home-card-title">
+                    <span class="home-card-icon">
+                        <MessagesSquare aria-hidden="true" size={21} />
+                    </span>
+                    <h3>Face · 交互</h3>
+                </div>
+                <p>
+                    无状态交互入口。全屏终端工作台、Headless
+                    JSONL、未来的浏览器和 IM——同一套加密协议，同一个她。
+                </p>
+            </div>
+
+            <div class="home-pillar">
+                <div class="home-card-title">
+                    <span class="home-card-icon">
+                        <Hand aria-hidden="true" size={21} />
+                    </span>
+                    <h3>Hand · 执行</h3>
+                </div>
+                <p>
+                    部署在每台设备上的轻量执行节点。读文件、跑构建、查服务状态——Mind
+                    发出意图，Hand 执行并保留最终守门权。
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <section class="home-section">
+        <header class="home-section-heading">
+            <p class="home-section-kicker">Capabilities</p>
+            <h2>她能做什么</h2>
+            <p>
+                从一次对话到一次真实动作，跨设备、可恢复，也始终保留清晰的权限边界。
+            </p>
+        </header>
+
+        <div class="home-scenarios">
+            <div class="home-scenario">
+                <div class="home-scenario-title">
+                    <RefreshCw aria-hidden="true" size={18} />
+                    <strong>跨设备上下文延续</strong>
+                </div>
+                <p>
+                    通勤路上用手机指挥她运维服务器，到办公室坐下打开电脑——上下文无缝跟上。她不会问「你是谁」，她知道是你。
+                </p>
+            </div>
+
+            <div class="home-scenario">
+                <div class="home-scenario-title">
+                    <SquareTerminal aria-hidden="true" size={18} />
+                    <strong>远程执行与后台任务</strong>
+                </div>
+                <p>
+                    你在外面，家里 PC
+                    在跑一个耗时很长的任务。掏出手机问她「那个跑完了吗？」——她告诉你结果。任务跨断线继续，不需要你守着。
+                </p>
+            </div>
+
+            <div class="home-scenario">
+                <div class="home-scenario-title">
+                    <ShieldCheck aria-hidden="true" size={18} />
+                    <strong>安全审批，全程可审计</strong>
+                </div>
+                <p>
+                    不管你在 REPL 里还是在远程 Face
+                    上，审批走同一个流程：SHA-256 绑定
+                    run、设备和参数摘要，不可篡改，从 admission
+                    到结果全链路审计。
+                </p>
+            </div>
+
+            <div class="home-scenario">
+                <div class="home-scenario-title">
+                    <LockKeyhole aria-hidden="true" size={18} />
+                    <strong>端到端加密通信</strong>
+                </div>
+                <p>
+                    Face 与 Hand 使用独立凭据，token + application key
+                    共同派生方向隔离密钥，AES-128-GCM 强制加密全部业务
+                    payload，单调序号防重放。
+                </p>
+            </div>
+
+            <div class="home-scenario">
+                <div class="home-scenario-title">
+                    <MonitorSmartphone aria-hidden="true" size={18} />
+                    <strong>不挑平台</strong>
+                </div>
+                <p>
+                    Mind / Face / Hand 全部提供 Linux、macOS 和 Windows
+                    原生二进制。Unix 杀进程组，Windows Job Object 杀进程树。
+                </p>
+            </div>
+
+            <div class="home-scenario">
+                <div class="home-scenario-title">
+                    <Server aria-hidden="true" size={18} />
+                    <strong>自托管，你掌握一切</strong>
+                </div>
+                <p>
+                    数据留在你的机器上，Mind
+                    运行在你自己的服务器里。没有第三方看见你的会话、文件和凭据。
+                </p>
+            </div>
+        </div>
+    </section>
+
+    <section class="home-section home-paths">
+        <header class="home-section-heading">
+            <p class="home-section-kicker">Explore</p>
+            <h2>两条路径，各取所需</h2>
+            <p>
+                第一次认识 Half
+                Pi，沿教程走完整条演化路线；需要查边界和实现时，直接进入架构手册。
+            </p>
+        </header>
+
+        <div class="home-modules">
+            <div class="home-module">
+                <div class="home-card-title">
+                    <span class="home-card-icon">
+                        <BookOpen aria-hidden="true" size={21} />
+                    </span>
+                    <h3>学习教程</h3>
+                </div>
+                <p>
+                    <strong>适合想从零理解 Agent 系统的人。</strong>
+                    不急着装环境，也不先抛源码结构；先从「模型为什么还不是 Agent」这个问题开始，一章一章把
+                    Half-Pi 需要的能力搭起来。
+                </p>
+                <ul>
+                    <li>先搭起模型、循环、工具和安全执行</li>
+                    <li>再补上可观察性、持久化和 Skill</li>
+                    <li>随后拆出 Face / Mind / Hand，让能力跨设备延伸</li>
+                    <li>最后处理审批、断线恢复、审计和上下文压缩</li>
+                </ul>
+                <a class="home-module-link" href="./tutorial/">
+                    <span>浏览全部 21 章</span>
+                    <ArrowRight aria-hidden="true" size={16} />
+                </a>
+            </div>
+
+            <div class="home-module">
+                <div class="home-card-title">
+                    <span class="home-card-icon">
+                        <Network aria-hidden="true" size={21} />
+                    </span>
+                    <h3>架构手册</h3>
+                </div>
+                <p>
+                    按当前系统边界和模块组织，适合学完后定位<strong
+                        >状态机、失败语义与源码入口</strong
+                    >。只描述代码与测试能够证明的能力。
+                </p>
+                <ul>
+                    <li>五个 Go 模块的职责与依赖方向</li>
+                    <li>三条信任边界：模型 · 协议 · 设备</li>
+                    <li>Gateway 协议、握手、加密与 Hub</li>
+                    <li>关键状态机与终态竞争规则</li>
+                    <li>权威状态归属与内容覆盖矩阵</li>
+                </ul>
+                <a class="home-module-link" href="./architecture/">
+                    <span>查看架构手册</span>
+                    <ArrowRight aria-hidden="true" size={16} />
+                </a>
+            </div>
+        </div>
+    </section>
+</StarlightPage>
+
+<style is:global>
+    /* 首页标题由上方 HTML 控制，隐藏 Starlight 根据元数据生成的标题面板。 */
+    main > .content-panel:first-of-type {
+        display: none;
+    }
+
+    main > .content-panel:nth-of-type(2) {
+        border-top: 0;
+    }
+</style>

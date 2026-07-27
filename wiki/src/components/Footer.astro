@@ -1,0 +1,88 @@
+---
+import EditLink from 'virtual:starlight/components/EditLink';
+import LastUpdated from 'virtual:starlight/components/LastUpdated';
+import Pagination from 'virtual:starlight/components/Pagination';
+
+const year = new Date().getFullYear();
+---
+
+<footer class="hp-footer">
+	<div class="footer-meta sl-flex">
+		<EditLink />
+		<LastUpdated />
+	</div>
+
+	<Pagination />
+
+	<div class="footer-info">
+		<p>© {year} Sheyiyuan</p>
+		<nav aria-label="站点信息">
+			<a href="https://github.com/Sheyiyuan/half-pi">GitHub</a>
+			<span aria-hidden="true">·</span>
+			<a href="https://astro.build">Powered by Astro</a>
+			<span aria-hidden="true">·</span>
+			<a href="https://starlight.astro.build">Built with Starlight</a>
+		</nav>
+	</div>
+</footer>
+
+<style>
+	.hp-footer {
+		display: flex;
+		flex-direction: column;
+		gap: 1.5rem;
+	}
+
+	.footer-meta {
+		justify-content: space-between;
+		flex-wrap: wrap;
+		gap: 0.75rem 3rem;
+		margin-top: 3rem;
+		color: var(--sl-color-gray-3);
+		font-size: var(--sl-text-sm);
+	}
+
+	.footer-meta > :global(p:only-child) {
+		margin-inline-start: auto;
+	}
+
+	.footer-info {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		flex-wrap: wrap;
+		gap: 0.6rem 1.5rem;
+		margin-top: 1rem;
+		border-top: 1px solid var(--hp-border);
+		padding-block: 1.25rem 0.5rem;
+		color: var(--sl-color-gray-3);
+		font-size: var(--sl-text-xs);
+	}
+
+	.footer-info p {
+		margin: 0;
+	}
+
+	.footer-info nav {
+		display: flex;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.45rem;
+	}
+
+	.footer-info a {
+		color: var(--sl-color-gray-2);
+		text-decoration: none;
+	}
+
+	.footer-info a:hover {
+		color: var(--sl-color-accent);
+	}
+
+	@media (max-width: 30rem) {
+		.footer-info {
+			align-items: flex-start;
+			flex-direction: column;
+		}
+	}
+</style>
