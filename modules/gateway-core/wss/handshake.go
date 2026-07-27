@@ -1,7 +1,9 @@
 package wss
 
 import (
+	"crypto/ecdh"
 	"crypto/hkdf"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -12,10 +14,55 @@ import (
 )
 
 const (
-	proofInfo = "half-pi/v2/register-proof/"
-	c2sInfo   = "half-pi/v2/client-to-server/"
-	s2cInfo   = "half-pi/v2/server-to-client/"
+	proofInfo = "half-pi/v3/register-proof/"
+	c2sInfo   = "half-pi/v3/client-to-server/"
+	s2cInfo   = "half-pi/v3/server-to-client/"
+
+	// challengeSize 是服务端挑战的固定字节数。
+	challengeSize = 32
+	// ShareSize 是 X25519 公钥和共享秘密的固定字节数。
+	ShareSize = 32
 )
+
+// NewEphemeralShare 生成一次性 X25519 密钥对，返回私钥及其标准 base64 公钥。
+// 私钥用后即弃，使长期秘密事后泄露也无法重算历史会话密钥。
+func NewEphemeralShare() (*ecdh.PrivateKey, string, error) {
+	private, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, "", fmt.Errorf("generate ephemeral share: %w", err)
+	}
+	return private, base64.StdEncoding.EncodeToString(private.PublicKey().Bytes()), nil
+}
+
+// ComputeSharedSecret 校验对端公钥编码并计算 X25519 共享秘密。
+// crypto/ecdh 对低阶点在 ECDH 阶段返回错误，因此无需额外的小子群检查。
+func ComputeSharedSecret(private *ecdh.PrivateKey, peerShare string) ([]byte, error) {
+	if private == nil {
+		return nil, fmt.Errorf("ephemeral private key is required")
+	}
+	raw, err := decodeCanonicalBase64(peerShare, ShareSize)
+	if err != nil {
+		return nil, fmt.Errorf("peer share must be canonical base64 of %d bytes", ShareSize)
+	}
+	public, err := ecdh.X25519().NewPublicKey(raw)
+	if err != nil {
+		return nil, fmt.Errorf("invalid peer share: %w", err)
+	}
+	shared, err := private.ECDH(public)
+	if err != nil {
+		return nil, fmt.Errorf("compute shared secret: %w", err)
+	}
+	return shared, nil
+}
+
+// decodeCanonicalBase64 解码标准 base64 并要求编码规范且长度精确匹配。
+func decodeCanonicalBase64(value string, size int) ([]byte, error) {
+	raw, err := base64.StdEncoding.DecodeString(value)
+	if err != nil || len(raw) != size || base64.StdEncoding.EncodeToString(raw) != value {
+		return nil, fmt.Errorf("value must be canonical base64 of %d bytes", size)
+	}
+	return raw, nil
+}
 
 // SessionKeys 是注册 transcript 派生的三把用途隔离密钥。
 type SessionKeys struct {
@@ -24,9 +71,16 @@ type SessionKeys struct {
 	ServerToClient [KeySize]byte
 }
 
-// DeriveSessionKeys 按 v2 transcript 和两项长期秘密派生 proof、C→S 和 S→C 密钥。
-func DeriveSessionKeys(token, applicationKey string, transcript protocol.HandshakeTranscript) (SessionKeys, error) {
+// DeriveSessionKeys 按 v3 transcript、ECDH 共享秘密和两项长期秘密
+// 派生 proof、C→S 和 S→C 密钥。
+//
+// shared 必须是 32 字节 X25519 输出。它使会话密钥无法仅由长期秘密重算，
+// 从而同时提供前向保密和握手新鲜性。
+func DeriveSessionKeys(token, applicationKey string, shared []byte, transcript protocol.HandshakeTranscript) (SessionKeys, error) {
 	var keys SessionKeys
+	if len(shared) != ShareSize {
+		return keys, fmt.Errorf("shared secret must be %d bytes", ShareSize)
+	}
 	tokenBytes, err := decodeHandshakeSecret("token", token)
 	if err != nil {
 		return keys, err
@@ -35,12 +89,15 @@ func DeriveSessionKeys(token, applicationKey string, transcript protocol.Handsha
 	if err != nil {
 		return keys, err
 	}
-	root := make([]byte, 0, len(tokenBytes)+len(applicationKeyBytes))
+	// 三段均为定长（16 + 16 + 32），拼接无歧义。
+	root := make([]byte, 0, len(tokenBytes)+len(applicationKeyBytes)+len(shared))
 	root = append(root, tokenBytes...)
 	root = append(root, applicationKeyBytes...)
-	challenge, err := base64.StdEncoding.DecodeString(transcript.Challenge)
-	if err != nil || len(challenge) != 32 || base64.StdEncoding.EncodeToString(challenge) != transcript.Challenge {
-		return keys, fmt.Errorf("challenge must be canonical base64 of 32 bytes")
+	root = append(root, shared...)
+	defer clear(root)
+	challenge, err := decodeCanonicalBase64(transcript.Challenge, challengeSize)
+	if err != nil {
+		return keys, fmt.Errorf("challenge must be canonical base64 of %d bytes", challengeSize)
 	}
 	transcriptJSON, err := json.Marshal(transcript)
 	if err != nil {
@@ -147,8 +204,7 @@ func decodeHandshakeSecret(name, value string) ([]byte, error) {
 }
 
 func validateProofClaims(peerType protocol.PeerType, claims protocol.RegisterProofClaims, handInfoPresent bool) error {
-	challenge, err := base64.StdEncoding.DecodeString(claims.Challenge)
-	if err != nil || len(challenge) != 32 || base64.StdEncoding.EncodeToString(challenge) != claims.Challenge {
+	if _, err := decodeCanonicalBase64(claims.Challenge, challengeSize); err != nil {
 		return fmt.Errorf("invalid proof challenge")
 	}
 	switch peerType {

@@ -153,14 +153,18 @@ func (r *AIReviewer) Metadata() ReviewVerdict {
 }
 
 // NewReviewRequest 从冻结调用创建深拷贝的审核证书。
-func NewReviewRequest(frozen coreexec.FrozenInvocation, policyVersion string) ReviewRequest {
+// catalog 为 nil 时回退到进程默认目录。
+func NewReviewRequest(frozen coreexec.FrozenInvocation, policyVersion string, catalog *coreexec.Catalog) ReviewRequest {
 	purpose := frozen.Purpose
 	if len(purpose) > maxReviewSummary {
 		purpose = purpose[:maxReviewSummary]
 	}
+	if catalog == nil {
+		catalog = coreexec.DefaultCatalog()
+	}
 	projectedArgs := json.RawMessage(nil)
 	projectionComplete := false
-	if tool, found := coreexec.FindTool(frozen.Tool); found {
+	if tool, found := catalog.Find(frozen.Tool); found {
 		if projection, complete, err := coreexec.ProjectReviewArgs(tool, frozen.Args); err == nil {
 			projectedArgs, projectionComplete = projection, complete
 		}

@@ -265,7 +265,9 @@ func (m *Manager) newActor(id string) (*Actor, error) {
 		Tasks:       m.config.Tasks,
 		PendingCall: m.config.Authority.PendingCall,
 	}
-	core, err := agentcore.New(m.config.Provider, local.New(bridge))
+	exec := local.New(bridge)
+	exec.SetSkills(m.config.Skills)
+	core, err := agentcore.New(m.config.Provider, exec)
 	if err != nil {
 		return nil, fmt.Errorf("create Agent Core: %w", err)
 	}

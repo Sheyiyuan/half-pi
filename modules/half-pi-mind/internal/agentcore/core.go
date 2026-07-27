@@ -28,6 +28,7 @@ type Core struct {
 	providerID        string
 	modelID           string
 	exec              toolCatalog
+	catalog           *executor.Catalog
 	history           []llm.Message
 	persistedMessages int
 	persistedSeq      int
@@ -113,11 +114,12 @@ func New(llmProvider llm.Provider, exec toolCatalog) (*Core, error) {
 		policy:     policy,
 		lifecycle:  registry,
 		authorizer: authorizer,
+		catalog:    executor.DefaultCatalog(),
 	}
 	if err := core.installLifecycleRegistry(registry); err != nil {
 		return nil, err
 	}
-	core.toolRuntime = executor.NewToolRuntime(authorizer, registry)
+	core.toolRuntime = executor.NewToolRuntimeWithCatalog(authorizer, registry, core.catalog)
 	authorizer.SetReviewObserver(core.observeSecurityReview)
 	return core, nil
 }
@@ -237,7 +239,7 @@ func (c *Core) SetLifecycleRegistry(registry *corelifecycle.LifecycleRegistry) e
 	}
 	c.stateMu.Lock()
 	c.lifecycle = registry
-	c.toolRuntime = executor.NewToolRuntime(c.authorizer, registry)
+	c.toolRuntime = executor.NewToolRuntimeWithCatalog(c.authorizer, registry, c.catalog)
 	c.stateMu.Unlock()
 	if current != nil {
 		closeCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -271,6 +273,13 @@ func (c *Core) SetSkills(s *skill.Store) {
 	c.stateMu.Lock()
 	c.skills = s
 	c.stateMu.Unlock()
+}
+
+// Skills 返回当前会话的技能仓库；所有 Actor 共享同一实例。
+func (c *Core) Skills() *skill.Store {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.skills
 }
 
 // SetStore 注入持久化存储并加载已有会话历史。
@@ -321,6 +330,13 @@ func (c *Core) SessionID() string {
 	c.stateMu.RLock()
 	defer c.stateMu.RUnlock()
 	return c.sessionID
+}
+
+// Catalog 返回本 conversation 解析工具所用的目录。
+func (c *Core) Catalog() *executor.Catalog {
+	c.stateMu.RLock()
+	defer c.stateMu.RUnlock()
+	return c.catalog
 }
 
 // SecurityMode 返回当前会话安全模式。

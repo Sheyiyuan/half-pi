@@ -112,10 +112,15 @@ func (c *Client) ConnectAndRegisterContext(ctx context.Context, credentials Cred
 	deadline := time.Now().Add(10 * time.Second)
 	_ = conn.SetReadDeadline(deadline)
 	_ = conn.SetWriteDeadline(deadline)
+	ephemeral, clientShare, err := NewEphemeralShare()
+	if err != nil {
+		return fail(err)
+	}
 	reg, err := protocol.NewEnvelope("", protocol.TypeRegister, protocol.Register{
 		ProtocolVersion: protocol.ProtocolVersion,
 		ClientID:        credentials.Label,
 		Type:            credentials.Type,
+		ClientShare:     clientShare,
 	})
 	if err != nil {
 		return fail(err)
@@ -135,7 +140,7 @@ func (c *Client) ConnectAndRegisterContext(ctx context.Context, credentials Cred
 		return fail(fmt.Errorf("expected register_challenge, got %q", challengeEnv.Type))
 	}
 	challenge, err := protocol.DecodePayload[protocol.RegisterChallenge](&challengeEnv)
-	if err != nil || challenge.ProtocolVersion != protocol.ProtocolVersion || challenge.Algorithm != protocol.HandshakeAlgorithm || challenge.ServerID == "" || challenge.SessionID == "" || challenge.HandshakeID == "" || challenge.ExpiresAt <= time.Now().UnixMilli() || challenge.ExpiresAt > deadline.Add(time.Second).UnixMilli() {
+	if err != nil || challenge.ProtocolVersion != protocol.ProtocolVersion || challenge.Algorithm != protocol.HandshakeAlgorithm || challenge.ServerID == "" || challenge.SessionID == "" || challenge.HandshakeID == "" || challenge.ServerShare == "" || challenge.ExpiresAt <= time.Now().UnixMilli() || challenge.ExpiresAt > deadline.Add(time.Second).UnixMilli() {
 		return fail(fmt.Errorf("invalid register challenge"))
 	}
 	transcript := protocol.HandshakeTranscript{
@@ -146,8 +151,17 @@ func (c *Client) ConnectAndRegisterContext(ctx context.Context, credentials Cred
 		ServerID:        challenge.ServerID,
 		SessionID:       challenge.SessionID,
 		Challenge:       challenge.Challenge,
+		ExpiresAt:       challenge.ExpiresAt,
+		Algorithm:       challenge.Algorithm,
+		ClientShare:     clientShare,
+		ServerShare:     challenge.ServerShare,
 	}
-	keys, err := DeriveSessionKeys(credentials.Token, credentials.ApplicationKey, transcript)
+	shared, err := ComputeSharedSecret(ephemeral, challenge.ServerShare)
+	if err != nil {
+		return fail(err)
+	}
+	keys, err := DeriveSessionKeys(credentials.Token, credentials.ApplicationKey, shared, transcript)
+	clear(shared)
 	if err != nil {
 		return fail(err)
 	}

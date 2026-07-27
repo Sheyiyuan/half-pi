@@ -73,7 +73,14 @@ func TestEncryptedFaceRunCancelUsesAuthorityAndPersistsTerminal(t *testing.T) {
 	serverURL := startGatewayWireServer(t, fixture)
 	hand := connectWireHand(t, serverURL, handCredential.Label, handCredential.Token, handCredential.ApplicationKey)
 	face := connectWireFace(t, serverURL, faceCredential.Label, faceCredential.Token, faceCredential.ApplicationKey)
-	peer := fixture.hub.PeerByType(hub.PeerHand, handCredential.Label)
+	// Hub 在发送 registered 之后才提升 peer，客户端可能先于提升返回。
+	var peer *hub.Peer
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if peer = fixture.hub.PeerByType(hub.PeerHand, handCredential.Label); peer != nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if peer == nil {
 		t.Fatal("Hand peer is not online")
 	}

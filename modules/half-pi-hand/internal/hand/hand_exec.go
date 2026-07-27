@@ -45,7 +45,7 @@ func (h *Hand) handleRPC(ctx context.Context, env protocol.Envelope) {
 	}
 
 	authorizer := &handAuthorizer{hand: h, rpc: rpc, now: now}
-	runtime := executor.NewToolRuntime(authorizer, h.lifecycle)
+	runtime := executor.NewToolRuntimeWithCatalog(authorizer, h.lifecycle, h.toolCatalog())
 	meta := corelifecycle.NewMeta(corelifecycle.SourceHand).WithNode(h.nodeID()).WithRequest(rpc.RunID)
 	var background *executor.BackgroundContract
 	if rpc.Background != nil {
@@ -231,7 +231,7 @@ func (h *Hand) handleHandInfoReq(env protocol.Envelope) {
 		return
 	}
 
-	allTools := executor.RegisteredTools()
+	allTools := h.toolCatalog().Tools()
 	tools := make([]protocol.ToolInfo, 0, len(allTools))
 	for _, t := range allTools {
 		if h.checkToolAllowed(t.Name) {

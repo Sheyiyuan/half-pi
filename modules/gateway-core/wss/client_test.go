@@ -150,6 +150,10 @@ func TestHandshakeFramesDoNotExposeSecretsOrHandInfo(t *testing.T) {
 		if err != nil {
 			return
 		}
+		_, serverShare, err := wss.NewEphemeralShare()
+		if err != nil {
+			return
+		}
 		challenge := protocol.RegisterChallenge{
 			ProtocolVersion: protocol.ProtocolVersion,
 			HandshakeID:     "abcdefabcdefabcdefabcdefabcdefab",
@@ -158,6 +162,7 @@ func TestHandshakeFramesDoNotExposeSecretsOrHandInfo(t *testing.T) {
 			Challenge:       "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
 			ExpiresAt:       time.Now().Add(5 * time.Second).UnixMilli(),
 			Algorithm:       protocol.HandshakeAlgorithm,
+			ServerShare:     serverShare,
 		}
 		challengeEnv, err := protocol.NewEnvelope("challenge", protocol.TypeRegisterChallenge, challenge)
 		if err != nil || conn.WriteJSON(challengeEnv) != nil {

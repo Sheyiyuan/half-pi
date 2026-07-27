@@ -136,7 +136,7 @@ make test         # 运行全部 5 个模块的测试
 
 #### ✅ 已完成
 
-##### 工具系统（16 个工具）
+##### 工具系统（17 个工具）
 | 工具 | 位置 | 功能 |
 |------|------|------|
 | `read_file` | half-pi-core/tools | 读取文件，支持行号/行范围/字符偏移/双上限 |
@@ -148,6 +148,7 @@ make test         # 运行全部 5 个模块的测试
 | `exec_command` | half-pi-core/tools | 跨平台 Shell 执行（Unix: sh, Windows: cmd），可设超时 |
 | `check_security` | mind/internal/executor/local | 预查安全策略结果 |
 | `view_skill` | mind/internal/executor/local | 按名称加载技能全文 |
+| `list_skills` | mind/internal/executor/local | 列出当前会话组可见技能摘要 |
 | `list_hands` | mind/internal/executor/local | 列出在线 Hand 及静态信息 |
 | `get_hand_info` | mind/internal/executor/local | 查询 Hand 动态信息与可用工具 |
 | `select_hand` | mind/internal/executor/local | 设置/查询当前会话默认 Hand |
@@ -206,10 +207,14 @@ make test         # 运行全部 5 个模块的测试
 
 ##### 技能系统 (`internal/skill/`)
 - `skill.Store`：加载、缓存、查询 `.skill.md` 文件
-- 手写 frontmatter 解析（name/description/tags/version/author）
-- `Index()` 生成技能目录，注入 system prompt
-- `view_skill` 工具按名称加载全文
-- 启动时从 `~/.half-pi/skills/` 自动加载
+- 手写 frontmatter 解析（name/description/tags/version/author/groups/always）
+- 递归扫描技能目录，跳过隐藏目录和缓存目录；重名按路径排序首个生效并记 warning
+- `Index()` 生成技能目录，注入 system prompt；`always: true` 技能排在最前并标注 `[始终激活]`
+- `SummariesForGroup()` 返回不含正文的结构化摘要
+- `view_skill` 按名称加载全文，`list_skills` 列出当前组可见摘要
+- 两个工具通过 `LocalExecutor.PrepareToolContext` 注入的 context 获取 Store，无全局变量
+- 启动时从 `~/.half-pi/skills/` 自动加载；加载告警（parse 失败、重名遮蔽）经 EventBus 发布到日志/终端
+- REPL `/skill list|reload|warnings`；`Reload()` 对所有 Actor 共享的 Store 生效，revision/digest 变化使进行中的模型请求 fail closed
 
 ##### SQLite 持久化 (`internal/store/`)
 - `session_groups` 表：工作区管理（work_dir、soul_path）
@@ -223,7 +228,8 @@ make test         # 运行全部 5 个模块的测试
 ##### Gateway-core 通信层 (`modules/gateway-core/`)
 - `protocol/`：Envelope 消息协议，Session 重放防护（单调序号），AAD 构造
 - `wss/crypto`：AES-128-GCM 加解密 + Envelope 集成
-- v2 四步握手：register 只公开 type/label，token + application key 共同派生 proof/C→S/S→C 密钥，HandInfo 位于加密 proof claims
+- v3 四步握手：register 只公开 type/label/client_share，token + application key + X25519 ECDH 共同派生 proof/C→S/S→C 密钥，HandInfo 位于加密 proof claims
+- transcript 覆盖全部握手字段（含 expires_at/algorithm/双方 share），录制流重放与 label 枚举均被拒绝；ephemeral 私钥用后即弃，提供前向保密
 - v1 与首帧携带 token/Info 的注册严格拒绝；registered 及全部业务 payload 强制加密
 - `wss/server`：HTTP → WebSocket 升级
 - `wss/client`：ConnectAndRegister 完整握手 + Send/Read 封装
@@ -323,6 +329,7 @@ make test         # 运行全部 5 个模块的测试
 - `docs/face-protocol.md` — 统一 Face 协议设计（Web/TUI/IM/Headless Agent Face、鉴权、快照、审批和事件投影）
 - `docs/ai-face-protocol.md` — AI/Headless Face 正式协议接入指南（客户端、Mind runtime 与进程 E2E 可用）
 - `docs/plugin-architecture.md` — 插件契约、Goja 宿主、process/WASM 运行时与实施顺序提案（尚未实现）
+- `docs/skill-on-demand.md` — Skill 系统改进：不重写的决策依据与四项增量改动（已实现）
 - `docs/archive/README.md` — 已完成、被替代或仅供决策追溯的设计文档索引
 
 #### ⏳ 待完成
@@ -367,6 +374,14 @@ make test         # 运行全部 5 个模块的测试
 - 文件系统存储，frontmatter + markdown 格式
 - 启动时扫描 → system prompt 索引 → LLM 按需 view_skill
 - 无数据库、无版本控制；2026-07-22 增加 frontmatter `groups` SessionGroup 可见性过滤
+
+### 2026-07-26：Skill 保持全量索引，不做按需匹配
+- 全量 `name + description` 常驻 system prompt，由**模型做语义匹配**判断相关性；这是 Anthropic Agent Skills 的核心机制
+- 明确否决「倒排索引 + 关键词匹配替代模型判断」方案：关键词匹配在语义任务上弱于模型；skill suffix 位于 messages 尾部不可缓存，30 个技能规模下 token 成本反而更高；active set 状态机会连带改造 `UsageAnchor` 和 compact 不变量
+- 改为四项正交增量：递归扫描、context 注入替代全局 store、`list_skills`、`always` 确定性触发
+- `coreModelContextTransformer`、compact、`UsageAnchor`、request fingerprint 均不变更
+- 技能数增长到 50+ 时应走 `tool_only`（索引不常驻，模型主动 `list_skills`），而非关键词匹配
+- 详见 `docs/skill-on-demand.md`
 
 ### 2026-07-14：共享核心模块
 - 提取 `executor`、`security`、`events`、`tools` 到 `half-pi-core`
@@ -468,6 +483,17 @@ make test         # 运行全部 5 个模块的测试
 - WinBoat Windows 11 Pro `AMD64`（build 26200）原生运行 protocol/wss/hub/dispatcher race 测试和 Mind/Hand/Face v2 进程链路通过；Face 收到 version 2 encrypted registered，双 peer 在线与撤销断连均通过
 - `scripts/test-windows.ps1` 已将 gateway protocol/hub/wss 与 Mind dispatcher 纳入多架构编译、原生 race 和 Prebuilt 门禁
 - WinBoat 使用当前源码执行更新后的官方 `scripts/test-windows.ps1 -PrebuiltDir` 通过，11 组原生 race 测试全部 PASS，官方 stderr 为空
+- 本决策的 transcript 覆盖范围不完整，已由 2026-07-27 v3 决策取代
+
+### 2026-07-27：Gateway v3 握手 transcript 完整性与前向保密
+- v2 的 transcript 漏掉 `expires_at` 与 `algorithm`，两者既不参与密钥派生也不被任何 AEAD 覆盖；已实证无秘密攻击者可录制 server→client 流、改写 `expires_at` 后重放给客户端，使其派生出相同会话密钥并接受历史业务消息
+- v3 的 transcript 覆盖全部握手字段：`expires_at`、`algorithm`、`client_share`、`server_share`
+- 双方各贡献 32 字节 X25519 ephemeral share，ECDH 共享秘密与两个长期秘密一起进入 HKDF；会话密钥每次握手新鲜，且不再可由 PSK 单独重算 → 前向保密
+- share 校验规范 base64 与长度，低阶点由 `crypto/ecdh` 拒绝；v2 与缺失/畸形 share 在两端 fail closed
+- 未知 label 使用一次性随机秘密走完整握手，统一在 proof 校验处失败，关闭 label 枚举 oracle
+- `TestTranscriptCoversHandshakeFrames` 用反射断言握手帧的每个 JSON 字段都被 transcript 覆盖，防止今后新增字段漏同步
+- 凭据格式与存储不变，无需迁移或重新签发 token
+- 仍未解决：无 TLS 时握手元数据（peer type、label、时序、长度）明文可见；无静态非对称服务端身份；无握手限流
 
 ### 2026-07-22：统一 Lifecycle、ToolRuntime 与隔离 Reviewer
 - `half-pi-core/lifecycle` 固定 Message/Model/Assistant/Tool/Security/Approval/Chat phase、Meta、Outcome 和 wire contract

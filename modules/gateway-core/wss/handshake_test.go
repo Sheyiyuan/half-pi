@@ -22,11 +22,24 @@ func testTranscript() protocol.HandshakeTranscript {
 		ServerID:        "mind",
 		SessionID:       "ffeeddccbbaa99887766554433221100",
 		Challenge:       "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+		ExpiresAt:       1700000000000,
+		Algorithm:       protocol.HandshakeAlgorithm,
+		ClientShare:     "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+		ServerShare:     "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=",
 	}
 }
 
+// testShared 是派生测试使用的固定 32 字节 ECDH 共享秘密占位值。
+func testShared() []byte {
+	shared := make([]byte, ShareSize)
+	for i := range shared {
+		shared[i] = byte(0x80 + i)
+	}
+	return shared
+}
+
 func TestDeriveSessionKeysDirectionAndPurposeIsolation(t *testing.T) {
-	keys, err := DeriveSessionKeys(testHandshakeToken, testHandshakeKey, testTranscript())
+	keys, err := DeriveSessionKeys(testHandshakeToken, testHandshakeKey, testShared(), testTranscript())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,18 +48,18 @@ func TestDeriveSessionKeysDirectionAndPurposeIsolation(t *testing.T) {
 	}
 	changed := testTranscript()
 	changed.Label = "hand-2"
-	other, err := DeriveSessionKeys(testHandshakeToken, testHandshakeKey, changed)
+	other, err := DeriveSessionKeys(testHandshakeToken, testHandshakeKey, testShared(), changed)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if bytes.Equal(keys.Proof[:], other.Proof[:]) {
 		t.Fatal("transcript change did not change derived key")
 	}
-	wrongToken, err := DeriveSessionKeys("11111111111111111111111111111111", testHandshakeKey, testTranscript())
+	wrongToken, err := DeriveSessionKeys("11111111111111111111111111111111", testHandshakeKey, testShared(), testTranscript())
 	if err != nil {
 		t.Fatal(err)
 	}
-	wrongKey, err := DeriveSessionKeys(testHandshakeToken, "22222222222222222222222222222222", testTranscript())
+	wrongKey, err := DeriveSessionKeys(testHandshakeToken, "22222222222222222222222222222222", testShared(), testTranscript())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,7 +70,7 @@ func TestDeriveSessionKeysDirectionAndPurposeIsolation(t *testing.T) {
 
 func TestRegisterProofRoundTripAndTamper(t *testing.T) {
 	transcript := testTranscript()
-	keys, _ := DeriveSessionKeys(testHandshakeToken, testHandshakeKey, transcript)
+	keys, _ := DeriveSessionKeys(testHandshakeToken, testHandshakeKey, testShared(), transcript)
 	info := &protocol.HandInfo{OS: "linux", Arch: "amd64", Hostname: "host", WorkDir: "/workspace"}
 	proof, err := NewRegisterProof(keys, transcript, info)
 	if err != nil {
@@ -100,7 +113,7 @@ func TestRegisterProofRoleAndClaimsValidation(t *testing.T) {
 	faceTranscript := testTranscript()
 	faceTranscript.PeerType = protocol.PeerFace
 	faceTranscript.Label = "face-1"
-	keys, err := DeriveSessionKeys(testHandshakeToken, testHandshakeKey, faceTranscript)
+	keys, err := DeriveSessionKeys(testHandshakeToken, testHandshakeKey, testShared(), faceTranscript)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -122,7 +135,7 @@ func TestRegisterProofRoleAndClaimsValidation(t *testing.T) {
 	}
 
 	handTranscript := testTranscript()
-	handKeys, err := DeriveSessionKeys(testHandshakeToken, testHandshakeKey, handTranscript)
+	handKeys, err := DeriveSessionKeys(testHandshakeToken, testHandshakeKey, testShared(), handTranscript)
 	if err != nil {
 		t.Fatal(err)
 	}

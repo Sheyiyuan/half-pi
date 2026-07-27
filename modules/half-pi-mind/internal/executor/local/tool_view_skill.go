@@ -5,15 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sync"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/skill"
 )
-
-// 全局技能仓库，由 main.go 在启动时设置。
-var skillStore *skill.Store
-var skillStoreMu sync.RWMutex
 
 func init() {
 	executor.Register(executor.Tool{
@@ -35,9 +29,7 @@ func init() {
 			if p.Name == "" {
 				return &executor.ToolResult{Error: "skill name is required"}
 			}
-			skillStoreMu.RLock()
-			store := skillStore
-			skillStoreMu.RUnlock()
+			store := skillStoreFromContext(ctx)
 			if store == nil {
 				return &executor.ToolResult{Error: "skill system is not initialized"}
 			}
@@ -53,11 +45,4 @@ func init() {
 			}
 		},
 	})
-}
-
-// SetSkillStore 设置全局技能仓库。
-func SetSkillStore(s *skill.Store) {
-	skillStoreMu.Lock()
-	skillStore = s
-	skillStoreMu.Unlock()
 }

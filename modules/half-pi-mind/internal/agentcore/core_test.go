@@ -199,7 +199,8 @@ func TestToolOwnedConfirmIsPreservedForExecution(t *testing.T) {
 		}}},
 	})
 
-	args, llmConfirm := prepareToolArgs(toolName, `{"value":"kept","confirm":true}`)
+	core, _ := New(nil, nil)
+	args, llmConfirm := core.prepareToolArgs(toolName, `{"value":"kept","confirm":true}`)
 	if llmConfirm {
 		t.Fatal("tool-owned confirmation was consumed by Agent Core")
 	}
@@ -227,7 +228,8 @@ func TestToolOwnedConfirmIsPreservedForExecution(t *testing.T) {
 func TestGenericConfirmIsConsumedByAgentCore(t *testing.T) {
 	const toolName = "phase4_generic_confirm_tool"
 	executor.Register(executor.Tool{Name: toolName})
-	args, llmConfirm := prepareToolArgs(toolName, `{"value":"kept","confirm":true}`)
+	core, _ := New(nil, nil)
+	args, llmConfirm := core.prepareToolArgs(toolName, `{"value":"kept","confirm":true}`)
 	if !llmConfirm || strings.Contains(string(args), "confirm") {
 		t.Fatalf("generic confirmation was not consumed: confirm=%t args=%s", llmConfirm, args)
 	}

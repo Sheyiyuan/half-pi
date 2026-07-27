@@ -1,0 +1,65 @@
+---
+import DefaultHead from '@astrojs/starlight/components/Head.astro';
+---
+
+<DefaultHead />
+
+<script>
+	import mermaid from 'mermaid';
+
+	const sources = new WeakMap<HTMLElement, string>();
+	let scheduled = false;
+	let renderVersion = 0;
+
+	async function renderMermaid() {
+		scheduled = false;
+		const nodes = [...document.querySelectorAll<HTMLElement>('.mermaid')];
+		if (nodes.length === 0) return;
+		const currentVersion = ++renderVersion;
+
+		mermaid.initialize({
+			startOnLoad: false,
+			theme: document.documentElement.dataset.theme === 'light' ? 'neutral' : 'dark',
+			securityLevel: 'strict',
+			suppressErrorRendering: true,
+			fontFamily:
+				'Inter, system-ui, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif',
+			flowchart: { htmlLabels: true, useMaxWidth: true },
+			sequence: { useMaxWidth: true, wrap: true },
+		});
+
+		for (const [index, node] of nodes.entries()) {
+			if (!sources.has(node)) sources.set(node, node.textContent ?? '');
+			const source = sources.get(node) ?? '';
+
+			try {
+				const { svg, bindFunctions } = await mermaid.render(
+					`half-pi-mermaid-${currentVersion}-${index}`,
+					source
+				);
+				if (currentVersion !== renderVersion) return;
+				node.innerHTML = svg;
+				node.dataset.processed = 'true';
+				node.removeAttribute('data-mermaid-error');
+				bindFunctions?.(node);
+			} catch (error) {
+				if (currentVersion !== renderVersion) return;
+				node.textContent = source;
+				node.dataset.mermaidError = 'true';
+				console.error('Mermaid diagram failed to render:', error);
+			}
+		}
+	}
+
+	function scheduleMermaid() {
+		if (scheduled) return;
+		scheduled = true;
+		requestAnimationFrame(() => void renderMermaid());
+	}
+
+	scheduleMermaid();
+	new MutationObserver(scheduleMermaid).observe(document.documentElement, {
+		attributes: true,
+		attributeFilter: ['data-theme'],
+	});
+</script>

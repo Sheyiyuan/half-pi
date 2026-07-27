@@ -41,3 +41,6 @@ modules/*/half-pi-hand
 
 # Dependencies
 /vendor/
+/wiki/node_modules/
+/wiki/.astro/
+/wiki/dist/

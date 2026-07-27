@@ -10,7 +10,6 @@ import (
 	compactpkg "github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/compact"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/config"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/conversation"
-	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	mindlifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/lifecycle"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/llm"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
@@ -75,7 +74,7 @@ func newConversationManager(env *setup.Env, cfg *config.Config, db *store.Store,
 	if err != nil {
 		return nil, fmt.Errorf("load skills: %w", err)
 	}
-	local.SetSkillStore(skills)
+	publishSkillWarnings(bus, skills)
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, fmt.Errorf("get working directory: %w", err)
@@ -121,4 +120,15 @@ func newConversationManager(env *setup.Env, cfg *config.Config, db *store.Store,
 	}
 	manager.SetCompactor(compactor, runtime)
 	return manager, nil
+}
+
+// publishSkillWarnings 把技能加载中跳过的文件和重名冲突暴露到事件总线，
+// 避免技能静默消失后用户无从排查。
+func publishSkillWarnings(bus *events.EventBus, skills *skill.Store) {
+	if bus == nil || skills == nil {
+		return
+	}
+	for _, warning := range skills.Warnings() {
+		bus.PublishSync(events.New("", "mind", events.LevelWarn, events.TypeSystem, "skill: "+warning))
+	}
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -330,6 +331,43 @@ func TestHandshakePayloadStrictRoundTrip(t *testing.T) {
 	}
 }
 
+// TestTranscriptCoversHandshakeFrames 断言握手帧的每个字段都进入 transcript。
+// transcript 未覆盖的字段既不参与密钥派生也不被认证，攻击者可任意改写；
+// 本测试使新增握手字段时漏同步 transcript 直接失败，而非静默留下重放缺口。
+func TestTranscriptCoversHandshakeFrames(t *testing.T) {
+	covered := make(map[string]bool)
+	transcript := reflect.TypeFor[HandshakeTranscript]()
+	for i := range transcript.NumField() {
+		if tag := jsonFieldName(transcript.Field(i)); tag != "" {
+			covered[tag] = true
+		}
+	}
+	// peer_type / label 是 transcript 对 register.client_id 与 type 的重命名。
+	aliases := map[string]string{"client_id": "label", "type": "peer_type"}
+	for _, frame := range []reflect.Type{reflect.TypeFor[Register](), reflect.TypeFor[RegisterChallenge]()} {
+		for i := range frame.NumField() {
+			name := jsonFieldName(frame.Field(i))
+			if name == "" {
+				continue
+			}
+			if alias, ok := aliases[name]; ok {
+				name = alias
+			}
+			if !covered[name] {
+				t.Errorf("%s.%s 未纳入 HandshakeTranscript：该字段不被认证，可被重放篡改", frame.Name(), name)
+			}
+		}
+	}
+}
+
+func jsonFieldName(field reflect.StructField) string {
+	tag, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+	if tag == "-" {
+		return ""
+	}
+	return tag
+}
+
 func TestHandshakeTranscriptAndProofAADCanonicalJSON(t *testing.T) {
 	transcript := HandshakeTranscript{
 		ProtocolVersion: ProtocolVersion,
@@ -339,12 +377,16 @@ func TestHandshakeTranscriptAndProofAADCanonicalJSON(t *testing.T) {
 		ServerID:        "mind",
 		SessionID:       "session-1",
 		Challenge:       "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+		ExpiresAt:       1700000000000,
+		Algorithm:       HandshakeAlgorithm,
+		ClientShare:     "ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=",
+		ServerShare:     "QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8=",
 	}
 	got, err := json.Marshal(transcript)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := `{"protocol_version":2,"peer_type":"face","label":"face-1","handshake_id":"handshake-1","server_id":"mind","session_id":"session-1","challenge":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="}`
+	want := `{"protocol_version":3,"peer_type":"face","label":"face-1","handshake_id":"handshake-1","server_id":"mind","session_id":"session-1","challenge":"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=","expires_at":1700000000000,"algorithm":"` + HandshakeAlgorithm + `","client_share":"ICEiIyQlJicoKSorLC0uLzAxMjM0NTY3ODk6Ozw9Pj8=","server_share":"QEFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaW1xdXl8="}`
 	if string(got) != want {
 		t.Fatalf("transcript JSON = %s, want %s", got, want)
 	}
@@ -353,7 +395,7 @@ func TestHandshakeTranscriptAndProofAADCanonicalJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = `{"protocol_version":2,"type":"register_proof","peer_type":"face","label":"face-1","handshake_id":"handshake-1","server_id":"mind","session_id":"session-1"}`
+	want = `{"protocol_version":3,"type":"register_proof","peer_type":"face","label":"face-1","handshake_id":"handshake-1","server_id":"mind","session_id":"session-1"}`
 	if string(got) != want {
 		t.Fatalf("proof AAD JSON = %s, want %s", got, want)
 	}

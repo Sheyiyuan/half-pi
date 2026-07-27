@@ -114,12 +114,23 @@ func (h *Hub) ServeWS(conn *websocket.Conn) error {
 		_ = conn.Close()
 		return err
 	}
-	authentication, err := h.authenticateRegister(key)
-	if err != nil {
-		return h.failHandshake(conn, "authentication_failed", err)
+	// 未知 label 也走完整握手，使用随机秘密派生 decoy challenge，统一在 proof
+	// 校验处失败，避免 challenge 是否下发泄露 label 是否已注册。
+	authentication, authErr := h.authenticateRegister(key)
+	if authErr != nil {
+		authentication, err = decoyAuthentication()
+		if err != nil {
+			_ = conn.Close()
+			return err
+		}
 	}
 
-	transcript, challenge, err := h.newChallenge(key, deadline)
+	ephemeral, serverShare, err := wss.NewEphemeralShare()
+	if err != nil {
+		_ = conn.Close()
+		return err
+	}
+	transcript, challenge, err := h.newChallenge(key, reg.ClientShare, serverShare, deadline)
 	if err != nil {
 		_ = conn.Close()
 		return err
@@ -139,12 +150,17 @@ func (h *Hub) ServeWS(conn *websocket.Conn) error {
 	if err != nil {
 		return h.failHandshake(conn, handshakeCode(err), err)
 	}
-	keys, err := wss.DeriveSessionKeys(authentication.Token, authentication.ApplicationKey, transcript)
+	shared, err := wss.ComputeSharedSecret(ephemeral, reg.ClientShare)
+	if err != nil {
+		return h.failHandshake(conn, "authentication_failed", fmt.Errorf("invalid register proof"))
+	}
+	keys, err := wss.DeriveSessionKeys(authentication.Token, authentication.ApplicationKey, shared, transcript)
+	clear(shared)
 	if err != nil || time.Now().After(deadline) {
 		return h.failHandshake(conn, "authentication_failed", fmt.Errorf("invalid register proof"))
 	}
 	claims, err := wss.VerifyRegisterProof(keys, transcript, proof)
-	if err != nil {
+	if err != nil || authErr != nil {
 		return h.failHandshake(conn, "authentication_failed", fmt.Errorf("invalid register proof"))
 	}
 
@@ -246,7 +262,24 @@ func validateRegister(reg protocol.Register) error {
 	if !labelPattern.MatchString(reg.ClientID) {
 		return fmt.Errorf("invalid client label")
 	}
+	share, err := base64.StdEncoding.DecodeString(reg.ClientShare)
+	if err != nil || len(share) != wss.ShareSize || base64.StdEncoding.EncodeToString(share) != reg.ClientShare {
+		return fmt.Errorf("invalid client share")
+	}
 	return nil
+}
+
+// decoyAuthentication 生成一次性随机凭据，用于未知 label 的等长握手。
+func decoyAuthentication() (Authentication, error) {
+	secrets := make([]byte, 32)
+	if _, err := rand.Read(secrets); err != nil {
+		return Authentication{}, fmt.Errorf("generate decoy secrets: %w", err)
+	}
+	return Authentication{
+		Token:          hex.EncodeToString(secrets[:16]),
+		ApplicationKey: hex.EncodeToString(secrets[16:]),
+		PrincipalID:    "decoy",
+	}, nil
 }
 
 func (h *Hub) authenticateRegister(key PeerKey) (Authentication, error) {
@@ -269,7 +302,7 @@ func (h *Hub) authenticateRegister(key PeerKey) (Authentication, error) {
 	return authentication, nil
 }
 
-func (h *Hub) newChallenge(key PeerKey, deadline time.Time) (protocol.HandshakeTranscript, protocol.RegisterChallenge, error) {
+func (h *Hub) newChallenge(key PeerKey, clientShare, serverShare string, deadline time.Time) (protocol.HandshakeTranscript, protocol.RegisterChallenge, error) {
 	handshakeID, err := randomHex(16)
 	if err != nil {
 		return protocol.HandshakeTranscript{}, protocol.RegisterChallenge{}, err
@@ -291,6 +324,7 @@ func (h *Hub) newChallenge(key PeerKey, deadline time.Time) (protocol.HandshakeT
 		Challenge:       challengeText,
 		ExpiresAt:       deadline.UnixMilli(),
 		Algorithm:       protocol.HandshakeAlgorithm,
+		ServerShare:     serverShare,
 	}
 	transcript := protocol.HandshakeTranscript{
 		ProtocolVersion: protocol.ProtocolVersion,
@@ -300,6 +334,10 @@ func (h *Hub) newChallenge(key PeerKey, deadline time.Time) (protocol.HandshakeT
 		ServerID:        h.ID,
 		SessionID:       sessionID,
 		Challenge:       challengeText,
+		ExpiresAt:       challenge.ExpiresAt,
+		Algorithm:       protocol.HandshakeAlgorithm,
+		ClientShare:     clientShare,
+		ServerShare:     serverShare,
 	}
 	return transcript, challenge, nil
 }

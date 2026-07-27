@@ -59,9 +59,14 @@ type FrozenInvocation struct {
 	RiskLabels        []string
 }
 
-// Freeze 校验 schema、规范化 JSON、深拷贝安全字段并计算摘要。
+// Freeze 使用进程默认目录校验 schema、规范化 JSON、深拷贝安全字段并计算摘要。
 func (inv Invocation) Freeze() (FrozenInvocation, error) {
-	tool, ok := FindTool(inv.Tool)
+	return DefaultCatalog().Freeze(inv)
+}
+
+// Freeze 按目录中的工具定义校验 schema、规范化 JSON、深拷贝安全字段并计算摘要。
+func (c *Catalog) Freeze(inv Invocation) (FrozenInvocation, error) {
+	tool, ok := c.Find(inv.Tool)
 	if !ok {
 		return FrozenInvocation{}, fmt.Errorf("unknown tool: %s", inv.Tool)
 	}
@@ -83,11 +88,6 @@ func (inv Invocation) Freeze() (FrozenInvocation, error) {
 		Purpose:           inv.Purpose,
 		RiskLabels:        append([]string(nil), inv.RiskLabels...),
 	}, nil
-}
-
-// ToolDef 返回对应的 Tool 定义。
-func (f FrozenInvocation) ToolDef() (Tool, bool) {
-	return FindTool(f.Tool)
 }
 
 // Authorization 是一次安全审查和可选审批的结果。
@@ -136,6 +136,7 @@ type Result struct {
 type ToolRuntime struct {
 	authorizer Authorizer
 	registry   *lifecycle.LifecycleRegistry
+	catalog    *Catalog
 }
 
 type lifecycleMetaContextKey struct{}
@@ -192,17 +193,31 @@ func (p *PreparedExternal) ObserveProgress(ctx context.Context, progress Progres
 	return !p.runtime.requiresBufferedResult(p.frozen.Meta)
 }
 
-// NewToolRuntime 创建工具运行时；nil Authorizer 始终拒绝。
+// NewToolRuntime 使用进程默认工具目录创建工具运行时；nil Authorizer 始终拒绝。
 func NewToolRuntime(authorizer Authorizer, registry *lifecycle.LifecycleRegistry) *ToolRuntime {
+	return NewToolRuntimeWithCatalog(authorizer, registry, nil)
+}
+
+// NewToolRuntimeWithCatalog 使用指定工具目录创建工具运行时。
+// catalog 为 nil 时回退到进程默认目录；nil Authorizer 始终拒绝。
+func NewToolRuntimeWithCatalog(authorizer Authorizer, registry *lifecycle.LifecycleRegistry, catalog *Catalog) *ToolRuntime {
 	if authorizer == nil {
 		authorizer = denyAuthorizer{}
 	}
-	return &ToolRuntime{authorizer: authorizer, registry: registry}
+	if catalog == nil {
+		catalog = DefaultCatalog()
+	}
+	return &ToolRuntime{authorizer: authorizer, registry: registry, catalog: catalog}
 }
 
 // Registry 返回运行时使用的生命周期注册表。
 func (rt *ToolRuntime) Registry() *lifecycle.LifecycleRegistry {
 	return rt.registry
+}
+
+// Catalog 返回运行时解析工具所用的目录。
+func (rt *ToolRuntime) Catalog() *Catalog {
+	return rt.catalog
 }
 
 // Execute 按固定顺序变换、冻结、审查、审批、审计和执行工具。
@@ -224,7 +239,7 @@ func (rt *ToolRuntime) Prepare(ctx context.Context, inv Invocation) (*PreparedEx
 		rt.publishInvocationDenied(ctx, inv, "hook_reentrancy", true)
 		return nil, deniedResult("synchronous Hook reentrancy is not allowed", "hook_reentrancy")
 	}
-	tool, ok := FindTool(inv.Tool)
+	tool, ok := rt.catalog.Find(inv.Tool)
 	if !ok {
 		inv.Meta = ensureMeta(inv.Meta)
 		rt.publishInvocationDenied(ctx, inv, "unknown_tool", true)
@@ -286,7 +301,7 @@ func (rt *ToolRuntime) prepareWithTool(ctx context.Context, inv Invocation, tool
 		}
 	} else {
 		var found bool
-		tool, found = FindTool(prepared.Tool)
+		tool, found = rt.catalog.Find(prepared.Tool)
 		if !found {
 			rt.publishInvocationDenied(ctx, prepared, "unknown_transformed_tool", false)
 			return nil, failedResult("unknown transformed tool: "+prepared.Tool, "unknown_transformed_tool")
