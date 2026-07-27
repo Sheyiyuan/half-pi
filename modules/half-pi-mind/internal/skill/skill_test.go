@@ -377,8 +377,158 @@ Content.`)
 func writeSkillFile(t *testing.T, dir, name, content string) {
 	t.Helper()
 	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("failed to create test skill directory: %v", err)
+	}
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("failed to write test skill file: %v", err)
+	}
+}
+
+func TestStoreScansSubdirectories(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillFile(t, dir, "general.skill.md", "---\nname: general\ndescription: Top level\n---\nBody.")
+	writeSkillFile(t, dir, filepath.Join("programming", "go.skill.md"), "---\nname: go-patterns\ndescription: Go patterns\n---\nBody.")
+	writeSkillFile(t, dir, filepath.Join("workflow", "nested", "deploy.skill.md"), "---\nname: deploy\ndescription: Deploy flow\n---\nBody.")
+	writeSkillFile(t, dir, filepath.Join(".hidden", "secret.skill.md"), "---\nname: secret\ndescription: Hidden\n---\nBody.")
+	writeSkillFile(t, dir, filepath.Join("node_modules", "vendored.skill.md"), "---\nname: vendored\ndescription: Vendored\n---\nBody.")
+	writeSkillFile(t, dir, filepath.Join("programming", "notes.md"), "# not a skill")
+
+	store, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, 3)
+	for _, sk := range store.List() {
+		got = append(got, sk.Name)
+	}
+	want := []string{"deploy", "general", "go-patterns"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("loaded skills = %v, want %v", got, want)
+	}
+	nested, ok := store.Get("deploy")
+	if !ok || !strings.Contains(nested.FilePath, filepath.Join("workflow", "nested")) {
+		t.Fatalf("nested skill FilePath = %q", nested.FilePath)
+	}
+}
+
+func TestStoreDuplicateNameIsDeterministic(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillFile(t, dir, filepath.Join("a-first", "dup.skill.md"), "---\nname: dup\ndescription: From a-first\n---\nBody.")
+	writeSkillFile(t, dir, filepath.Join("z-last", "dup.skill.md"), "---\nname: dup\ndescription: From z-last\n---\nBody.")
+
+	store, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sk, ok := store.Get("dup")
+	if !ok || sk.Description != "From a-first" {
+		t.Fatalf("duplicate resolution = %+v, want the path-sorted first entry", sk)
+	}
+	warnings := store.Warnings()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "duplicate skill") {
+		t.Fatalf("warnings = %v, want one duplicate warning", warnings)
+	}
+}
+
+func TestStoreRecordsParseWarnings(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillFile(t, dir, "broken.skill.md", "no frontmatter here")
+	writeSkillFile(t, dir, "valid.skill.md", "---\nname: valid\ndescription: Valid\n---\nBody.")
+
+	store, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(store.List()) != 1 {
+		t.Fatalf("expected 1 valid skill, got %d", len(store.List()))
+	}
+	warnings := store.Warnings()
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "broken.skill.md") {
+		t.Fatalf("warnings = %v, want one skip warning for broken.skill.md", warnings)
+	}
+}
+
+func TestAlwaysSkillsSortFirstAndAreAnnotated(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillFile(t, dir, "zeta.skill.md", "---\nname: zeta\ndescription: Regular skill\n---\nBody.")
+	writeSkillFile(t, dir, "conventions.skill.md", "---\nname: conventions\ndescription: Project conventions\nalways: true\n---\nBody.")
+	writeSkillFile(t, dir, "alpha.skill.md", "---\nname: alpha\ndescription: Regular skill\nalways: false\n---\nBody.")
+
+	store, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	summaries := store.SummariesForGroup("")
+	got := make([]string, 0, len(summaries))
+	for _, summary := range summaries {
+		got = append(got, summary.Name)
+	}
+	want := []string{"conventions", "alpha", "zeta"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("summary order = %v, want always-first then name %v", got, want)
+	}
+	if !summaries[0].Always || summaries[1].Always {
+		t.Fatalf("always flags = %+v", summaries)
+	}
+
+	index := store.IndexForGroup("")
+	conventionsLine := ""
+	for _, line := range strings.Split(index, "\n") {
+		if strings.Contains(line, "conventions") {
+			conventionsLine = line
+		}
+		if strings.Contains(line, "zeta") && strings.Contains(line, "始终激活") {
+			t.Fatalf("non-always skill was annotated: %q", line)
+		}
+	}
+	if !strings.Contains(conventionsLine, "始终激活") {
+		t.Fatalf("always skill was not annotated: %q", conventionsLine)
+	}
+}
+
+func TestAlwaysChangeAffectsSnapshotDigest(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillFile(t, dir, "one.skill.md", "---\nname: one\ndescription: One\n---\nBody.")
+	store, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := store.Snapshot().Digest
+
+	writeSkillFile(t, dir, "one.skill.md", "---\nname: one\ndescription: One\nalways: true\n---\nBody.")
+	if err := store.Reload(); err != nil {
+		t.Fatal(err)
+	}
+	if after := store.Snapshot().Digest; after == before {
+		t.Fatal("always change did not alter snapshot digest")
+	}
+}
+
+func TestSummariesForGroupEnforcesVisibility(t *testing.T) {
+	dir := t.TempDir()
+	writeSkillFile(t, dir, "global.skill.md", "---\nname: global\ndescription: Shared\n---\nBody.")
+	writeSkillFile(t, dir, "private.skill.md", "---\nname: private\ndescription: Group A only\ngroups: [group-a]\n---\nBody.")
+
+	store, err := LoadFromDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		group string
+		want  []string
+	}{
+		{group: "group-a", want: []string{"global", "private"}},
+		{group: "group-b", want: []string{"global"}},
+		{group: "", want: []string{"global"}},
+	} {
+		got := make([]string, 0, 2)
+		for _, summary := range store.SummariesForGroup(test.group) {
+			got = append(got, summary.Name)
+		}
+		if strings.Join(got, ",") != strings.Join(test.want, ",") {
+			t.Fatalf("group %q summaries = %v, want %v", test.group, got, test.want)
+		}
 	}
 }
 

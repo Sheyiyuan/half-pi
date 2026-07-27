@@ -65,6 +65,8 @@ func parseFrontmatter(src string) (*Meta, string, error) {
 			meta.Author = val
 		case "groups":
 			meta.Groups = parseTags(val)
+		case "always":
+			meta.Always = parseBool(val)
 		}
 	}
 
@@ -82,6 +84,14 @@ func parseKV(line string) (key, val string, ok bool) {
 		return "", "", false
 	}
 	return key, val, true
+}
+
+func parseBool(s string) bool {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "true", "yes", "1":
+		return true
+	}
+	return false
 }
 
 func parseTags(s string) []string {

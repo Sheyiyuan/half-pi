@@ -118,6 +118,10 @@ func (r *Repl) handleCommand(input string) bool {
 		r.handleCredentialRemove(hub.PeerHand, strings.TrimSpace(strings.TrimPrefix(input, "/hand remove ")))
 		return true
 
+	case input == "/skill" || strings.HasPrefix(input, "/skill "):
+		r.handleSkill(strings.TrimSpace(strings.TrimPrefix(input, "/skill")))
+		return true
+
 	case input == "/peers":
 		r.handlePeers()
 		return true
