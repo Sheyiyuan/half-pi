@@ -19,7 +19,7 @@ v2 握手已在 WinBoat Windows 11 Pro AMD64 原生运行 gateway/Mind race 测�
 
 ## 鉴权假设
 
-Face 注册使用 version 2 WebSocket 四步挑战握手，必须同时持有与 Hand 分离的 Face token 和 application key。第一步 `register` 只公开 protocol version、peer type 和 label，不发送 token、application key 或设备信息；服务端据此从 Face 凭据表读取双秘密。客户端与服务端以 `token || application_key`、单次 challenge 和完整 transcript 通过 HKDF-SHA-256 派生 proof、C→S、S→C 三把方向/用途隔离的 AES-128-GCM 密钥。Face proof 只加密 challenge 回显，禁止携带 HandInfo；`registered` 和后续全部业务 payload 强制加密。旧 v1 和携带秘密字段的注册帧 fail closed，不提供明文兼容旁路。
+Face 注册使用 version 3 WebSocket 四步挑战握手，必须同时持有与 Hand 分离的 Face token 和 application key。第一步 `register` 只公开 protocol version、peer type、label 和客户端 X25519 ephemeral 公钥 `client_share`，不发送 token、application key 或设备信息；服务端据此从 Face 凭据表读取双秘密，并在 challenge 中回送自己的 `server_share`。客户端与服务端以 `token || application_key || ECDH(client_share, server_share)`、单次 challenge 和覆盖全部握手字段的完整 transcript 通过 HKDF-SHA-256 派生 proof、C→S、S→C 三把方向/用途隔离的 AES-128-GCM 密钥。ephemeral 私钥用后即弃，长期秘密事后泄露也无法解密此前录制的流量。Face proof 只加密 challenge 回显，禁止携带 HandInfo；`registered` 和后续全部业务 payload 强制加密。旧 v1/v2、携带秘密字段的注册帧，以及缺失或畸形的 share 一律 fail closed，不提供明文或旧握手兼容旁路。
 
 连接成功后绑定认证时的稳定 principal ID。Gateway 按连接 label 解析不含秘密的 Face identity，并在每个 command 上重新校验 principal ID 与 scope，因此删除后同名重建凭据不会让旧连接继承新权限。
 

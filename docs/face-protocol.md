@@ -204,16 +204,18 @@ Alpha 最小 scope：
 - 对抗测试需要审批能力时使用独立测试身份和隔离环境。
 - Face token 可单独撤销，不得复用 `hand_tokens`。
 
-公网 Face 会传输完整对话和审批信息，必须使用 Half-Pi 应用层 v2 四步鉴权、方向隔离密钥和 Envelope 加密。TLS/WSS 属于部署层，可由反向代理按需提供；token 不得写入日志和事件，Web Face 还需限制 Origin。
+公网 Face 会传输完整对话和审批信息，必须使用 Half-Pi 应用层 v3 四步鉴权、方向隔离密钥和 Envelope 加密。TLS/WSS 属于部署层，可由反向代理按需提供；token 不得写入日志和事件，Web Face 还需限制 Origin。
 
-v2 握手的公开边界固定如下：
+v3 握手的公开边界固定如下：
 
-1. `register` 只包含 protocol version、peer type 和 label。token、application key 与 HandInfo 在任何公开注册帧中都不得出现。
-2. Mind 返回绑定 type、label、server、session 和过期时间的单次 challenge。
-3. 双方以 token 与 application key 的有序组合、challenge 和完整 transcript 派生三把用途隔离密钥。proof 的加密 claims 回显 challenge；只有 Hand claims 可以包含且必须包含 HandInfo。
+1. `register` 只包含 protocol version、peer type、label 和客户端 X25519 ephemeral 公钥。token、application key 与 HandInfo 在任何公开注册帧中都不得出现。
+2. Mind 返回绑定 type、label、server、session、过期时间和服务端 ephemeral 公钥的单次 challenge。
+3. 双方以 token 与 application key 的有序组合、ECDH 共享秘密、challenge 和覆盖全部握手字段的完整 transcript 派生三把用途隔离密钥。proof 的加密 claims 回显 challenge；只有 Hand claims 可以包含且必须包含 HandInfo。
 4. Mind 验证 proof 后加密发送 `registered`，以证明服务端持有同一双秘密；之后所有业务 payload 都必须加密。
 
-协议版本、transcript、challenge、type、label、proof claims 或密文任一项不匹配均关闭连接。v1、未知字段、错误 token、错误 application key 统一 fail closed，不降级到明文或旧握手。
+协议版本、transcript、challenge、type、label、share、proof claims 或密文任一项不匹配均关闭连接。v1/v2、未知字段、错误 token、错误 application key、畸形或低阶 share 统一 fail closed，不降级到明文或旧握手。未注册的 label 走完整握手后在 proof 处统一失败，不通过 challenge 是否下发泄露注册状态。
+
+因为 ephemeral 私钥用后即弃，录制的握手与业务流量在长期秘密事后泄露时也无法解密；录制的 server→client 流重放给客户端会因 share 与 transcript 不匹配而被拒绝。
 
 ## 消息集
 

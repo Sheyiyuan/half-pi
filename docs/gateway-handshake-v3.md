@@ -1,8 +1,10 @@
 # Gateway 握手 v3：transcript 完整性与前向保密
 
-> 状态：安全修复提案（2026-07-26），尚未实现。
+> 状态：已实现（2026-07-27）。§1–§5 描述当前 `modules/gateway-core` 的实际行为；§6 的实施步骤和 §10 的验收清单保留为落地记录。
 >
 > 本文针对 v2 四步握手中已实证的重放缺陷给出修复方案，并顺带关闭前向保密与 label 枚举两个已知弱点。修复范围完全落在 `modules/gateway-core`，不改变 Face/Hand 业务协议、不改变凭据格式、不要求重新签发 token。
+>
+> 落地偏差：§5.7 原计划用进程级 HMAC 派生确定性 decoy 凭据，实现改为每次连接生成一次性随机秘密 —— 同样使未知 label 走完整握手并在 proof 处统一失败，但更简单且无需持有额外进程密钥。`PrincipalID` 设为 `"decoy"` 而非留空，由独立的 `authErr` 判定保证该路径绝不产生可用 peer。`pendingConns` 上限未实现，与握手限流一并留待 §9.3。
 
 相关文档：
 
@@ -558,14 +560,14 @@ v3 之后 PSK 仍是对称的：Mind 的 SQLite 泄露后，攻击者可以**冒
 
 ## 10. 验收清单
 
-- [ ] `TestTranscriptCoversHandshakeFrames` 通过，且在故意给 `RegisterChallenge` 加字段时会失败
-- [ ] §8.2 全部重放/篡改用例通过，含"有效期窗口内原样重放"一条
-- [ ] 同凭据连续两次握手的会话密钥互不相同
-- [ ] 未知 label 与错误秘密的失败响应不可区分
-- [ ] `make test` 五模块全绿（`-race`）
-- [ ] Mind/Hand/Face 进程级 E2E 全绿
-- [ ] v2↔v3 双向 fail closed，且 Hand 不对 `unsupported_protocol` 重试
-- [ ] 原始帧断言：双秘密与 ephemeral 私钥不出现在明文
-- [ ] `scripts/test-windows.ps1 -PrebuiltDir` 原生通过
-- [ ] `AGENTS.md` 决策记录、`docs/README.md` 索引、`ai-face-protocol.md` 版本号已更新
+- [x] `TestTranscriptCoversHandshakeFrames` 通过；改掉 `RegisterChallenge.expires_at` 的 json tag 后确认失败（变异验证）
+- [x] §8.2 重放用例通过：改写 `expires_at` 与"有效期窗口内原样重放"两条均被拒绝，且已确认修复前两条都失败
+- [x] ECDH 共享秘密确实参与派生：`TestSharedSecretIsRequiredForDerivation`，去掉 `root = append(root, shared...)` 后确认失败（变异验证）
+- [x] 同凭据连续两次握手的会话密钥互不相同
+- [x] 未知 label 与已注册 label 在 proof 前不可区分：`TestUnknownLabelIsNotDistinguishableBeforeProof`，恢复提前拒绝后确认失败（变异验证）
+- [x] `make test` 五模块全绿（`-race`），含 Mind/Hand/Face 进程级 E2E
+- [x] 原始帧断言：双秘密不出现在明文；`NewEphemeralShare` 上线公钥而非私钥种子
+- [x] `AGENTS.md` 决策记录、`docs/face-protocol.md`、`docs/ai-face-protocol.md`、`wiki/` 当前行为描述已更新
+- [ ] v2↔v3 双向 fail closed 的**跨版本二进制**验证：版本检查与 `StrictDecode` 路径已有单元覆盖，但未实际用 v2 二进制对 v3 Mind 跑一遍
+- [ ] `scripts/test-windows.ps1 -PrebuiltDir` 原生通过（需 Windows 环境，本次未执行）
 - [ ] 发布说明写明：无需重新签发凭据，但需要全节点同步升级

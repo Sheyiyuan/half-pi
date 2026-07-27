@@ -223,7 +223,8 @@ make test         # 运行全部 5 个模块的测试
 ##### Gateway-core 通信层 (`modules/gateway-core/`)
 - `protocol/`：Envelope 消息协议，Session 重放防护（单调序号），AAD 构造
 - `wss/crypto`：AES-128-GCM 加解密 + Envelope 集成
-- v2 四步握手：register 只公开 type/label，token + application key 共同派生 proof/C→S/S→C 密钥，HandInfo 位于加密 proof claims
+- v3 四步握手：register 只公开 type/label/client_share，token + application key + X25519 ECDH 共同派生 proof/C→S/S→C 密钥，HandInfo 位于加密 proof claims
+- transcript 覆盖全部握手字段（含 expires_at/algorithm/双方 share），录制流重放与 label 枚举均被拒绝；ephemeral 私钥用后即弃，提供前向保密
 - v1 与首帧携带 token/Info 的注册严格拒绝；registered 及全部业务 payload 强制加密
 - `wss/server`：HTTP → WebSocket 升级
 - `wss/client`：ConnectAndRegister 完整握手 + Send/Read 封装
@@ -468,6 +469,17 @@ make test         # 运行全部 5 个模块的测试
 - WinBoat Windows 11 Pro `AMD64`（build 26200）原生运行 protocol/wss/hub/dispatcher race 测试和 Mind/Hand/Face v2 进程链路通过；Face 收到 version 2 encrypted registered，双 peer 在线与撤销断连均通过
 - `scripts/test-windows.ps1` 已将 gateway protocol/hub/wss 与 Mind dispatcher 纳入多架构编译、原生 race 和 Prebuilt 门禁
 - WinBoat 使用当前源码执行更新后的官方 `scripts/test-windows.ps1 -PrebuiltDir` 通过，11 组原生 race 测试全部 PASS，官方 stderr 为空
+- 本决策的 transcript 覆盖范围不完整，已由 2026-07-27 v3 决策取代
+
+### 2026-07-27：Gateway v3 握手 transcript 完整性与前向保密
+- v2 的 transcript 漏掉 `expires_at` 与 `algorithm`，两者既不参与密钥派生也不被任何 AEAD 覆盖；已实证无秘密攻击者可录制 server→client 流、改写 `expires_at` 后重放给客户端，使其派生出相同会话密钥并接受历史业务消息
+- v3 的 transcript 覆盖全部握手字段：`expires_at`、`algorithm`、`client_share`、`server_share`
+- 双方各贡献 32 字节 X25519 ephemeral share，ECDH 共享秘密与两个长期秘密一起进入 HKDF；会话密钥每次握手新鲜，且不再可由 PSK 单独重算 → 前向保密
+- share 校验规范 base64 与长度，低阶点由 `crypto/ecdh` 拒绝；v2 与缺失/畸形 share 在两端 fail closed
+- 未知 label 使用一次性随机秘密走完整握手，统一在 proof 校验处失败，关闭 label 枚举 oracle
+- `TestTranscriptCoversHandshakeFrames` 用反射断言握手帧的每个 JSON 字段都被 transcript 覆盖，防止今后新增字段漏同步
+- 凭据格式与存储不变，无需迁移或重新签发 token
+- 仍未解决：无 TLS 时握手元数据（peer type、label、时序、长度）明文可见；无静态非对称服务端身份；无握手限流
 
 ### 2026-07-22：统一 Lifecycle、ToolRuntime 与隔离 Reviewer
 - `half-pi-core/lifecycle` 固定 Message/Model/Assistant/Tool/Security/Approval/Chat phase、Meta、Outcome 和 wire contract
