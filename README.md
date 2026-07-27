@@ -247,6 +247,7 @@ make lint        # golangci-lint
 
 | 文档 | 内容 |
 | --- | --- |
+| [Half Pi Wiki](https://sheyiyuan.github.io/half-pi/) | 学习指南、代码地图、端到端调用链与设计取舍（[站点源码](wiki/)） |
 | [`docs/face-protocol.md`](docs/face-protocol.md) | Face 正式协议、鉴权、快照、审批与事件投影 |
 | [`docs/ai-face-protocol.md`](docs/ai-face-protocol.md) | AI/Headless Face 客户端接入指南 |
 | [`docs/plugin-architecture.md`](docs/plugin-architecture.md) | 尚未实现的插件 runtime 设计 |
