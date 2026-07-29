@@ -223,6 +223,13 @@ func TestClientInvalidEncryptedTrafficClosesConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	registerDeadline := time.Now().Add(time.Second)
+	for h.PeerByType(hub.PeerFace, "invalid-traffic") == nil {
+		if time.Now().After(registerDeadline) {
+			t.Fatal("registered face did not become routable")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if err := h.SendToType(hub.PeerFace, "invalid-traffic", protocol.Envelope{Type: protocol.TypePong, Payload: json.RawMessage(`{"ts":1}`)}); err != nil {
 		t.Fatal(err)
 	}
