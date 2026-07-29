@@ -1,0 +1,16 @@
+**/node_modules
+**/dist
+**/.test-dist
+webui/node_modules
+webui/dist
+tmp
+bin
+.git
+.claude
+.codex
+.agents
+*.md
+docs
+assets
+wiki
+scripts

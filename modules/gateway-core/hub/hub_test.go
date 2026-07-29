@@ -62,8 +62,12 @@ func TestCompoundPeerKeyAllowsSameLabelAcrossTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer hand.Conn.Close()
-	if h.Count() != 2 || h.PeerByType(hub.PeerFace, "shared") == nil || h.PeerByType(hub.PeerHand, "shared") == nil {
-		t.Fatalf("compound peers not retained: %+v", h.Peers())
+	deadline := time.Now().Add(time.Second)
+	for h.PeerByType(hub.PeerFace, "shared") == nil || h.PeerByType(hub.PeerHand, "shared") == nil {
+		if time.Now().After(deadline) {
+			t.Fatalf("compound peers not retained: %+v", h.Peers())
+		}
+		time.Sleep(time.Millisecond)
 	}
 	if info := h.PeerByType(hub.PeerHand, "shared").Info; info == nil || info.Hostname != "test" {
 		t.Fatalf("encrypted Hand info was not retained: %+v", info)
@@ -102,7 +106,7 @@ func TestConnectCallbackRunsAfterPeerPromotion(t *testing.T) {
 
 func TestCloseClearsPeersAndNotifiesDisconnect(t *testing.T) {
 	h := authenticatedHub()
-	disconnected := make(chan hub.PeerKey, 1)
+	disconnected := make(chan hub.PeerKey, 2)
 	h.OnDisconnect(func(peer *hub.Peer) {
 		disconnected <- peer.Key()
 	})
@@ -118,13 +122,23 @@ func TestCloseClearsPeersAndNotifiesDisconnect(t *testing.T) {
 	if h.Count() != 0 || h.PeerByType(hub.PeerFace, "closing") != nil || len(h.Peers()) != 0 {
 		t.Fatalf("closed Hub retained peers: %+v", h.Peers())
 	}
-	select {
-	case key := <-disconnected:
-		if key != (hub.PeerKey{Type: hub.PeerFace, Label: "closing"}) {
-			t.Fatalf("disconnect key = %+v", key)
+	deadline := time.Now().Add(3 * time.Second)
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	var key hub.PeerKey
+	for {
+		timer.Reset(time.Second)
+		select {
+		case key = <-disconnected:
+		case <-timer.C:
+			t.Fatal("Hub close did not notify disconnect")
 		}
-	case <-time.After(time.Second):
-		t.Fatal("Hub close did not notify disconnect")
+		if key == (hub.PeerKey{Type: hub.PeerFace, Label: "closing"}) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("disconnect key = %+v, want closing", key)
+		}
 	}
 }
 

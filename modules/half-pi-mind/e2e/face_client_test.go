@@ -107,6 +107,53 @@ func awaitPayload[T any](t *testing.T, client *faceClient, typ string, predicate
 	return matched
 }
 
+// awaitAny reads the next envelope from stdout, checking the backlog first.
+// Unlike await, it accepts any server message type (accepted, error, result, etc.)
+// and matches by request_id found by decoding the payload.
+func (c *faceClient) awaitAny(t *testing.T, requestID string) protocol.Envelope {
+	t.Helper()
+	// Check backlog first
+	for i, envelope := range c.backlog {
+		if envelopeHasRequestID(envelope, requestID) {
+			c.backlog = append(c.backlog[:i], c.backlog[i+1:]...)
+			return envelope
+		}
+	}
+	// Read from process
+	deadline := time.Now().Add(faceMessageTimeout)
+	for {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			waitErr := c.process.wait(time.Second)
+			t.Fatalf("awaitAny %q timed out (process: %v)", requestID, waitErr)
+		}
+		line, err := c.process.stdout.next(remaining)
+		if err != nil {
+			waitErr := c.process.wait(time.Second)
+			t.Fatalf("awaitAny %q read: %v (process: %v)", requestID, err, waitErr)
+		}
+		envelope, err := protocol.StrictDecode[protocol.Envelope]([]byte(line))
+		if err != nil {
+			t.Fatalf("awaitAny decode envelope: %v\nline: %s", err, line)
+		}
+		if envelopeHasRequestID(envelope, requestID) {
+			return envelope
+		}
+		c.backlog = append(c.backlog, envelope)
+	}
+}
+
+// envelopeHasRequestID checks if the envelope's payload contains the given request_id.
+func envelopeHasRequestID(e protocol.Envelope, requestID string) bool {
+	var meta struct {
+		RequestID string `json:"request_id"`
+	}
+	if err := json.Unmarshal(e.Payload, &meta); err != nil {
+		return false
+	}
+	return meta.RequestID == requestID
+}
+
 func awaitAccepted(t *testing.T, client *faceClient, requestID string, operation protocol.FaceOperation) protocol.FaceAccepted {
 	t.Helper()
 	return awaitPayload(t, client, protocol.TypeFaceAccepted, func(value protocol.FaceAccepted) bool {

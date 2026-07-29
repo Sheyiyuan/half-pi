@@ -583,7 +583,6 @@ func (h *Hub) Close() {
 	for _, peer := range h.peers {
 		peers = append(peers, peer)
 	}
-	activeCount := len(peers)
 	for _, peer := range h.reservations {
 		peers = append(peers, peer)
 	}
@@ -598,8 +597,9 @@ func (h *Hub) Close() {
 	for _, conn := range pending {
 		_ = conn.Close()
 	}
-	for i, peer := range peers {
-		if i < activeCount && h.disconnectFn != nil {
+	// reservation 已完成认证并持有 Peer；关闭时也要通知，避免 registered 已发送但尚未 promote 的窗口丢失断连事件。
+	for _, peer := range peers {
+		if h.disconnectFn != nil {
 			h.disconnectFn(peer)
 		}
 		peer.Close()

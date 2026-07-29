@@ -1,0 +1,25 @@
+# Half-Pi 一键演示环境
+# 启动: docker compose up -d
+# 访问: http://localhost:15707 (WebUI) 或 ws://localhost:15707/ws (Face/Hand)
+
+services:
+  mind:
+    build: .
+    container_name: half-pi-mind
+    ports:
+      - "15707:15707"
+    volumes:
+      - mind-data:/home/half-pi/.half-pi
+    environment:
+      - HALF_PI_SERVER_HOST=0.0.0.0
+      - LLM_DEEPSEEK_API_KEY=${LLM_DEEPSEEK_API_KEY:-}
+      - LLM_ANTHROPIC_API_KEY=${LLM_ANTHROPIC_API_KEY:-}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "half-pi-mind", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  mind-data:

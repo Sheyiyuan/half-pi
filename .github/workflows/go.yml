@@ -1,0 +1,116 @@
+name: Go
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "modules/**"
+      - "go.work"
+      - "go.work.sum"
+      - "Makefile"
+      - ".github/workflows/go.yml"
+  pull_request:
+    branches: [main]
+    paths:
+      - "modules/**"
+      - "go.work"
+      - "go.work.sum"
+      - "Makefile"
+      - ".github/workflows/go.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Test matrix across all modules ──
+  test:
+    name: test / ${{ matrix.module }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        module:
+          - gateway-core
+          - half-pi-core
+          - half-pi-mind
+          - half-pi-face
+          - half-pi-hand
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: modules/${{ matrix.module }}/go.mod
+          cache: true
+          cache-dependency-path: modules/${{ matrix.module }}/go.sum
+
+      - name: Test
+        working-directory: modules/${{ matrix.module }}
+        run: go test -race -count=1 -timeout 300s ./...
+
+  # ── Build all binaries ──
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: modules/half-pi-core/go.mod
+          cache: true
+
+      - name: Build
+        run: make build
+
+      - name: Verify binaries
+        run: |
+          file bin/half-pi-mind
+          file bin/half-pi-face
+          file bin/half-pi-hand
+          bin/half-pi-mind --version
+          bin/half-pi-face --version 2>&1 || true
+          bin/half-pi-hand --version 2>&1 || true
+
+  # ── Cross-compile check ──
+  cross-compile:
+    name: cross-compile
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: modules/half-pi-core/go.mod
+
+      - name: Cross-compile
+        run: |
+          GOOS=linux   GOARCH=amd64 go build -o /dev/null ./modules/half-pi-mind/cmd/half-pi-mind/
+          GOOS=linux   GOARCH=arm64 go build -o /dev/null ./modules/half-pi-mind/cmd/half-pi-mind/
+          GOOS=darwin  GOARCH=amd64 go build -o /dev/null ./modules/half-pi-mind/cmd/half-pi-mind/
+          GOOS=darwin  GOARCH=arm64 go build -o /dev/null ./modules/half-pi-mind/cmd/half-pi-mind/
+          GOOS=windows GOARCH=amd64 go build -o /dev/null ./modules/half-pi-mind/cmd/half-pi-mind/
+          echo "mind: linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 — ok"
+
+          GOOS=linux   GOARCH=amd64 go build -o /dev/null ./modules/half-pi-face/cmd/half-pi-face/
+          GOOS=darwin  GOARCH=amd64 go build -o /dev/null ./modules/half-pi-face/cmd/half-pi-face/
+          GOOS=windows GOARCH=amd64 go build -o /dev/null ./modules/half-pi-face/cmd/half-pi-face/
+          echo "face: linux/amd64 darwin/amd64 windows/amd64 — ok"
+
+          GOOS=linux   GOARCH=amd64 go build -o /dev/null ./modules/half-pi-hand/cmd/half-pi-hand/
+          GOOS=linux   GOARCH=arm64 go build -o /dev/null ./modules/half-pi-hand/cmd/half-pi-hand/
+          GOOS=darwin  GOARCH=amd64 go build -o /dev/null ./modules/half-pi-hand/cmd/half-pi-hand/
+          GOOS=darwin  GOARCH=arm64 go build -o /dev/null ./modules/half-pi-hand/cmd/half-pi-hand/
+          GOOS=windows GOARCH=amd64 go build -o /dev/null ./modules/half-pi-hand/cmd/half-pi-hand/
+          echo "hand: linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 — ok"

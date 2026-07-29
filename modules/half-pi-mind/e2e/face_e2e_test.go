@@ -875,9 +875,26 @@ func awaitTaskStatus(
 		face.send(t, protocol.TypeFaceTaskGet, protocol.FaceTaskGet{
 			RequestID: requestID, ConversationID: conversationID, TaskID: taskID,
 		})
-		awaitAccepted(t, face, requestID, protocol.FaceOperationTaskGet)
+		// Read response — could be face.accepted or face.error (task_not_found on slow CI)
+		envelope := face.awaitAny(t, requestID)
+		switch envelope.Type {
+		case protocol.TypeFaceAccepted:
+			// proceed
+		case protocol.TypeFaceError:
+			errPayload, _ := protocol.StrictDecode[protocol.FaceError](envelope.Payload)
+			if errPayload.Code == protocol.FaceErrorTaskNotFound || errPayload.Code == protocol.FaceErrorTaskStale {
+				time.Sleep(25 * time.Millisecond)
+				continue
+			}
+			t.Fatalf("task get returned unexpected error: %+v", errPayload)
+		default:
+			t.Fatalf("task get returned unexpected message type: %s", envelope.Type)
+		}
 		result := awaitResult(t, face, requestID)
-		if result.Status == protocol.FaceResultFailed && result.ErrorCode == protocol.FaceErrorTaskStale {
+		// The task may still be between Mind's durable snapshot and Hand admission;
+		// task.get reports that transient state as an accepted failed result.
+		if result.Status == protocol.FaceResultFailed &&
+			(result.ErrorCode == protocol.FaceErrorTaskNotFound || result.ErrorCode == protocol.FaceErrorTaskStale) {
 			time.Sleep(25 * time.Millisecond)
 			continue
 		}

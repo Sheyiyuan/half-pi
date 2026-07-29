@@ -237,7 +237,7 @@ func TestActorAutomaticallyCompactsBeforeFirstProviderRequest(t *testing.T) {
 	summaryProvider := &recordingProvider{content: `{"summary":"accumulated history"}`}
 	runtime := compact.RuntimeConfig{
 		Enabled: true, Automatic: true,
-		MainProviderID: "main", MainModelID: "main", MainContextWindow: 6000,
+		MainProviderID: "main", MainModelID: "main", MainContextWindow: 12000,
 		MainMaxTokens: 256, ReservedOutputTokens: 256,
 		SummaryProviderID: "summary", SummaryModelID: "summary", SummaryContextWindow: 20_000,
 		SummaryModelMaxTokens: 512, Timeout: 5 * time.Second, MaxTokens: 128,
