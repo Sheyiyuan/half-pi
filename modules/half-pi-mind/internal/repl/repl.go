@@ -31,13 +31,14 @@ type Repl struct {
 	bridge      *local.RemoteBridge
 	management  *management.Service
 	switchActor func(string) (*conversation.Actor, error)
+	createActor func(string) (*conversation.Actor, error)
 	approver    *approver
 	approvals   *approval.Broker
 	input       *inputReader
 }
 
 // Run 启动交互式 REPL 循环。
-func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Actor, error), approvals *approval.Broker, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub, managementService *management.Service) {
+func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Actor, error), createActor func(string) (*conversation.Actor, error), approvals *approval.Broker, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub, managementService *management.Service) {
 	r := &Repl{
 		core:        actor.Core(),
 		bus:         bus,
@@ -48,6 +49,7 @@ func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Acto
 		bridge:      actor.Bridge(),
 		management:  managementService,
 		switchActor: switchActor,
+		createActor: createActor,
 		approvals:   approvals,
 		input:       newInputReader(bufio.NewScanner(os.Stdin)),
 	}
@@ -68,7 +70,11 @@ func (r *Repl) printBanner(serverEnabled bool) {
 	}
 	fmt.Println("/session              list sessions")
 	fmt.Println("/session <prefix>     switch session")
+	fmt.Println("/session resume <prefix>  resume session")
 	fmt.Println("/session name <name>  rename session")
+	fmt.Println("/create <name>        create and switch session")
+	fmt.Println("/new <name>           alias for /create")
+	fmt.Println("/resume <prefix>      alias for /session <prefix>")
 	fmt.Println("/hand list            list Hand credentials")
 	fmt.Println("/hand add <label>     create hand token")
 	fmt.Println("/hand remove --id <id> | --label <label>")

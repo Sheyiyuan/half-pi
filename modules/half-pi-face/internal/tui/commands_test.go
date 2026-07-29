@@ -23,6 +23,25 @@ func TestCommandRegistryParsesQuotesAndDrivesCompletion(t *testing.T) {
 	}
 }
 
+func TestConversationCommandAliases(t *testing.T) {
+	model, _ := readyModel(t)
+	for _, test := range []struct {
+		input string
+		name  string
+	}{
+		{input: `/new "Project Alpha"`, name: "create"},
+		{input: `/resume conversation-1`, name: "open"},
+	} {
+		parsed, err := model.commands.Parse(test.input)
+		if err != nil {
+			t.Fatalf("parse %q: %v", test.input, err)
+		}
+		if parsed.Spec.Name != test.name {
+			t.Fatalf("parse %q resolved to %q, want %q", test.input, parsed.Spec.Name, test.name)
+		}
+	}
+}
+
 func TestBracketedPasteNeverExecutesCommand(t *testing.T) {
 	model, connection := readyModel(t)
 	message := tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/quit"), Paste: true}

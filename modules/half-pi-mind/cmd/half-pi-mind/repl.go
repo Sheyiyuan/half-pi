@@ -21,6 +21,6 @@ func runREPL(conversations *conversation.Manager, approvals *approval.Broker, bu
 	switchActor := func(id string) (*conversation.Actor, error) {
 		return conversations.Get(id)
 	}
-	repl.Run(actor, switchActor, approvals, bus, db, conversations.GroupID(), serverEnabled, wsHub, managementService)
+	repl.Run(actor, switchActor, conversations.Create, approvals, bus, db, conversations.GroupID(), serverEnabled, wsHub, managementService)
 	return nil
 }

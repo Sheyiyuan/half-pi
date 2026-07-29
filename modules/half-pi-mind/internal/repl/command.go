@@ -52,6 +52,18 @@ func (r *Repl) handleCommand(input string) bool {
 		r.handleCompact(strings.TrimSpace(strings.TrimPrefix(input, "/compact")))
 		return true
 
+	case input == "/create" || strings.HasPrefix(input, "/create "):
+		r.handleSessionCreate(strings.TrimSpace(strings.TrimPrefix(input, "/create")))
+		return true
+
+	case input == "/new" || strings.HasPrefix(input, "/new "):
+		r.handleSessionCreate(strings.TrimSpace(strings.TrimPrefix(input, "/new")))
+		return true
+
+	case input == "/resume" || strings.HasPrefix(input, "/resume "):
+		r.handleSessionSwitch(strings.TrimSpace(strings.TrimPrefix(input, "/resume")))
+		return true
+
 	case input == "/session":
 		r.handleSessionList()
 		return true
@@ -60,6 +72,10 @@ func (r *Repl) handleCommand(input string) bool {
 		arg := strings.TrimSpace(strings.TrimPrefix(input, "/session "))
 		if strings.HasPrefix(arg, "name ") {
 			r.handleSessionRename(arg)
+		} else if arg == "resume" {
+			r.handleSessionSwitch("")
+		} else if strings.HasPrefix(arg, "resume ") {
+			r.handleSessionSwitch(strings.TrimSpace(strings.TrimPrefix(arg, "resume ")))
 		} else {
 			r.handleSessionSwitch(arg)
 		}
@@ -160,6 +176,35 @@ func (r *Repl) handleSessionRename(arg string) {
 	} else {
 		fmt.Printf("session renamed: %s\n", newName)
 	}
+}
+
+func (r *Repl) handleSessionCreate(name string) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		fmt.Println("usage: /create <name>")
+		return
+	}
+	if r.createActor == nil {
+		fmt.Println("session creation is unavailable")
+		return
+	}
+	if r.actor != nil {
+		if err := r.actor.SaveSession(); err != nil {
+			r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("save session: %v", err))
+			return
+		}
+	}
+	actor, err := r.createActor(name)
+	if err != nil {
+		fmt.Printf("create session: %v\n", err)
+		return
+	}
+	if actor == nil || actor.Core() == nil {
+		fmt.Println("create session: manager returned an invalid actor")
+		return
+	}
+	r.actor, r.core, r.bridge = actor, actor.Core(), actor.Bridge()
+	fmt.Printf("created and switched to session %s\n", shortID(r.core.SessionID()))
 }
 
 func (r *Repl) handleSessionSwitch(targetPrefix string) {

@@ -28,6 +28,24 @@ func TestHandListCommandKeepsLegacyAlias(t *testing.T) {
 	}
 }
 
+func TestCreateCommandAliasesAreHandled(t *testing.T) {
+	r := &Repl{}
+	for _, input := range []string{"/create", "/new"} {
+		if !r.handleCommand(input) {
+			t.Fatalf("%q was not handled as a REPL command", input)
+		}
+	}
+}
+
+func TestSessionResumeAliasesAreHandled(t *testing.T) {
+	r, _, _ := newSkillRepl(t, t.TempDir())
+	for _, input := range []string{"/resume", "/session resume"} {
+		if !r.handleCommand(input) {
+			t.Fatalf("%q was not handled as a REPL command", input)
+		}
+	}
+}
+
 func TestFaceAddCommandSupportsProfileAndTOML(t *testing.T) {
 	db, err := store.New(filepath.Join(t.TempDir(), "repl.db"))
 	if err != nil {
