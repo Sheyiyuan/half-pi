@@ -143,6 +143,27 @@ func TestConsoleWriterToolCall(t *testing.T) {
 	}
 }
 
+func TestConsoleWriterStructuredToolDetails(t *testing.T) {
+	stderr := captureStderr(t, func() {
+		w := NewConsoleWriter()
+		_ = w.WriteEvent(New("s-1", "lifecycle", LevelInfo, TypeToolCall, "工具调用: read_file").WithData(map[string]any{
+			"args": map[string]any{"path": "README.md"},
+		}))
+		_ = w.WriteEvent(New("s-1", "lifecycle", LevelInfo, TypeToolProgress, "工具进度: read_file").WithData(map[string]any{
+			"data": "reading README.md",
+		}))
+		_ = w.WriteEvent(New("s-1", "lifecycle", LevelInfo, TypeToolResult, "工具完成: read_file").WithData(map[string]any{
+			"result": map[string]any{"stdout": "file contents", "truncated": false},
+		}))
+	})
+
+	for _, want := range []string{`"path": "README.md"`, "reading README.md", `"stdout": "file contents"`} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("Console 输出缺少工具详情 %q: %q", want, stderr)
+		}
+	}
+}
+
 func TestConsoleWriterEmptyMessage(t *testing.T) {
 	stderr := captureStderr(t, func() {
 		w := NewConsoleWriter()

@@ -8,6 +8,7 @@ require (
 	github.com/Sheyiyuan/half-pi/modules/gateway-core v0.0.0-20260714110534-880fe4d6f2ab
 	github.com/Sheyiyuan/half-pi/modules/half-pi-core v0.0.0
 	github.com/charmbracelet/x/ansi v0.10.1
+	github.com/chzyer/readline v1.5.1
 	github.com/creack/pty v1.1.24
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3

@@ -2,10 +2,8 @@
 package repl
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -38,7 +36,7 @@ type Repl struct {
 }
 
 // Run 启动交互式 REPL 循环。
-func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Actor, error), createActor func(string) (*conversation.Actor, error), approvals *approval.Broker, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub, managementService *management.Service) {
+func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Actor, error), createActor func(string) (*conversation.Actor, error), approvals *approval.Broker, bus *events.EventBus, s *store.Store, groupID string, serverEnabled bool, wsHub *hub.Hub, managementService *management.Service, input *InputReader) {
 	r := &Repl{
 		core:        actor.Core(),
 		bus:         bus,
@@ -51,7 +49,10 @@ func Run(actor *conversation.Actor, switchActor func(string) (*conversation.Acto
 		switchActor: switchActor,
 		createActor: createActor,
 		approvals:   approvals,
-		input:       newInputReader(bufio.NewScanner(os.Stdin)),
+		input:       input,
+	}
+	if r.input == nil {
+		return
 	}
 	r.approver = &approver{input: r.input}
 	approvals.SetFallbackResolver(r.approver.Resolve)
@@ -103,8 +104,7 @@ func (r *Repl) printBanner(serverEnabled bool) {
 }
 
 func (r *Repl) loop() bool {
-	fmt.Print("> ")
-	line, ok := r.input.read(context.Background())
+	line, ok := r.input.ReadLine(context.Background(), "> ", true)
 	if !ok {
 		return false
 	}
@@ -128,8 +128,7 @@ func (r *Repl) loop() bool {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("generate request ID: %v", err))
 		return true
 	}
-	ctx := requestctx.WithRequestID(context.Background(), requestID.String())
-	ctx = requestctx.WithSource(ctx, "repl")
+	ctx := withREPLToolVisibility(requestctx.WithRequestID(context.Background(), requestID.String()))
 	response, err := r.actor.Chat(ctx, input)
 	if err != nil {
 		r.emit(events.LevelError, events.TypeSystem, fmt.Sprintf("error: %v", err))
@@ -138,4 +137,9 @@ func (r *Repl) loop() bool {
 	fmt.Println(response)
 	fmt.Println()
 	return true
+}
+
+func withREPLToolVisibility(ctx context.Context) context.Context {
+	ctx = requestctx.WithSource(ctx, "repl")
+	return requestctx.WithToolDetailMode(ctx, "transparent")
 }

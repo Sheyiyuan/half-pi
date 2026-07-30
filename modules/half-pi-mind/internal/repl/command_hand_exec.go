@@ -21,12 +21,12 @@ func (r *Repl) handleHandSelect(handID string) {
 		return
 	}
 	args, _ := json.Marshal(map[string]any{"hand_id": handID})
-	result := r.core.ExecuteTool(context.Background(), "select_hand", args)
+	result := r.core.ExecuteTool(withREPLToolVisibility(context.Background()), "select_hand", args)
 	r.printToolResult(result)
 }
 
 func (r *Repl) handleHandOnline() {
-	r.printToolResult(r.core.ExecuteTool(context.Background(), "list_hands", json.RawMessage(`{}`)))
+	r.printToolResult(r.core.ExecuteTool(withREPLToolVisibility(context.Background()), "list_hands", json.RawMessage(`{}`)))
 }
 
 func (r *Repl) handleHandInfo(handID string) {
@@ -35,7 +35,7 @@ func (r *Repl) handleHandInfo(handID string) {
 		return
 	}
 	args, _ := json.Marshal(map[string]any{"hand_id": handID})
-	r.printToolResult(r.core.ExecuteTool(context.Background(), "get_hand_info", args))
+	r.printToolResult(r.core.ExecuteTool(withREPLToolVisibility(context.Background()), "get_hand_info", args))
 }
 
 func (r *Repl) handleHandExec(input string) {
@@ -47,7 +47,7 @@ func (r *Repl) handleHandExec(input string) {
 	payload, _ := json.Marshal(map[string]any{"tool": tool, "args": args, "confirm": true})
 	started := make(chan string, 1)
 	resultCh := make(chan *executor.ToolResult, 1)
-	ctx := local.WithRunStarted(context.Background(), func(runID string) { started <- runID })
+	ctx := local.WithRunStarted(withREPLToolVisibility(context.Background()), func(runID string) { started <- runID })
 	core := r.core
 	sessionID := core.SessionID()
 	go func() {
@@ -155,7 +155,7 @@ func (r *Repl) handleHandTask(input string) {
 		r.emit(events.LevelWarn, events.TypeSystem, "usage: /hand task start|status|log|cancel")
 		return
 	}
-	r.printToolResult(r.core.ExecuteTool(context.Background(), tool, payload))
+	r.printToolResult(r.core.ExecuteTool(withREPLToolVisibility(context.Background()), tool, payload))
 }
 
 func parseHandTaskStart(input string) (string, json.RawMessage, error) {
