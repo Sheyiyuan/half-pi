@@ -43,6 +43,9 @@ func (m *Model) applyEnvelope(env protocol.Envelope) tea.Cmd {
 	case protocol.TypeFaceRunProgress:
 		value, _ := protocol.DecodePayload[protocol.FaceRunProgress](&env)
 		m.applyRunProgress(value)
+	case protocol.TypeFaceChatToolProgress:
+		value, _ := protocol.DecodePayload[protocol.FaceChatToolProgress](&env)
+		m.applyToolProgress(value)
 	}
 	return nil
 }
@@ -398,6 +401,10 @@ func (m *Model) installCapabilities(data protocol.FaceCapabilitiesResult) {
 		m.scopes[scope] = struct{}{}
 	}
 	m.limits = data.Limits
+	m.detailMode = protocol.FaceDetailModeTransparent
+	if data.Identity.Profile == protocol.FaceProfileObserver {
+		m.detailMode = protocol.FaceDetailModeSummary
+	}
 	if !m.hasScope(protocol.FaceScopeApprove) {
 		m.modal = nil
 	}
@@ -549,7 +556,9 @@ func (m *Model) installSnapshot(snapshot protocol.ConversationSnapshot) {
 			conversation.Tasks[task.TaskID] = sanitizeTask(task)
 		}
 	}
+	pendingChats := make(map[string]struct{}, len(snapshot.PendingChats))
 	for _, pendingChat := range snapshot.PendingChats {
+		pendingChats[pendingChat.RequestID] = struct{}{}
 		if conversation.Chats[pendingChat.RequestID] == nil {
 			conversation.Chats[pendingChat.RequestID] = &chatState{
 				RequestID: pendingChat.RequestID, Accepted: true,
@@ -557,6 +566,26 @@ func (m *Model) installSnapshot(snapshot protocol.ConversationSnapshot) {
 			}
 			conversation.ChatOrder = append(conversation.ChatOrder, pendingChat.RequestID)
 		}
+	}
+	for _, projection := range snapshot.ToolHistory {
+		chat := ensureChat(conversation, projection.RequestID)
+		if _, pending := pendingChats[projection.RequestID]; !pending {
+			chat.Terminal = true
+		}
+		duplicate := false
+		for _, existing := range chat.Tools {
+			if existing.Ordinal == projection.Ordinal && existing.Ordinal > 0 {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		chat.Tools = append(chat.Tools, toolActivity{
+			Ordinal: projection.Ordinal, Tool: sanitizeRemoteText(projection.Tool), ArgsDigest: projection.ArgsDigest,
+			Args: projection.Args, Result: projection.Result, Success: projection.Success, Complete: projection.Complete,
+		})
 	}
 	if m.activeID == snapshot.ConversationID {
 		m.chooseApprovalModal()
@@ -730,7 +759,8 @@ func (m *Model) applyEvent(event protocol.FaceEvent) tea.Cmd {
 		if err == nil && conversation != nil {
 			chat := ensureChat(conversation, data.RequestID)
 			chat.Tools = append(chat.Tools, toolActivity{
-				Tool: sanitizeRemoteText(data.Tool), ArgsDigest: data.ArgsDigest, AfterResponse: highestResponseIndex(chat),
+				Tool: sanitizeRemoteText(data.Tool), ArgsDigest: data.ArgsDigest, Args: data.Args,
+				AfterResponse: highestResponseIndex(chat),
 			})
 		}
 	case protocol.FaceEventChatToolCompleted:
@@ -740,6 +770,7 @@ func (m *Model) applyEvent(event protocol.FaceEvent) tea.Cmd {
 			for index := len(chat.Tools) - 1; index >= 0; index-- {
 				if chat.Tools[index].Tool == sanitizeRemoteText(data.Tool) && !chat.Tools[index].Complete {
 					chat.Tools[index].Complete, chat.Tools[index].Success = true, data.Success
+					chat.Tools[index].Result = data.Result
 					break
 				}
 			}
@@ -874,6 +905,33 @@ func (m *Model) applyRunProgress(progress protocol.FaceRunProgress) {
 		output.Bytes -= len(output.Chunks[0].Data)
 		output.Chunks = output.Chunks[1:]
 		output.Gap = true
+	}
+}
+
+func (m *Model) applyToolProgress(progress protocol.FaceChatToolProgress) {
+	conversation := m.conversations[progress.ConversationID]
+	if conversation == nil {
+		return
+	}
+	chat := conversation.Chats[progress.RequestID]
+	if chat == nil {
+		return
+	}
+	for index := len(chat.Tools) - 1; index >= 0; index-- {
+		tool := &chat.Tools[index]
+		if tool.Tool != sanitizeRemoteText(progress.Tool) || tool.Complete {
+			continue
+		}
+		if progress.Gap || tool.ProgressSeq > 0 && progress.Seq != tool.ProgressSeq+1 {
+			tool.Progress += "\n[progress gap]\n"
+		}
+		tool.ProgressSeq = progress.Seq
+		tool.Progress += sanitizeRemoteText(progress.Data)
+		if len(tool.Progress) > protocol.MaxFaceToolOutputBytes {
+			tool.Progress = truncateUTF8TailBytes(tool.Progress, protocol.MaxFaceToolOutputBytes)
+		}
+		m.refreshViewport(true)
+		return
 	}
 }
 

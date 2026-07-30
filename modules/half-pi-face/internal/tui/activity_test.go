@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -65,6 +66,43 @@ func TestRunProgressAndTaskLogsStaySeparate(t *testing.T) {
 	}
 	if len(output.Chunks) > 0 && output.Chunks[0].Data == log.Data {
 		t.Fatal("foreground progress and durable log were combined")
+	}
+}
+
+func TestToolProgressDetectsSequenceGap(t *testing.T) {
+	model, _ := readyModel(t)
+	model.localDraft = nil
+	model.activeID = "conversation-1"
+	conversation := newConversation(model.activeID)
+	chat := ensureChat(conversation, "chat-1")
+	chat.Tools = append(chat.Tools, toolActivity{Tool: "exec_command"})
+	model.conversations[model.activeID] = conversation
+	model.applyToolProgress(protocol.FaceChatToolProgress{
+		ConversationID: model.activeID, RequestID: "chat-1", Tool: "exec_command", Seq: 1, Kind: "stdout", Data: "one",
+	})
+	model.applyToolProgress(protocol.FaceChatToolProgress{
+		ConversationID: model.activeID, RequestID: "chat-1", Tool: "exec_command", Seq: 3, Kind: "stdout", Data: "three",
+	})
+	tool := chat.Tools[0]
+	if tool.ProgressSeq != 3 || !strings.Contains(tool.Progress, "[progress gap]") {
+		t.Fatalf("tool progress = %+v", tool)
+	}
+}
+
+func TestToolProgressLimitPreservesUTF8Tail(t *testing.T) {
+	model, _ := readyModel(t)
+	model.localDraft = nil
+	model.activeID = "conversation-1"
+	conversation := newConversation(model.activeID)
+	chat := ensureChat(conversation, "chat-1")
+	chat.Tools = append(chat.Tools, toolActivity{Tool: "exec_command"})
+	model.conversations[model.activeID] = conversation
+	model.applyToolProgress(protocol.FaceChatToolProgress{
+		ConversationID: model.activeID, RequestID: "chat-1", Tool: "exec_command", Seq: 1,
+		Kind: "stdout", Data: strings.Repeat("界", protocol.MaxFaceToolOutputBytes/3+1),
+	})
+	if !utf8.ValidString(chat.Tools[0].Progress) || len(chat.Tools[0].Progress) > protocol.MaxFaceToolOutputBytes {
+		t.Fatalf("tool progress is not bounded UTF-8: bytes=%d valid=%t", len(chat.Tools[0].Progress), utf8.ValidString(chat.Tools[0].Progress))
 	}
 }
 

@@ -50,6 +50,7 @@ func TestFirstSendCreatesSubscribesSnapshotsAndChatsOnce(t *testing.T) {
 func TestSnapshotMessagesRenderInViewport(t *testing.T) {
 	model, _ := readyModel(t)
 	conversationID := "conversation-1"
+	requestID := "request-1"
 	model.activeID = conversationID
 	model.localDraft = nil
 	model.conversations[conversationID] = newConversation(conversationID)
@@ -58,16 +59,52 @@ func TestSnapshotMessagesRenderInViewport(t *testing.T) {
 	}
 	snapshot := validSnapshot(conversationID)
 	snapshot.Messages = []protocol.FaceMessage{
-		{ID: 1, Role: "user", Content: "persisted prompt", Seq: 1},
-		{ID: 2, Role: "assistant", Content: "persisted answer", Seq: 2},
-		{ID: 3, Role: "tool", Content: strings.Repeat("tool output\n", 30), Seq: 3},
-		{ID: 4, Role: "assistant", Content: "latest answer", Seq: 4},
+		{ID: 1, Role: "user", Content: "persisted prompt", RequestID: requestID, Seq: 1},
+		{ID: 2, Role: "assistant", Content: "persisted answer", RequestID: requestID, Seq: 2},
+		{ID: 3, Role: "tool", Content: strings.Repeat("raw tool output\n", 30), RequestID: requestID, ToolID: "tool-1", Seq: 3},
+		{ID: 4, Role: "assistant", Content: "latest answer", RequestID: requestID, Seq: 4},
 	}
+	snapshot.ToolHistory = []protocol.ToolHistoryProjection{{
+		RequestID: requestID, Ordinal: 1, Tool: "read_file", DetailMode: protocol.FaceDetailModeTransparent,
+		ArgsDigest: "sha256:args", Args: &protocol.ToolArgsView{Fields: map[string]protocol.ToolFieldView{
+			"path": {State: protocol.ToolDisplayShow, Value: strings.Repeat("nested/path/", 30) + "README.md"},
+		}}, Result: &protocol.ToolOutputView{Stdout: strings.Repeat("projected tool output\n", 30)}, Success: true, Complete: true,
+	}}
 	model.applySnapshotResponse(protocol.FaceSnapshot{RequestID: "snapshot-request", Snapshot: snapshot})
 	if view := ansi.Strip(model.View()); !strings.Contains(view, "latest answer") {
 		t.Fatalf("snapshot messages missing: offset=%d total=%d height=%d viewport=%q\n%s",
 			model.chatViewport.YOffset, model.chatViewport.TotalLineCount(), model.chatViewport.Height,
 			ansi.Strip(model.chatViewport.View()), view)
+	}
+}
+
+func TestSnapshotToolHistoryReplacesToolMessageInSequence(t *testing.T) {
+	model, _ := readyModel(t)
+	conversationID, requestID := "conversation-1", "request-1"
+	model.activeID = conversationID
+	model.localDraft = nil
+	model.conversations[conversationID] = newConversation(conversationID)
+	model.pending["snapshot-request"] = pendingRequest{
+		Operation: protocol.FaceOperationConversationSnapshot, ConversationID: conversationID,
+	}
+	snapshot := validSnapshot(conversationID)
+	snapshot.Messages = []protocol.FaceMessage{
+		{ID: 1, Role: "user", Content: "prompt", RequestID: requestID, Seq: 1},
+		{ID: 2, Role: "tool", Content: "raw result", RequestID: requestID, ToolID: "tool-1", Seq: 2},
+		{ID: 3, Role: "assistant", Content: "final answer", RequestID: requestID, Seq: 3},
+	}
+	snapshot.ToolHistory = []protocol.ToolHistoryProjection{{
+		RequestID: requestID, Ordinal: 1, Tool: "read_file", DetailMode: protocol.FaceDetailModeTransparent,
+		ArgsDigest: "sha256:args", Result: &protocol.ToolOutputView{Stdout: "projected result"}, Success: true, Complete: true,
+	}}
+	model.applySnapshotResponse(protocol.FaceSnapshot{RequestID: "snapshot-request", Snapshot: snapshot})
+	content := ansi.Strip(model.renderChatContent(model.conversations[conversationID], model.chatViewport.Width))
+	toolIndex, answerIndex := strings.Index(content, "projected result"), strings.Index(content, "final answer")
+	if toolIndex < 0 || answerIndex < 0 || toolIndex >= answerIndex || strings.Contains(content, "raw result") {
+		t.Fatalf("historical tool placement is incorrect: %q", content)
+	}
+	if model.hasActiveChat() {
+		t.Fatal("completed historical tool projection was treated as an active Chat")
 	}
 }
 

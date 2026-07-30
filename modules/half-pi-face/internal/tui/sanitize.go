@@ -91,3 +91,14 @@ func truncateUTF8Bytes(value string, limit int) string {
 	}
 	return value
 }
+
+func truncateUTF8TailBytes(value string, limit int) string {
+	if limit <= 0 || len(value) <= limit {
+		return value
+	}
+	start := len(value) - limit
+	for start < len(value) && !utf8.RuneStart(value[start]) {
+		start++
+	}
+	return value[start:]
+}
