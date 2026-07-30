@@ -9,6 +9,7 @@
 | 文档 | 定位 |
 |---|---|
 | [`face-protocol.md`](face-protocol.md) | Face 正式协议、身份、鉴权、快照、审批和事件投影 |
+| [`tool-visibility.md`](tool-visibility.md) | Face revision 3 工具透明/摘要模式、展示策略、风险、恢复和客户端契约 |
 | [`ai-face-protocol.md`](ai-face-protocol.md) | AI、Headless Agent 和自动化客户端接入指南 |
 | [`plugin-architecture.md`](plugin-architecture.md) | 尚未实现的插件契约、Goja 宿主、process/WASM 运行时和实施顺序提案 |
 | [`gateway-handshake-v3.md`](gateway-handshake-v3.md) | 已实现的 v3 握手：transcript 完整性、X25519 前向保密、label 枚举关闭，及仍未解决的元数据、静态身份与限流项 |

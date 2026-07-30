@@ -2,7 +2,7 @@
 
 ## 状态
 
-本文面向 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1-P4 Face runtime、应用协议 revision 2 流式增强、JSONL Headless 客户端和共用协议的全屏人类终端工作台已实现。当前可使用 capability、conversation/Hand/run/task 查询、快照、消息分页、订阅、可恢复 Chat 流、foreground run progress、Chat/cancel、异步审批和 run/task cancel。Headless 行为保持严格 JSONL；TUI 只消费相同的正式 `face.*` 协议，不存在 UI 专用旁路。
+本文面向 Headless Agent Face、自动化客户端和其他 AI Agent。统一 wire protocol、独立凭据、四步挑战握手、强制加密、P1-P4 Face runtime、应用协议 revision 3 工具可见性、JSONL Headless 客户端和共用协议的全屏人类终端工作台已实现。当前可使用 capability、conversation/Hand/run/task 查询、快照、消息分页、订阅、可恢复 Chat 流、tool/run progress、Chat/cancel、异步审批和 run/task cancel。Headless 行为保持严格 JSONL；TUI 只消费相同的正式 `face.*` 协议，不存在 UI 专用旁路。工具详情和风险契约见 [`tool-visibility.md`](tool-visibility.md)。
 
 v2 握手已在 WinBoat Windows 11 Pro AMD64 原生运行 gateway/Mind race 测试及 Mind/Hand/Face 进程链路，验证 encrypted `registered`、双 peer 在线、撤销断连和输出秘密扫描；Windows `386/amd64/arm64` 交叉编译同时通过。更新后的官方 `scripts/test-windows.ps1 -PrebuiltDir` 使用当前源码执行，11 组测试全部 PASS 且 stderr 为空。
 
@@ -144,7 +144,7 @@ Gateway 必须先安装订阅再返回 accepted。`FaceEvent.EventSeq` 只在当
 
 注册后先发送 `face.capabilities.get`。只有结果声明 `chat_stream.v1`、`chat_stream_resume.v1`、`run_progress.v1` 或 `message_pagination.v1` 后，客户端才使用对应消息；旧 Mind 返回 `invalid_request` 时继续使用原有非流式流程，不需要断开连接。
 
-`face.subscribe.transient_types` 可包含 `chat.delta` 和 `run.progress`。省略或传空数组表示不接收瞬时消息；Chat delta 需要 `face:sessions:read`，run progress 需要 `face:runs:output`。
+`face.subscribe.transient_types` 可包含 `chat.delta`、`chat.tool.progress` 和 `run.progress`。省略或传空数组表示不接收瞬时消息。`detail_mode` 选择 `transparent` 或 `summary`；observer 只能使用 summary。
 
 活动 Chat 的恢复顺序：
 
@@ -177,7 +177,7 @@ AI Face 只能依赖结构化 `data` 和稳定枚举，不得解析 `message` �
 - Face 看到的批准不取代 Hand 最终守门；Hand 仍验证 Approval digest。
 - `face.run.cancel` 只能请求 Mind 的 RemoteRun Authority 取消，不得直接向 Hand 发送 `rpc_cancel`。
 - `face.task.cancel` 同时需要 `face:tasks:read` 和 `face:tasks:cancel`，成功响应包含 Hand outcome 与对账后的 task 快照。
-- 裁决 reason 最多 1024 UTF-8 字节；审批事件、审计和 run 元数据都不包含原始工具参数。
+- 裁决 reason 最多 1024 UTF-8 字节；transparent 审批事件可携带与冻结调用绑定的展示投影，但审批审计和 run 审计仍不保存原始工具参数。
 
 ## 正式事件
 
@@ -199,7 +199,7 @@ conversation.changed
 task.changed
 ```
 
-每种事件的 `data` 都有对应 Go DTO 和严格校验。工具事件只暴露参数摘要，不应暴露原始敏感参数；内部 debug 日志不属于正式事件流。
+每种事件的 `data` 都有对应 Go DTO 和严格校验。summary 工具事件只暴露摘要；transparent 事件携带版本化参数/结果投影，未标记字段默认可见且秘密扫描只告警。内部 debug 日志不属于正式事件流。
 
 ## JSONL 客户端约定
 
@@ -227,9 +227,9 @@ stdin command 使用尚未 stamp 的 `protocol.Envelope`；客户端负责生成
 - 所有 Face 连接必须完成应用层四步鉴权和加密；禁止增加远程明文兼容旁路。
 - token 不得进入日志、事件或 `face.result.data`。
 - AI Face 默认使用最小 scope；执行审批测试时使用独立身份和隔离 Hand。
-- 不发送原始工具参数、模型内部请求或未脱敏的工具结果到普通事件流。
+- 不发送模型内部请求。工具参数和结果必须遵守订阅协商的 transparent/summary 投影，不得把 summary 当作可恢复原文。
 - 客户端必须限制消息和本地缓存大小，不能把事件流当作无限历史。
-- 客户端不得记录 Chat delta 正文、run 输出、原始 SSE 或工具参数；诊断只记录稳定类型、序号、长度和缺口状态。
+- summary 客户端诊断只记录稳定类型、序号、长度、digest 和缺口状态。transparent 客户端若记录工具详情，必须把日志视为可能包含用户秘密的数据并明确控制位置与保留期。
 
 ## 验收状态与后续清单
 

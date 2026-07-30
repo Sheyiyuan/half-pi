@@ -74,6 +74,8 @@ TUI 面对的问题和协议无关，但同样是安全问题。
 
 **前台进度和后台任务日志严格分开。** 对应 [第 13 章](../13-remote-jobs/) 那两条通道，界面上不能混在一起，否则用户会把可丢的进度当成完整日志。
 
+operator TUI 默认以 `transparent` 订阅：工具卡片展示经过投影的参数、实时 `chat.tool.progress`/`run.progress` 和可靠的工具终态结果；observer TUI 使用 `summary`，只展示状态、长度、digest 和告警。长参数、输出和日志由 viewport 滚动或折叠处理，不能用瞬时 progress 冒充终态结果。
+
 **非交互环境明确失败。** 在管道里请求 TUI 模式会直接报错并提示用 `--mode headless`，而不是降级成一堆乱码。
 
 ## 重连时的克制
@@ -84,6 +86,8 @@ Connector 持有凭据，按 generation 隔离连接，断线自动退避重连�
 - 非幂等 mutation **只对账，不自动重发**
 
 界面上这意味着：重连后用户可能看到「正在确认之前的操作状态」而不是立刻恢复。这是诚实的代价。
+
+Headless 始终输出经过严格校验的结构化 JSONL。summary 客户端即使通过 snapshot、event 或 task log 恢复，也不能取得透明 admission 的原文；它只能得到降级后的摘要元数据。透明客户端若把工具详情写入本地日志，应把日志当作可能包含用户秘密的数据并明确保留期。
 
 <details class="checkpoint"><summary>检查点：为了方便测试，Headless 直接调 Mind 的本地函数、跳过 Gateway，可以吗？</summary>
 
@@ -116,5 +120,6 @@ Connector 持有凭据，按 generation 隔离连接，断线自动退避重连�
 | [`headless/runner.go`](https://github.com/Sheyiyuan/half-pi/blob/main/modules/half-pi-face/internal/headless/runner.go) | Headless JSONL 走正式协议循环 |
 | [`tui/reducer_test.go`](https://github.com/Sheyiyuan/half-pi/blob/main/modules/half-pi-face/internal/tui/reducer_test.go) | 首次发送、gap 恢复与 generation 隔离 |
 | [`docs/ai-face-protocol.md`](https://github.com/Sheyiyuan/half-pi/blob/main/docs/ai-face-protocol.md) | Headless Face 的接入约定 |
+| [`docs/tool-visibility.md`](https://github.com/Sheyiyuan/half-pi/blob/main/docs/tool-visibility.md) | TUI/Headless 详情模式与恢复边界 |
 
 <nav class="tutorial-progress"><a href="../16-async-approval/">← 上一章</a><span>17 / 21</span><a href="../18-operations/">下一章 →</a></nav>

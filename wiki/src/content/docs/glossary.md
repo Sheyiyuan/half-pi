@@ -33,6 +33,10 @@ sidebar:
 
 **Digest（摘要）** 对规范数据计算的 SHA-256 等固定长度值，用于证明审批与实际参数对应，不用于恢复原文。
 
+**Detail mode（详情模式）** Face 订阅协商的 `transparent` 或 `summary` 视图。模式在工具、run 或 task admission 时冻结，不能把既有摘要历史升级为透明原文。
+
+**Display projection（展示投影）** 面向用户的版本化参数或结果视图，经过 schema/中央规则的 show、mask、hide、preview 处理；它不替代冻结调用摘要，也不进入安全审计表。
+
 **Durable task（持久化后台任务）** 在 Hand 网络断开后仍可继续，并由 Hand 本地数据库与日志保存状态的任务。
 
 **Envelope（信封）** Gateway 的统一消息外壳，包含消息、连接 session、来源、目标、序号和加密 payload。
@@ -87,13 +91,19 @@ sidebar:
 
 **Snapshot（快照）** Mind 为 Face 合并的 conversation、消息、审批、run 与 task 当前权威视图。
 
+**Summary（摘要视图）** 工具详情的最小展示形式，只含工具、状态、长度、digest、稳定错误类别和告警，不含原始参数或结果正文。
+
 **Terminal state（终态）** 状态机不再接受普通进展的结果，如 succeeded、failed、cancelled、timed_out 或 lost。
 
 **Tool（工具）** 向模型描述、由系统实现的结构化动作。注册并不等于获准执行。
 
+**Tool history projection（工具历史投影）** Store 为已接纳工具调用保存的版本化展示记录，供 `snapshot.tool_history` 恢复；透明记录可降级为 summary，旧历史不回填透明详情。
+
 **ToolRuntime** Half-Pi 生产工具调用唯一入口，负责变换、Schema、冻结、Guard、授权、审计、执行与结果交付。
 
 **Transformer（变换器）** Lifecycle 中在规定阶段改变调用或交付内容的 Hook；不能绕过强制确认或 hard deny。
+
+**Transparent（透明视图）** 工具详情展示模式，返回经过展示策略处理的参数、progress 和可靠终态，可能包含用户自己传入的秘密；不等于安全审计原文。
 
 **TUI（Terminal User Interface，终端用户界面）** Half-Pi Face 的 Bubble Tea 全屏工作台。
 

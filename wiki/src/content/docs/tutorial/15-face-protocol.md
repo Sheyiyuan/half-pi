@@ -1,6 +1,6 @@
 ---
 title: 15. Face 协议、快照、订阅与请求重放
-description: 在五个不同时刻拔掉网线，逐个看重连后如何恢复，以及为什么不是所有请求都能自动重发。
+description: 应用协议 revision 3 在五个不同时刻拔掉网线，逐个看详情模式、工具历史和重连后如何恢复。
 sidebar:
   order: 15
   label: 15 · Face 协议
@@ -12,6 +12,14 @@ sidebar:
 <p><strong>上一章的结论：</strong>Mind 常驻，每个对话一个 Actor，状态从 Store 恢复。</p>
 <p><strong>本章要动的那一块：</strong>Face 在另一台机器上，不共享内存，网络随时会断。它怎么知道「现在这个对话是什么状态」？</p>
 </div>
+
+## 应用协议 revision 3：看见工具，但不改变事实
+
+revision 3 为 `face.subscribe` 增加连接级 `detail_mode`：`operator` 省略时默认为 `transparent`；`observer` 省略时默认为 `summary`，显式请求 `transparent` 返回 `forbidden`，不能靠连接字段提升凭据权限。`summary` 只返回工具、状态、长度、摘要和告警；`transparent` 返回经过展示投影的参数、进度和结果。完整字段以 [`docs/tool-visibility.md`](https://github.com/Sheyiyuan/half-pi/blob/main/docs/tool-visibility.md) 为准。
+
+详情模式在每次工具、前台 run 或后台 task admission 时冻结。断线、换一个订阅模式或 task 跨重连继续，都不能把已经按 `summary` 接纳的调用升级成透明历史；透明 admission 可以向 summary 订阅者降级投影。
+
+工具事件分成两类可靠性：`chat.tool_called` 记录调用，`chat.tool.progress` 是有界瞬时输出，队列拥塞时可以丢失并用 `seq/gap` 标记；`chat.tool_completed` 携带可靠终态结果，长度和 digest 针对完整受限输出，不能用瞬时 progress 代替。`snapshot.tool_history` 恢复 admission 时保存的版本化展示记录：透明记录可以按当前连接降级为 summary，summary admission 没有可回填的原文；升级前的旧历史保持摘要，不从消息文本推测透明参数。
 
 ## 为什么本地缓存不够
 
@@ -91,6 +99,8 @@ sequenceDiagram
 | 活跃 Registry | 正在跑的 run、待处理审批 |
 | Task 快照 | 后台任务的最后已知状态（权威在 Hand） |
 
+revision 3 的快照还可以带 `tool_history`。它是 Store 保存的展示投影，不是把安全审计表变成原始参数仓库：透明记录按当前 Face 模式降级，summary 记录永远不能恢复原文。`chat.tool.progress` 和 `run.progress` 可以在断线期间缺失，但工具终态、Chat `face.result` 和快照中的权威状态必须可靠。
+
 快照带 version，进程内单调。订阅事件带连接内单调的 `event_seq`——Face 发现序号有跳跃就知道漏了事件，可以主动重新拉快照对账，而不是默默带着一个缺口继续跑。
 
 ## 慢客户端不能拖垮别人
@@ -140,5 +150,6 @@ sequenceDiagram
 | [`facegateway/gateway.go`](https://github.com/Sheyiyuan/half-pi/blob/main/modules/half-pi-mind/internal/facegateway/gateway.go) | 连接、身份与 command 路由入口 |
 | [`facegateway/gateway_test.go`](https://github.com/Sheyiyuan/half-pi/blob/main/modules/half-pi-mind/internal/facegateway/gateway_test.go) | 快照、scope、订阅、慢连接与状态 fallback |
 | [`docs/face-protocol.md`](https://github.com/Sheyiyuan/half-pi/blob/main/docs/face-protocol.md) | 当前 Face wire contract |
+| [`docs/tool-visibility.md`](https://github.com/Sheyiyuan/half-pi/blob/main/docs/tool-visibility.md) | revision 3 详情模式、工具事件和历史恢复 |
 
 <nav class="tutorial-progress"><a href="../14-mind-service-actors/">← 上一章</a><span>15 / 21</span><a href="../16-async-approval/">下一章 →</a></nav>

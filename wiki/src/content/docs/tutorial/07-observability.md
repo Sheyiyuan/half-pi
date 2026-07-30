@@ -78,13 +78,23 @@ Lifecycle Registry 把扩展点分成四类，**关键在于能力是被刻意�
 
 要拦就必须在同步准入路径上拦，那是 Guard 的位置。
 
+## 同一事实的两种展示视图
+
+生命周期事件可以按连接或输出端选择两种展示视图。`summary` 只保留工具名、状态、长度、摘要、稳定错误类别和告警；`transparent` 则携带经过展示策略处理的参数与结果投影，让用户检查 Agent 实际提交了什么。两者都只是展示投影，不是新的业务事实。
+
+透明不是「把所有原文无条件写出去」。`PropertySchema.Display` 和中央高置信规则负责 `mask`、`hide` 或受限 `preview`；没有声明策略的字段默认展示。秘密扫描只产生 `scan_warnings`，不会偷偷改写用户自己的字符串。也因此，用户自己传入命令、文件内容或 URL 中的 token 可能出现在透明视图里。
+
+透明投影可以进入 Lifecycle/EventBus、REPL 控制台和用户自己的文件日志，便于排查；它**不会**进入 `approval_audits`、`security_decisions` 等安全审计表。审计仍只绑定冻结调用的原始参数摘要和结构化裁决。详情模式在工具、前台 run 或后台 task admission 时冻结，恢复时不能把一次 summary admission 变成透明原文。
+
+这不会削弱生命周期边界：Observer 仍是异步、有界的观察者，收到不可变投影，不能改变任何业务事实。透明只是 Observer 能看到的展示内容更多，不是给它增加 Guard 或 Transformer 的能力。
+
 ## 一条信息串起整条链路
 
 排查时最常问的问题是：「哪次 Face 请求导致了那台设备上的删除操作？」
 
 要能回答，每条事实都得带上共享的标识：conversation、request、run，以及 trace 和 span。span 表达父子关系——一次 Chat 请求下面挂着若干次模型请求，每次模型请求下面挂着若干次工具调用。
 
-这里有个安全约束容易被忽略：**事件里不放原始参数**。工具参数可能包含文件正文、密钥、个人信息，而事件会流向日志文件、终端、远程 Face。所以事件里只放参数的 SHA-256 摘要——足够用于关联和校验，但不泄露内容。需要看具体参数的地方（审批界面）走单独的、带权限检查的投影路径。
+这里有个安全约束容易被忽略：**事件展示什么由详情模式决定**。`summary` 事件只放参数的 SHA-256 摘要；`transparent` 事件可以带版本化展示投影，但仍受 schema/中央规则的 mask、hide、preview 和长度上限约束。需要记住的是，透明投影可能进入用户自己的终端或日志，而不是安全审计表；审批与安全审计继续只保存摘要。
 
 ## 为什么 Face 不直接订阅 EventBus
 
@@ -119,7 +129,7 @@ Lifecycle Registry 把扩展点分成四类，**关键在于能力是被刻意�
 
 <details class="checkpoint"><summary>检查点：为了排查方便，把工具参数原文也写进事件流，可以吗？</summary>
 
-不可以。事件会进日志文件、终端和远程连接，而参数可能是文件正文或密钥。Half-Pi 在事件里只放参数摘要；需要人工核对参数时走带权限的审批投影路径。摘要同样能回答「这两次调用参数是否相同」这类排查问题。
+要先区分视图。`summary` 不会带原文；有权限的 `transparent` 订阅可以看到受展示策略处理的参数和可靠终态，方便核对实际调用。但透明内容可能包含用户自己传入的秘密，会进入用户日志；它不应写入安全审计表，也不能把扫描告警当成秘密过滤器。共享或多租户场景应使用 observer/summary 凭据。
 
 </details>
 
@@ -135,6 +145,7 @@ Lifecycle Registry 把扩展点分成四类，**关键在于能力是被刻意�
 |---|---|
 | [`lifecycle/observer.go`](https://github.com/Sheyiyuan/half-pi/blob/main/modules/half-pi-core/lifecycle/observer.go) | Observer 的有界异步能力边界 |
 | [`lifecycle/lifecycle_test.go`](https://github.com/Sheyiyuan/half-pi/blob/main/modules/half-pi-core/lifecycle/lifecycle_test.go) | Hook 排序、超时、隔离与失败语义 |
+| [`docs/tool-visibility.md`](https://github.com/Sheyiyuan/half-pi/blob/main/docs/tool-visibility.md) | revision 3 详情模式、展示投影、恢复与风险边界 |
 | [`store/lifecycle_audit_test.go`](https://github.com/Sheyiyuan/half-pi/blob/main/modules/half-pi-mind/internal/store/lifecycle_audit_test.go) | 安全决策与 outbox 原子提交 |
 
 <nav class="tutorial-progress"><a href="../06-tool-runtime/">← 上一章</a><span>7 / 21</span><a href="../08-persistence/">下一章 →</a></nav>
