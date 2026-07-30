@@ -145,6 +145,8 @@ type PropertySchema struct {
 	Type        string
 	Description string
 	Review      ReviewExposure
+	// Display 控制 Face 透明模式中的用户展示策略；为空表示 show。
+	Display DisplayExposure
 }
 
 // ProjectReviewArgs 按工具 schema 生成 Reviewer 可见参数投影。
