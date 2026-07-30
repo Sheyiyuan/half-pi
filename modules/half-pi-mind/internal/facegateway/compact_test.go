@@ -12,7 +12,7 @@ import (
 func TestCompactFeatureNegotiationIsConnectionScoped(t *testing.T) {
 	fixture := newGatewayFixture(t, 16)
 	identity := protocol.FaceIdentity{
-		ID: "face-compact", Label: "terminal",
+		ID: "face-compact", Label: "terminal", Profile: protocol.FaceProfileOperator,
 		Scopes: []protocol.FaceScope{protocol.FaceScopeSessionsRead, protocol.FaceScopeSessionsWrite},
 	}
 	legacy := newGatewayTestConnection(16, identity)

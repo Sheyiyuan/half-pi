@@ -199,12 +199,22 @@ func (c *Core) ChatWithTransport(ctx context.Context, input string, transport Ch
 				c.publish(events.LevelDebug, events.TypeToolCall, fmt.Sprintf("%s(%s)", call.Name, corelifecycle.HashDigest(cleanArgs)))
 			}
 			if transport.ToolCalled != nil {
-				transport.ToolCalled(ChatToolCall{Tool: call.Name, ArgsDigest: corelifecycle.HashDigest(cleanArgs)})
+				transport.ToolCalled(ChatToolCall{Tool: call.Name, ArgsDigest: corelifecycle.HashDigest(cleanArgs), Args: append(json.RawMessage(nil), cleanArgs...)})
 			}
 			toolMeta := modelMeta.ChildMeta(corelifecycle.SourceMind).WithNode("mind")
-			result := c.executeToolWithMeta(ctx, call.Name, cleanArgs, forceApproval, input, toolMeta)
+			toolCtx := ctx
+			if transport.ToolProgress != nil {
+				toolCtx = executor.WithProgress(ctx, func(progress executor.Progress) {
+					transport.ToolProgress(ChatToolProgress{Tool: call.Name, Kind: progress.Kind, Data: progress.Data})
+				})
+			}
+			result := c.executeToolWithMeta(toolCtx, call.Name, cleanArgs, forceApproval, input, toolMeta)
 			if transport.ToolCompleted != nil {
-				transport.ToolCompleted(ChatToolResult{Tool: call.Name, Success: result.Success})
+				stdout, stderr := result.Output, result.Error
+				if stdout == stderr {
+					stdout = ""
+				}
+				transport.ToolCompleted(ChatToolResult{Tool: call.Name, Success: result.Success, Stdout: stdout, Stderr: stderr})
 			}
 			output := result.Output
 			if !result.Success {

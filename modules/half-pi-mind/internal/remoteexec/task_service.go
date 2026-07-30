@@ -14,20 +14,21 @@ import (
 
 // Task 是 Mind 持久化的后台任务快照，不含原始参数和 Hand 文件路径。
 type Task struct {
-	TaskID     string              `json:"task_id"`
-	SessionID  string              `json:"session_id"`
-	HandID     string              `json:"hand_id"`
-	Tool       string              `json:"tool"`
-	ArgsDigest string              `json:"-"`
-	Status     protocol.TaskStatus `json:"status"`
-	CreatedAt  time.Time           `json:"created_at"`
-	StartedAt  time.Time           `json:"started_at,omitempty"`
-	FinishedAt time.Time           `json:"finished_at,omitempty"`
-	UpdatedAt  time.Time           `json:"updated_at"`
-	LogBytes   int64               `json:"log_bytes"`
-	Truncated  bool                `json:"truncated"`
-	Stale      bool                `json:"stale"`
-	Error      string              `json:"error,omitempty"`
+	TaskID     string                  `json:"task_id"`
+	SessionID  string                  `json:"session_id"`
+	HandID     string                  `json:"hand_id"`
+	Tool       string                  `json:"tool"`
+	ArgsDigest string                  `json:"-"`
+	DetailMode protocol.FaceDetailMode `json:"detail_mode"`
+	Status     protocol.TaskStatus     `json:"status"`
+	CreatedAt  time.Time               `json:"created_at"`
+	StartedAt  time.Time               `json:"started_at,omitempty"`
+	FinishedAt time.Time               `json:"finished_at,omitempty"`
+	UpdatedAt  time.Time               `json:"updated_at"`
+	LogBytes   int64                   `json:"log_bytes"`
+	Truncated  bool                    `json:"truncated"`
+	Stale      bool                    `json:"stale"`
+	Error      string                  `json:"error,omitempty"`
 }
 
 // TaskStore 持久化后台任务元数据。
@@ -114,6 +115,9 @@ func (s *TaskService) CreateStartSnapshot(task Task) error {
 	}
 	if task.SessionID == "" || task.HandID == "" || task.Tool == "" {
 		return fmt.Errorf("session, hand and tool are required")
+	}
+	if task.DetailMode == "" {
+		task.DetailMode = protocol.FaceDetailModeSummary
 	}
 	now := time.Now()
 	task.Status = protocol.TaskPending

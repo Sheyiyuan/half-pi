@@ -115,7 +115,8 @@ func (g *Gateway) PublishRemoteRunChanged(run remoteexec.Run) {
 // PublishRunProgress 投影已接纳 foreground run 的 stdout/stderr 增量。
 func (g *Gateway) PublishRunProgress(observation remoteexec.ProgressObservation) {
 	if observation.Run.ID == "" || observation.Run.SessionID == "" || observation.Run.DurableTask ||
-		protocol.IsTerminalRunStatus(observation.Run.Status) {
+		protocol.IsTerminalRunStatus(observation.Run.Status) ||
+		observation.Run.Metadata.DetailMode != protocol.FaceDetailModeTransparent {
 		return
 	}
 	payload := protocol.FaceRunProgress{
@@ -231,10 +232,6 @@ type domainEvent struct {
 }
 
 func (g *Gateway) publish(event domainEvent) {
-	data, err := json.Marshal(event.data)
-	if err != nil {
-		return
-	}
 	if event.level == "" {
 		event.level = protocol.FaceEventLevelInfo
 	}
@@ -250,6 +247,11 @@ func (g *Gateway) publish(event domainEvent) {
 			state.mu.Unlock()
 			continue
 		}
+		data, err := json.Marshal(projectDomainData(event.data, state.filter.detailMode))
+		if err != nil {
+			state.mu.Unlock()
+			continue
+		}
 		sequence := state.eventSeq + 1
 		payload := protocol.FaceEvent{
 			EventSeq: sequence, ConversationID: event.conversationID, RequestID: event.requestID,
@@ -261,6 +263,28 @@ func (g *Gateway) publish(event domainEvent) {
 			state.eventSeq = sequence
 		}
 		state.mu.Unlock()
+	}
+}
+
+func projectDomainData(data any, mode protocol.FaceDetailMode) any {
+	if mode == protocol.FaceDetailModeTransparent {
+		return data
+	}
+	switch value := data.(type) {
+	case protocol.ChatToolCalledEventData:
+		value.Args = nil
+		value.ProjectionVersion = ""
+		return value
+	case protocol.ChatToolCompletedEventData:
+		value.Result = nil
+		value.ProjectionVersion = ""
+		return value
+	case protocol.ApprovalRequest:
+		value.Args = nil
+		value.ProjectionVersion = ""
+		return value
+	default:
+		return data
 	}
 }
 

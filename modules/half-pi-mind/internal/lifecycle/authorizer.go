@@ -12,6 +12,7 @@ import (
 	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 )
 
 const defaultPolicyVersion = "v1"
@@ -190,7 +191,7 @@ func (a *MindAuthorizer) Authorize(ctx context.Context, frozen coreexec.FrozenIn
 		return denyAuthorization(reason, "approval_unavailable")
 	}
 
-	resolution := approver.Confirm(ctx, approval.Request{
+	approvalRequest := approval.Request{
 		Meta:           frozen.Meta,
 		ConversationID: frozen.Meta.ConversationID,
 		RequestID:      frozen.Meta.RequestID,
@@ -198,7 +199,19 @@ func (a *MindAuthorizer) Authorize(ctx context.Context, frozen coreexec.FrozenIn
 		Tool:           frozen.Tool,
 		Reason:         reason,
 		ArgsDigest:     frozenAuthorizationDigest(frozen),
-	})
+	}
+	if requestctx.ToolDetailMode(ctx) == string(protocol.FaceDetailModeTransparent) {
+		displayTool := tool
+		if !found && catalog != nil {
+			displayTool, _ = catalog.Find(frozen.Tool)
+		}
+		if view, err := coreexec.ProjectDisplayArgs(displayTool, frozen.Args); err == nil {
+			approvalRequest.Args = approvalToolArgsView(view)
+			approvalRequest.ProjectionVersion = view.ProjectionVersion
+			approvalRequest.ScanWarnings = append([]string(nil), view.Warnings...)
+		}
+	}
+	resolution := approver.Confirm(ctx, approvalRequest)
 	result := coreexec.Authorization{
 		Allowed: false, Reason: reason, ReasonCode: "user_denied",
 		Decision: "require_approval", ApprovalID: resolution.ApprovalID,
@@ -223,6 +236,20 @@ func (a *MindAuthorizer) Authorize(ctx context.Context, frozen coreexec.FrozenIn
 		a.mu.Unlock()
 	}
 	return result
+}
+
+func approvalToolArgsView(view coreexec.DisplayArgs) *protocol.ToolArgsView {
+	fields := make(map[string]protocol.ToolFieldView, len(view.Fields))
+	for name, field := range view.Fields {
+		fields[name] = protocol.ToolFieldView{
+			State: protocol.ToolDisplayState(field.State), Value: field.Value, Preview: field.Preview,
+			Bytes: field.Bytes, Truncated: field.Truncated,
+		}
+	}
+	return &protocol.ToolArgsView{
+		ProjectionVersion: view.ProjectionVersion, Fields: fields, Bytes: view.Bytes,
+		Truncated: view.Truncated, Warnings: append([]string(nil), view.Warnings...),
+	}
 }
 
 func frozenAuthorizationDigest(frozen coreexec.FrozenInvocation) string {

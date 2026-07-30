@@ -221,7 +221,8 @@ func TestFaceTokenCRUDCanonicalScopesAndAuthentication(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FaceIdentityByLabel: %v", err)
 	}
-	if identity == nil || identity.ID != fmt.Sprint(face.ID) || identity.Label != face.Label || !reflect.DeepEqual(identity.Scopes, wantScopes) {
+	if identity == nil || identity.ID != fmt.Sprint(face.ID) || identity.Label != face.Label ||
+		identity.Profile != protocol.FaceProfileOperator || !reflect.DeepEqual(identity.Scopes, wantScopes) {
 		t.Fatalf("FaceIdentityByLabel = %+v", identity)
 	}
 	missing, err := s.FaceIdentityByLabel("missing")
@@ -240,6 +241,17 @@ func TestFaceTokenCRUDCanonicalScopesAndAuthentication(t *testing.T) {
 	list, err := s.ListFaceTokens()
 	if err != nil || len(list) != 1 {
 		t.Fatalf("ListFaceTokens = %v, %v", list, err)
+	}
+	observer, err := s.AddFaceToken("observer", []protocol.FaceScope{
+		protocol.FaceScopeSessionsRead, protocol.FaceScopeHandsRead,
+		protocol.FaceScopeRunsRead, protocol.FaceScopeTasksRead,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	observerIdentity, err := s.FaceIdentityByLabel(observer.Label)
+	if err != nil || observerIdentity == nil || observerIdentity.Profile != protocol.FaceProfileObserver {
+		t.Fatalf("observer identity = %+v, %v", observerIdentity, err)
 	}
 	if err := s.RemoveFaceToken(face.ID); err != nil {
 		t.Fatal(err)

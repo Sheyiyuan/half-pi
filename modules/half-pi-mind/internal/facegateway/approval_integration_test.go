@@ -98,7 +98,8 @@ func TestEncryptedFaceApprovalAuthorizesBoundRemoteRPC(t *testing.T) {
 	}
 	requested, err := protocol.StrictDecode[protocol.ApprovalRequestedEventData](requestedEvent.Data)
 	if err != nil || requested.ConversationID != conversationID || requested.RequestID != chat.RequestID ||
-		requested.RunID == "" || requested.Tool != "exec_command" || strings.Contains(string(requestedEvent.Data), rawCommand) {
+		requested.RunID == "" || requested.Tool != "exec_command" || requested.Args == nil ||
+		!strings.Contains(string(requestedEvent.Data), rawCommand) {
 		t.Fatalf("approval request = %+v, %v", requested, err)
 	}
 	resolve := protocol.FaceApprovalResolve{

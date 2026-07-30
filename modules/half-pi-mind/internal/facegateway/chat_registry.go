@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
@@ -42,6 +43,11 @@ type requestRecord struct {
 	streamBytes     int
 	lease           *conversation.OperationLease
 	compactErrors   bool
+	detailMode      protocol.FaceDetailMode
+	toolProgressSeq atomic.Int64
+	toolProgressLen atomic.Int64
+	toolOrdinal     atomic.Int64
+	currentTool     atomic.Int64
 }
 
 type streamResponseState struct {
