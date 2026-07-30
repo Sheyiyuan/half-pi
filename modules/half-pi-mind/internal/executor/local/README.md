@@ -8,6 +8,8 @@
 | `list_files` | 全平台 | 列出文件和目录，支持递归遍历和 glob 过滤 | — | 信息获取 |
 | `grep` | 全平台 | 在文件中搜索字面量字符串 | — | 信息获取 |
 | `grep_regex` | 全平台 | 在文件中用正则表达式搜索 | — | 信息获取 |
+| `web_search` | 全平台 | 搜索公开网页，返回标题、URL 和摘要 | — | 信息获取 |
+| `web_fetch` | 全平台 | 获取公开网页并提取可读文本 | — | 信息获取 |
 | `write_file` | 全平台 | 创建或覆盖文件 | 默认确认 | 环境操作 |
 | `edit_file` | 全平台 | old_string → new_string 精确替换 | 默认确认 | 环境操作 |
 | `exec_command` | Unix | 通过 sh 执行命令 | 安全策略 | 环境操作 |
@@ -23,7 +25,7 @@
 ### 第一类：信息获取
 只读操作，不改变状态。LLM 犯错成本低——最多读错文件或列出错目录，不会有副作用。
 
-- ✅ `read_file`、`list_files`、`grep`、`grep_regex`
+- ✅ `read_file`、`list_files`、`grep`、`grep_regex`、`web_search`、`web_fetch`
 - 📋 规划中：`stat`（文件属性）
 
 ### 第二类：环境操作
