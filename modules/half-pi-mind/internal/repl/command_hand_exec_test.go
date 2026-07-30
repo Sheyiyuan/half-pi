@@ -21,6 +21,7 @@ import (
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/approval"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/executor/local"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 
@@ -41,6 +42,13 @@ func (w *captureWriter) WriteEvent(event events.Event) error {
 }
 
 func (*captureWriter) Close() error { return nil }
+
+func TestREPLToolVisibilityDefaultsToTransparent(t *testing.T) {
+	ctx := withREPLToolVisibility(context.Background())
+	if requestctx.Source(ctx) != "repl" || requestctx.ToolDetailMode(ctx) != "transparent" {
+		t.Fatalf("REPL tool context source=%q detail_mode=%q", requestctx.Source(ctx), requestctx.ToolDetailMode(ctx))
+	}
+}
 
 func TestParseHandExecPreservesNestedJSONAndNumbers(t *testing.T) {
 	tool, args, err := parseHandExec(`exec_command {"command":"printf hello world", "nested":{"value":9007199254740993}}`)

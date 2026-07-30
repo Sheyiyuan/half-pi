@@ -52,7 +52,9 @@ func (m *Model) requestCapabilities() (tea.Cmd, error) {
 		return nil, err
 	}
 	return m.sendRequest(requestID, protocol.TypeFaceCapabilitiesGet,
-		protocol.FaceCapabilitiesGet{RequestID: requestID, AcceptFeatures: []string{string(protocol.FaceFeatureContextCompaction)}},
+		protocol.FaceCapabilitiesGet{RequestID: requestID, AcceptFeatures: []string{
+			string(protocol.FaceFeatureContextCompaction), string(protocol.FaceFeatureToolVisibility),
+		}},
 		pendingRequest{Operation: protocol.FaceOperationCapabilitiesGet})
 }
 
@@ -165,9 +167,12 @@ func (m *Model) requestSubscribe(conversationID, purpose string) (tea.Cmd, error
 	if m.hasFeature(protocol.FaceFeatureRunProgress) && m.hasScope(protocol.FaceScopeRunsOutput) {
 		transients = append(transients, protocol.FaceTransientRunProgress)
 	}
+	if m.hasFeature(protocol.FaceFeatureToolVisibility) && m.hasScope(protocol.FaceScopeChat) && m.detailMode == protocol.FaceDetailModeTransparent {
+		transients = append(transients, protocol.FaceTransientChatToolProgress)
+	}
 	return m.sendRequest(requestID, protocol.TypeFaceSubscribe, protocol.FaceSubscribe{
 		RequestID: requestID, ConversationIDs: []string{conversationID},
-		EventTypes: events, TransientTypes: transients,
+		EventTypes: events, TransientTypes: transients, DetailMode: m.detailMode,
 	}, pendingRequest{Operation: protocol.FaceOperationSubscribe, ConversationID: conversationID, TargetID: purpose})
 }
 

@@ -37,6 +37,10 @@ func conversationName(session store.Session) string {
 }
 
 func (g *Gateway) snapshot(identity protocol.FaceIdentity, conversationID string) (protocol.ConversationSnapshot, error) {
+	return g.snapshotWithMode(identity, conversationID, defaultDetailMode(identity))
+}
+
+func (g *Gateway) snapshotWithMode(identity protocol.FaceIdentity, conversationID string, detailMode protocol.FaceDetailMode) (protocol.ConversationSnapshot, error) {
 	session, err := g.store.GetSession(conversationID)
 	if err != nil {
 		return protocol.ConversationSnapshot{}, err
@@ -68,10 +72,21 @@ func (g *Gateway) snapshot(identity protocol.FaceIdentity, conversationID string
 		if err != nil {
 			return protocol.ConversationSnapshot{}, err
 		}
-		snapshot.PendingApprovals = pending
+		snapshot.PendingApprovals = make([]protocol.ApprovalSummary, len(pending))
+		for index := range pending {
+			snapshot.PendingApprovals[index] = projectApprovalForDetailMode(pending[index], detailMode)
+		}
 	}
 	for _, message := range messages {
 		snapshot.Messages = append(snapshot.Messages, projectMessage(message))
+	}
+	toolHistory, err := g.store.ListToolDisplayProjections(conversationID)
+	if err != nil {
+		return protocol.ConversationSnapshot{}, err
+	}
+	snapshot.ToolHistory = make([]protocol.ToolHistoryProjection, 0, len(toolHistory))
+	for _, projection := range toolHistory {
+		snapshot.ToolHistory = append(snapshot.ToolHistory, projectToolHistory(projection, detailMode))
 	}
 	if hasScope(identity, protocol.FaceScopeTasksRead) {
 		tasks, err := g.tasks.List(conversationID)
@@ -82,6 +97,35 @@ func (g *Gateway) snapshot(identity protocol.FaceIdentity, conversationID string
 		snapshot.TaskHistoryLimit = protocol.DefaultFaceTaskHistoryLimit
 	}
 	return snapshot, nil
+}
+
+func projectToolHistory(record store.ToolDisplayProjection, detailMode protocol.FaceDetailMode) protocol.ToolHistoryProjection {
+	args, result := record.Args, record.Result
+	projectionVersion := record.ProjectionVersion
+	if detailMode != protocol.FaceDetailModeTransparent || record.DetailMode != protocol.FaceDetailModeTransparent {
+		args, result, projectionVersion = nil, nil, ""
+	}
+	var completedAt *time.Time
+	if !record.CompletedAt.IsZero() {
+		value := record.CompletedAt
+		completedAt = &value
+	}
+	return protocol.ToolHistoryProjection{
+		RequestID: record.RequestID, Ordinal: record.Ordinal, Tool: record.Tool, DetailMode: record.DetailMode,
+		ArgsDigest: record.ArgsDigest, ArgsBytes: record.ArgsBytes, ArgsTruncated: record.ArgsTruncated,
+		Args: args, Result: result, OutputBytes: record.OutputBytes, OutputDigest: record.OutputDigest,
+		Truncated: record.Truncated, ErrorCategory: record.ErrorCategory, Success: record.Success, Complete: record.Complete,
+		ProjectionVersion: projectionVersion, ScanWarnings: append([]string(nil), record.ScanWarnings...),
+		CreatedAt: record.CreatedAt, CompletedAt: completedAt,
+	}
+}
+
+func projectApprovalForDetailMode(request protocol.ApprovalRequest, detailMode protocol.FaceDetailMode) protocol.ApprovalRequest {
+	if detailMode != protocol.FaceDetailModeTransparent {
+		request.Args = nil
+		request.ProjectionVersion = ""
+	}
+	return request
 }
 
 func projectMessage(message store.Message) protocol.FaceMessage {
@@ -222,7 +266,8 @@ func projectTask(task remoteexec.Task) protocol.TaskSummary {
 	return protocol.TaskSummary{
 		TaskID: task.TaskID, ConversationID: task.SessionID, HandID: task.HandID,
 		Tool: task.Tool, ArgsDigest: task.ArgsDigest, Status: task.Status,
-		CreatedAt: createdAt, StartedAt: startedAt, FinishedAt: finishedAt, UpdatedAt: updatedAt,
+		DetailMode: task.DetailMode,
+		CreatedAt:  createdAt, StartedAt: startedAt, FinishedAt: finishedAt, UpdatedAt: updatedAt,
 		LogBytes: max(task.LogBytes, 0), Truncated: task.Truncated, Stale: task.Stale,
 		ErrorCode: errorCode, Error: taskErrorMessage(task.Status),
 	}

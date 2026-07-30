@@ -151,7 +151,15 @@ func TestDuplicateRejectsNewAndPreservesOld(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer old.Conn.Close()
+	deadline := time.Now().Add(time.Second)
 	oldPeer := h.PeerByType(hub.PeerFace, "duplicate")
+	for oldPeer == nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+		oldPeer = h.PeerByType(hub.PeerFace, "duplicate")
+	}
+	if oldPeer == nil {
+		t.Fatalf("original peer was not promoted: %+v", h.Peers())
+	}
 	_, err = wss.NewClient(url).ConnectAndRegister(credentials("duplicate", protocol.PeerFace))
 	var handshakeErr *wss.HandshakeError
 	if !errors.As(err, &handshakeErr) || handshakeErr.Code != "duplicate_peer" || handshakeErr.Permanent() || !handshakeErr.Retryable() {

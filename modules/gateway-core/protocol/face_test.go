@@ -424,12 +424,13 @@ func TestValidateFaceResultDataForGatewayQueries(t *testing.T) {
 	}{
 		{FaceOperationCapabilitiesGet, FaceCapabilitiesResult{
 			Revision: FaceProtocolRevision,
-			Identity: FaceIdentity{ID: "face-1", Label: "terminal", Scopes: []FaceScope{FaceScopeChat, FaceScopeSessionsRead}},
+			Identity: FaceIdentity{ID: "face-1", Label: "terminal", Scopes: []FaceScope{FaceScopeChat, FaceScopeSessionsRead}, Profile: FaceProfileOperator},
 			Features: []FaceFeature{FaceFeatureChatStream, FaceFeatureChatStreamResume, FaceFeatureRunProgress, FaceFeatureMessagePaging},
 			Limits: FaceProtocolLimits{
 				MaxChatContentBytes: MaxFaceChatContentBytes, MaxChatDeltaBytes: MaxFaceChatDeltaBytes,
 				MaxChatStreamBytes: MaxFaceChatStreamBytes, MaxChatStreamChunks: MaxFaceChatStreamChunks,
-				MaxMessageListLimit: MaxFaceMessageListLimit,
+				MaxMessageListLimit: MaxFaceMessageListLimit, MaxToolArgsBytes: MaxFaceToolArgsBytes,
+				MaxToolOutputBytes: MaxFaceToolOutputBytes,
 			},
 		}},
 		{FaceOperationChatStreamGet, ChatStreamGetResult{

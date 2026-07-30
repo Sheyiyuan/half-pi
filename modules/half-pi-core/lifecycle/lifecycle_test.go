@@ -430,6 +430,19 @@ func (o *testObserver) Observe(ctx context.Context, event RedactedEvent) {
 	o.observed = append(o.observed, event)
 }
 
+type observerContextKey struct{}
+
+type contextCaptureObserver struct {
+	value     string
+	cancelled bool
+}
+
+func (*contextCaptureObserver) ID() string { return "context-capture" }
+func (o *contextCaptureObserver) Observe(ctx context.Context, _ RedactedEvent) {
+	o.value, _ = ctx.Value(observerContextKey{}).(string)
+	o.cancelled = ctx.Err() != nil
+}
+
 type testAuditor struct {
 	id        string
 	mutations []AuditMutation
@@ -736,6 +749,25 @@ func TestObserverViewsEnforceCapabilitiesAndIsolation(t *testing.T) {
 	raw.event.Sensitive["args"].(map[string]any)["path"] = "mutated"
 	if event.Sensitive["args"].(map[string]any)["path"] != "secret" {
 		t.Fatal("observer mutated publisher event")
+	}
+}
+
+func TestObserverQueuePreservesContextValuesWithoutCancellation(t *testing.T) {
+	registry := NewRegistry()
+	observer := &contextCaptureObserver{}
+	if err := registry.RegisterObserver(Registration{
+		ID: observer.ID(), Kind: KindObserver, Phases: []Phase{PhaseToolFrozen},
+	}, observer); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), observerContextKey{}, "transparent"))
+	cancel()
+	registry.Publish(ctx, RedactedEvent{Meta: NewMeta(SourceMind), Phase: PhaseToolFrozen})
+	if err := registry.FlushObservers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if observer.value != "transparent" || observer.cancelled {
+		t.Fatalf("observer context value=%q cancelled=%t", observer.value, observer.cancelled)
 	}
 }
 

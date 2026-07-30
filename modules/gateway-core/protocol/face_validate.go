@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"slices"
 	"unicode/utf8"
 )
 
@@ -30,7 +31,7 @@ func IsFaceCommandType(typ string) bool {
 func IsFaceServerMessageType(typ string) bool {
 	switch typ {
 	case TypeFaceAccepted, TypeFaceResult, TypeFaceError, TypeFaceSnapshot, TypeFaceEvent,
-		TypeFaceChatDelta, TypeFaceChatStreamEnd, TypeFaceRunProgress:
+		TypeFaceChatDelta, TypeFaceChatStreamEnd, TypeFaceRunProgress, TypeFaceChatToolProgress:
 		return true
 	default:
 		return false
@@ -259,6 +260,12 @@ func ValidateFacePayload(typ string, payload json.RawMessage) error {
 		if err == nil {
 			err = validateFaceRunProgress(v)
 		}
+	case TypeFaceChatToolProgress:
+		var v FaceChatToolProgress
+		err = decodeFacePayload(payload, &v)
+		if err == nil {
+			err = validateFaceChatToolProgress(v)
+		}
 	default:
 		return fmt.Errorf("unknown Face message type %q", typ)
 	}
@@ -339,6 +346,9 @@ func validateSubscribe(v FaceSubscribe) error {
 	if err := requireFields(v.RequestID, "request_id"); err != nil {
 		return err
 	}
+	if v.DetailMode != "" && !validFaceDetailMode(v.DetailMode) {
+		return fmt.Errorf("unknown detail_mode %q", v.DetailMode)
+	}
 	conversationIDs := make(map[string]struct{}, len(v.ConversationIDs))
 	for _, id := range v.ConversationIDs {
 		if id == "" {
@@ -370,6 +380,10 @@ func validateSubscribe(v FaceSubscribe) error {
 		transientTypes[typ] = struct{}{}
 	}
 	return nil
+}
+
+func validFaceDetailMode(mode FaceDetailMode) bool {
+	return mode == FaceDetailModeTransparent || mode == FaceDetailModeSummary
 }
 
 func validateFaceConversationMessages(v FaceConversationMessages) error {
@@ -603,6 +617,9 @@ func validateFaceCapabilities(v FaceCapabilitiesResult) error {
 	if err := ValidateFaceScopes(v.Identity.Scopes); err != nil {
 		return fmt.Errorf("identity.scopes: %w", err)
 	}
+	if v.Identity.Profile != FaceProfileObserver && v.Identity.Profile != FaceProfileOperator {
+		return fmt.Errorf("unknown identity profile %q", v.Identity.Profile)
+	}
 	if v.Features == nil {
 		return fmt.Errorf("features is required")
 	}
@@ -619,7 +636,8 @@ func validateFaceCapabilities(v FaceCapabilitiesResult) error {
 	limits := v.Limits
 	if limits.MaxChatContentBytes != MaxFaceChatContentBytes || limits.MaxChatDeltaBytes != MaxFaceChatDeltaBytes ||
 		limits.MaxChatStreamBytes != MaxFaceChatStreamBytes || limits.MaxChatStreamChunks != MaxFaceChatStreamChunks ||
-		limits.MaxMessageListLimit != MaxFaceMessageListLimit {
+		limits.MaxMessageListLimit != MaxFaceMessageListLimit || limits.MaxToolArgsBytes != MaxFaceToolArgsBytes ||
+		limits.MaxToolOutputBytes != MaxFaceToolOutputBytes {
 		return fmt.Errorf("limits do not match protocol constants")
 	}
 	return nil
@@ -884,6 +902,14 @@ func validateConversationSnapshot(v ConversationSnapshot) error {
 	if v.Messages == nil || v.PendingChats == nil || v.PendingApprovals == nil || v.ActiveRuns == nil || v.Tasks == nil {
 		return fmt.Errorf("snapshot collections are required")
 	}
+	for index, projection := range v.ToolHistory {
+		if err := validateToolHistoryProjection(projection); err != nil {
+			return fmt.Errorf("snapshot.tool_history[%d]: %w", index, err)
+		}
+		if index > 0 && v.ToolHistory[index-1].CreatedAt.After(projection.CreatedAt) {
+			return fmt.Errorf("snapshot.tool_history must be sorted")
+		}
+	}
 	if v.SnapshotVersion < 1 {
 		return fmt.Errorf("snapshot.snapshot_version must be positive")
 	}
@@ -937,6 +963,53 @@ func validateConversationSnapshot(v ConversationSnapshot) error {
 	return nil
 }
 
+func validateToolHistoryProjection(v ToolHistoryProjection) error {
+	if err := requireFields(v.RequestID, "request_id", v.Tool, "tool", v.ArgsDigest, "args_digest"); err != nil {
+		return err
+	}
+	if v.Ordinal <= 0 || v.CreatedAt.IsZero() || !validFaceDetailMode(v.DetailMode) {
+		return fmt.Errorf("ordinal, detail_mode and created_at are invalid")
+	}
+	if v.ArgsBytes < 0 || v.OutputBytes < 0 || v.OutputBytes > 0 && v.OutputDigest == "" {
+		return fmt.Errorf("argument or output metadata is invalid")
+	}
+	if v.Complete != (v.CompletedAt != nil) {
+		return fmt.Errorf("completed_at must be present exactly for complete projections")
+	}
+	if v.Args != nil {
+		if v.ProjectionVersion != FaceToolDisplayProjectionVersion || v.Args.ProjectionVersion != v.ProjectionVersion ||
+			v.ArgsBytes != v.Args.Bytes || v.ArgsTruncated != v.Args.Truncated || !containsAllWarnings(v.ScanWarnings, v.Args.Warnings) {
+			return fmt.Errorf("args projection version is invalid")
+		}
+		if err := validateToolArgsView(*v.Args); err != nil {
+			return err
+		}
+	}
+	if v.Result != nil {
+		if !v.Complete || v.ProjectionVersion != FaceToolDisplayProjectionVersion ||
+			v.OutputBytes != v.Result.OutputBytes || v.OutputDigest != v.Result.Digest ||
+			v.Truncated != v.Result.Truncated || !containsAllWarnings(v.ScanWarnings, v.Result.Warnings) {
+			return fmt.Errorf("result requires a complete versioned projection")
+		}
+		if err := validateToolOutputView(*v.Result); err != nil {
+			return err
+		}
+	}
+	if v.Args == nil && v.Result == nil && v.ProjectionVersion != "" {
+		return fmt.Errorf("projection version requires args or result")
+	}
+	return nil
+}
+
+func containsAllWarnings(all, subset []string) bool {
+	for _, warning := range subset {
+		if !slices.Contains(all, warning) {
+			return false
+		}
+	}
+	return true
+}
+
 func taskSummaryBefore(previous, current TaskSummary) bool {
 	if previous.UpdatedAt.Equal(current.UpdatedAt) {
 		return previous.TaskID > current.TaskID
@@ -950,6 +1023,9 @@ func validateTaskSummary(v TaskSummary) error {
 	}
 	if !validTaskStatus(v.Status) {
 		return fmt.Errorf("unknown task status %q", v.Status)
+	}
+	if !validFaceDetailMode(v.DetailMode) {
+		return fmt.Errorf("unknown task detail mode %q", v.DetailMode)
 	}
 	if v.CreatedAt.IsZero() || v.UpdatedAt.IsZero() {
 		return fmt.Errorf("created_at and updated_at are required")
@@ -1009,11 +1085,18 @@ func validateTaskLogResult(v TaskLogResult) error {
 	if len(v.Data) > MaxTaskLogResponseBytes {
 		return fmt.Errorf("task log data exceeds %d bytes", MaxTaskLogResponseBytes)
 	}
-	if v.Offset > math.MaxInt64-int64(len(v.Data)) {
+	dataBytes := v.DataBytes
+	if dataBytes < len(v.Data) || dataBytes > MaxTaskLogResponseBytes || len(v.Data) > 0 && dataBytes != len(v.Data) {
+		return fmt.Errorf("task log data_bytes is invalid")
+	}
+	if !validSHA256Digest(v.Digest) {
+		return fmt.Errorf("task log digest is required")
+	}
+	if v.Offset > math.MaxInt64-int64(dataBytes) {
 		return fmt.Errorf("next_offset overflows int64")
 	}
-	if v.NextOffset != v.Offset+int64(len(v.Data)) {
-		return fmt.Errorf("next_offset must equal offset plus data length")
+	if v.NextOffset != v.Offset+int64(dataBytes) {
+		return fmt.Errorf("next_offset must equal offset plus data byte count")
 	}
 	return nil
 }
@@ -1056,6 +1139,21 @@ func validateFaceEvent(v FaceEvent) error {
 		if err := requireFields(data.Tool, "data.tool", data.ArgsDigest, "data.args_digest"); err != nil {
 			return err
 		}
+		if data.ArgsBytes < 0 {
+			return fmt.Errorf("data.args_bytes must not be negative")
+		}
+		if data.Args != nil {
+			if data.ProjectionVersion != FaceToolDisplayProjectionVersion || data.Args.ProjectionVersion != data.ProjectionVersion ||
+				data.ArgsBytes != data.Args.Bytes || data.ArgsTruncated != data.Args.Truncated ||
+				!slices.Equal(data.ScanWarnings, data.Args.Warnings) {
+				return fmt.Errorf("data projection version is required and must match")
+			}
+			if err := validateToolArgsView(*data.Args); err != nil {
+				return fmt.Errorf("data.args: %w", err)
+			}
+		} else if data.ProjectionVersion != "" {
+			return fmt.Errorf("data projection version requires args")
+		}
 		return validateEventRequestID(v, data.RequestID)
 	case FaceEventChatToolCompleted:
 		var data ChatToolCompletedEventData
@@ -1064,6 +1162,21 @@ func validateFaceEvent(v FaceEvent) error {
 		}
 		if err := requireFields(data.Tool, "data.tool"); err != nil {
 			return err
+		}
+		if data.OutputBytes < 0 || data.OutputBytes > 0 && data.OutputDigest == "" {
+			return fmt.Errorf("data output metadata is invalid")
+		}
+		if data.Result != nil {
+			if data.ProjectionVersion != FaceToolDisplayProjectionVersion || data.OutputBytes != data.Result.OutputBytes ||
+				data.OutputDigest != data.Result.Digest || data.Truncated != data.Result.Truncated ||
+				!slices.Equal(data.ScanWarnings, data.Result.Warnings) {
+				return fmt.Errorf("data projection version is required")
+			}
+			if err := validateToolOutputView(*data.Result); err != nil {
+				return fmt.Errorf("data.result: %w", err)
+			}
+		} else if data.ProjectionVersion != "" {
+			return fmt.Errorf("data projection version requires result")
 		}
 		return validateEventRequestID(v, data.RequestID)
 	case FaceEventChatCompleted:
@@ -1257,6 +1370,68 @@ func validateFaceRunProgress(v FaceRunProgress) error {
 	return ValidateRPCProgress(RPCProgress{RunID: v.RunID, Seq: v.Seq, Kind: v.Kind, Data: v.Data})
 }
 
+func validateFaceChatToolProgress(v FaceChatToolProgress) error {
+	if err := requireFields(v.ConversationID, "conversation_id", v.RequestID, "request_id", v.Tool, "tool", v.Kind, "kind"); err != nil {
+		return err
+	}
+	if v.Seq <= 0 || v.Data == "" || v.Kind != "stdout" && v.Kind != "stderr" ||
+		!utf8.ValidString(v.Data) || len(v.Data) > MaxFaceChatDeltaBytes {
+		return fmt.Errorf("tool progress sequence or data is invalid")
+	}
+	return nil
+}
+
+func validateToolArgsView(v ToolArgsView) error {
+	if v.ProjectionVersion != FaceToolDisplayProjectionVersion || v.Fields == nil || v.Bytes < 0 {
+		return fmt.Errorf("projection version, fields or byte count is invalid")
+	}
+	for name, field := range v.Fields {
+		if name == "" || !validToolDisplayState(field.State) || field.Bytes < 0 {
+			return fmt.Errorf("invalid field %q", name)
+		}
+		switch field.State {
+		case ToolDisplayShow:
+			if field.Preview != "" || field.Truncated {
+				return fmt.Errorf("show field %q contains preview metadata", name)
+			}
+		case ToolDisplayMask:
+			masked, ok := field.Value.(string)
+			if !ok || masked != "[masked]" || field.Preview != "" || field.Truncated {
+				return fmt.Errorf("mask field %q is not fixed", name)
+			}
+		case ToolDisplayHide:
+			if field.Value != nil || field.Preview != "" || field.Truncated {
+				return fmt.Errorf("hide field %q contains display data", name)
+			}
+		case ToolDisplayPreview:
+			if field.Value != nil {
+				return fmt.Errorf("preview field %q is invalid", name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateToolOutputView(v ToolOutputView) error {
+	if !validSHA256Digest(v.Digest) || v.OutputBytes != v.StdoutBytes+v.StderrBytes {
+		return fmt.Errorf("output digest or byte totals are invalid")
+	}
+	if v.StdoutBytes < 0 || v.StderrBytes < 0 || v.OutputBytes < 0 || len(v.Stdout)+len(v.Stderr) > MaxFaceToolOutputBytes ||
+		!utf8.ValidString(v.Stdout) || !utf8.ValidString(v.Stderr) {
+		return fmt.Errorf("output byte count or UTF-8 is invalid")
+	}
+	return nil
+}
+
+func validToolDisplayState(state ToolDisplayState) bool {
+	switch state {
+	case ToolDisplayShow, ToolDisplayMask, ToolDisplayHide, ToolDisplayPreview:
+		return true
+	default:
+		return false
+	}
+}
+
 func validateEventRequestID(v FaceEvent, requestID string) error {
 	if err := requireFields(requestID, "data.request_id"); err != nil {
 		return err
@@ -1296,6 +1471,17 @@ func validateApprovalRequest(v ApprovalRequest) error {
 	if len(v.Reason) > MaxFaceApprovalReasonBytes {
 		return fmt.Errorf("approval reason exceeds %d bytes", MaxFaceApprovalReasonBytes)
 	}
+	if v.Args != nil {
+		if v.ProjectionVersion != FaceToolDisplayProjectionVersion || v.Args.ProjectionVersion != v.ProjectionVersion ||
+			v.ArgsBytes != v.Args.Bytes || v.ArgsTruncated != v.Args.Truncated || !slices.Equal(v.ScanWarnings, v.Args.Warnings) {
+			return fmt.Errorf("approval projection version is required and must match")
+		}
+		if err := validateToolArgsView(*v.Args); err != nil {
+			return fmt.Errorf("approval args: %w", err)
+		}
+	} else if v.ProjectionVersion != "" {
+		return fmt.Errorf("approval projection version requires args")
+	}
 	return nil
 }
 
@@ -1333,7 +1519,7 @@ func validFaceScope(scope FaceScope) bool {
 func validFaceFeature(feature FaceFeature) bool {
 	switch feature {
 	case FaceFeatureChatStream, FaceFeatureChatStreamResume, FaceFeatureRunProgress, FaceFeatureMessagePaging,
-		FaceFeatureContextCompaction:
+		FaceFeatureContextCompaction, FaceFeatureToolVisibility:
 		return true
 	default:
 		return false
@@ -1343,6 +1529,8 @@ func validFaceFeature(feature FaceFeature) bool {
 func validFaceTransientType(typ FaceTransientType) bool {
 	switch typ {
 	case FaceTransientChatDelta, FaceTransientRunProgress:
+		return true
+	case FaceTransientChatToolProgress:
 		return true
 	default:
 		return false

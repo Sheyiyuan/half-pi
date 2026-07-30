@@ -157,9 +157,14 @@ func init() {
 				}
 				digest = remotePrepared.Frozen().ApprovalDigest
 				unbindProgress := bridge.Authority.BindProgressPolicy(runID, func(observation remoteexec.ProgressObservation) bool {
-					return remotePrepared.ObserveProgress(context.Background(), executor.Progress{
+					progress := executor.Progress{
 						Kind: string(observation.Progress.Kind), Data: observation.Progress.Data,
-					})
+					}
+					if !remotePrepared.ObserveProgress(context.Background(), progress) {
+						return false
+					}
+					executor.ReportProgress(ctx, progress)
+					return true
 				})
 				defer unbindProgress()
 				defer func() { toolResult = completeRemoteLifecycle(remotePrepared, toolResult) }()
@@ -190,9 +195,14 @@ func init() {
 				approvalSource = confirmation.Resolution.Actor.Source
 				approvalActor = confirmation.Resolution.Actor.ID
 			}
+			detailMode := protocol.FaceDetailMode(requestctx.ToolDetailMode(ctx))
+			if detailMode != protocol.FaceDetailModeTransparent && detailMode != protocol.FaceDetailModeSummary {
+				detailMode = protocol.FaceDetailModeSummary
+			}
 			metadata := remoteexec.AuditMetadata{
 				RequestID: requestctx.RequestID(ctx), ArgsDigest: digest,
 				ApprovalSource: approvalSource, ApprovalMode: mode, ApprovalReason: reason,
+				DetailMode: detailMode,
 			}
 			if remotePrepared != nil {
 				frozen := remotePrepared.Frozen()
@@ -202,7 +212,7 @@ func init() {
 			}
 			var createErr error
 			if params.Background && !blocked {
-				createErr = bridge.Runs.CreateTaskForPeer(runID, sessionID, handID, peer.SessionID(), params.Tool, metadata, remoteexec.Task{})
+				createErr = bridge.Runs.CreateTaskForPeer(runID, sessionID, handID, peer.SessionID(), params.Tool, metadata, remoteexec.Task{DetailMode: detailMode})
 			} else {
 				createErr = bridge.Runs.CreateForPeer(runID, sessionID, handID, peer.SessionID(), params.Tool, metadata)
 			}

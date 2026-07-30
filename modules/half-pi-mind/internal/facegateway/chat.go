@@ -3,11 +3,16 @@ package facegateway
 import (
 	"context"
 	"errors"
+	"sync/atomic"
+	"time"
+	"unicode/utf8"
 
 	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
+	coreexec "github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/agentcore"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/conversation"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/store"
 )
 
 func (g *Gateway) handleChat(state *connection, identity protocol.FaceIdentity, env protocol.Envelope) {
@@ -28,6 +33,9 @@ func (g *Gateway) handleChat(state *connection, identity protocol.FaceIdentity, 
 	}
 	admission := g.chats.beginChat(identity, request, digest, state, actor,
 		g.connectionHasFeature(state, protocol.FaceFeatureContextCompaction))
+	if admission.record != nil {
+		admission.record.detailMode = g.connectionDetailMode(state)
+	}
 	if g.sendRequestAdmission(state, meta, admission) {
 		return
 	}
@@ -46,19 +54,70 @@ func (g *Gateway) runChat(record *requestRecord, actor *conversation.Actor, cont
 	ctx := requestctx.WithRequestID(record.ctx, requestID)
 	ctx = requestctx.WithPrincipalID(ctx, record.key.identityID)
 	ctx = requestctx.WithSource(ctx, "face")
+	ctx = requestctx.WithToolDetailMode(ctx, string(record.detailMode))
 	transport := agentcore.ChatTransport{
 		TextDelta:         stream.Write,
 		ResponseCompleted: stream.Complete,
 		ToolCalled: func(call agentcore.ChatToolCall) {
+			ordinal := record.toolOrdinal.Add(1)
+			record.currentTool.Store(ordinal)
+			record.toolProgressSeq.Store(0)
+			record.toolProgressLen.Store(0)
+			argsView := (*protocol.ToolArgsView)(nil)
+			projectionVersion := ""
+			warnings := []string(nil)
+			argsBytes := len(call.Args)
+			argsTruncated := argsBytes > protocol.MaxFaceToolArgsBytes
+			tool, _ := actor.Core().Catalog().Find(call.Tool)
+			if view, projectionErr := coreexec.ProjectDisplayArgs(tool, call.Args); projectionErr == nil {
+				argsBytes, argsTruncated = view.Bytes, view.Truncated
+				warnings = append([]string(nil), view.Warnings...)
+				if record.detailMode == protocol.FaceDetailModeTransparent {
+					argsView = protocolToolArgsView(view)
+					projectionVersion = view.ProjectionVersion
+				}
+			}
+			_ = g.store.CreateToolDisplayProjection(store.ToolDisplayProjection{
+				ConversationID: record.conversationID, RequestID: requestID, Ordinal: ordinal,
+				Tool: call.Tool, DetailMode: record.detailMode, ArgsDigest: call.ArgsDigest, Args: argsView,
+				ArgsBytes: argsBytes, ArgsTruncated: argsTruncated,
+				ProjectionVersion: projectionVersion, ScanWarnings: append([]string(nil), warnings...), CreatedAt: time.Now().UTC(),
+			})
 			g.publishChatEvent(record.conversationID, requestID, protocol.FaceEventChatToolCalled,
 				"Chat called a tool", protocol.FaceEventLevelInfo, protocol.ChatToolCalledEventData{
 					RequestID: requestID, Tool: call.Tool, ArgsDigest: call.ArgsDigest,
+					Args: argsView, ProjectionVersion: projectionVersion, ScanWarnings: warnings,
+					ArgsBytes: argsBytes, ArgsTruncated: argsTruncated,
 				})
 		},
+		ToolProgress: func(progress agentcore.ChatToolProgress) {
+			if record.detailMode != protocol.FaceDetailModeTransparent || progress.Data == "" {
+				return
+			}
+			g.publishToolProgress(record, progress)
+		},
 		ToolCompleted: func(result agentcore.ChatToolResult) {
+			outputView := (*protocol.ToolOutputView)(nil)
+			view := coreexec.ProjectDisplayOutput(result.Stdout, result.Stderr)
+			projectionVersion := ""
+			warnings := view.Warnings
+			if record.detailMode == protocol.FaceDetailModeTransparent {
+				outputView = protocolToolOutputView(view)
+				projectionVersion = coreexec.DisplayProjectionVersion
+			}
+			errorCategory := ""
+			if !result.Success {
+				errorCategory = "tool_error"
+			}
+			_ = g.store.CompleteToolDisplayProjection(record.conversationID, requestID, record.currentTool.Load(),
+				outputView, result.Success, projectionVersion, warnings, view.OutputBytes, view.Digest, view.Truncated,
+				errorCategory, time.Now().UTC())
 			g.publishChatEvent(record.conversationID, requestID, protocol.FaceEventChatToolCompleted,
 				"Chat tool completed", protocol.FaceEventLevelInfo, protocol.ChatToolCompletedEventData{
 					RequestID: requestID, Tool: result.Tool, Success: result.Success,
+					Result: outputView, ProjectionVersion: projectionVersion, ScanWarnings: warnings,
+					OutputBytes: view.OutputBytes, OutputDigest: view.Digest, Truncated: view.Truncated,
+					ErrorCategory: errorCategory,
 				})
 		},
 	}
@@ -190,4 +249,68 @@ func (g *Gateway) publishChatEvent(conversationID, requestID string, typ protoco
 		conversationID: conversationID, requestID: requestID, typ: typ,
 		source: "chat", message: message, level: level, data: data,
 	})
+}
+
+func protocolToolArgsView(view coreexec.DisplayArgs) *protocol.ToolArgsView {
+	fields := make(map[string]protocol.ToolFieldView, len(view.Fields))
+	for name, field := range view.Fields {
+		fields[name] = protocol.ToolFieldView{
+			State: protocol.ToolDisplayState(field.State), Value: field.Value, Preview: field.Preview,
+			Bytes: field.Bytes, Truncated: field.Truncated,
+		}
+	}
+	return &protocol.ToolArgsView{
+		ProjectionVersion: view.ProjectionVersion, Fields: fields, Bytes: view.Bytes,
+		Truncated: view.Truncated, Warnings: append([]string(nil), view.Warnings...),
+	}
+}
+
+func protocolToolOutputView(view coreexec.DisplayOutput) *protocol.ToolOutputView {
+	return &protocol.ToolOutputView{
+		Stdout: view.Stdout, Stderr: view.Stderr, StdoutBytes: view.StdoutBytes, StderrBytes: view.StderrBytes,
+		OutputBytes: view.OutputBytes, Digest: view.Digest, Truncated: view.Truncated,
+		Warnings: append([]string(nil), view.Warnings...),
+	}
+}
+
+func (g *Gateway) publishToolProgress(record *requestRecord, progress agentcore.ChatToolProgress) {
+	remaining := progress.Data
+	for remaining != "" {
+		requested := min(len(remaining), protocol.MaxFaceChatDeltaBytes)
+		allowed := reserveProgressBytes(&record.toolProgressLen, int64(requested), protocol.MaxFaceToolOutputBytes)
+		if allowed == 0 {
+			return
+		}
+		length := allowed
+		for length > 0 && !utf8.ValidString(remaining[:length]) {
+			length--
+		}
+		if length == 0 {
+			return
+		}
+		if length < allowed {
+			record.toolProgressLen.Add(int64(length - allowed))
+		}
+		chunk := remaining[:length]
+		remaining = remaining[length:]
+		seq := record.toolProgressSeq.Add(1)
+		g.publishTransient(protocol.FaceTransientChatToolProgress, protocol.FaceScopeChat, record.conversationID,
+			protocol.TypeFaceChatToolProgress, protocol.FaceChatToolProgress{
+				ConversationID: record.conversationID, RequestID: record.key.requestID, Tool: progress.Tool,
+				Seq: seq, Kind: progress.Kind, Data: chunk,
+			})
+	}
+}
+
+func reserveProgressBytes(used *atomic.Int64, requested int64, limit int) int {
+	for {
+		current := used.Load()
+		if current >= int64(limit) {
+			return 0
+		}
+		allowed := min(requested, int64(limit)-current)
+		if used.CompareAndSwap(current, current+allowed) {
+			return int(allowed)
+		}
+	}
 }

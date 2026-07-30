@@ -21,6 +21,7 @@ type AuditMetadata struct {
 	ApprovalSource string
 	ApprovalMode   string
 	ApprovalReason string
+	DetailMode     protocol.FaceDetailMode
 }
 
 // AuditRun 是审计层的 run 创建记录。

@@ -73,6 +73,23 @@ type subscription struct {
 	conversations map[string]struct{}
 	events        map[protocol.FaceEventType]struct{}
 	transients    map[protocol.FaceTransientType]struct{}
+	detailMode    protocol.FaceDetailMode
+}
+
+func defaultDetailMode(identity protocol.FaceIdentity) protocol.FaceDetailMode {
+	if identity.Profile == protocol.FaceProfileObserver {
+		return protocol.FaceDetailModeSummary
+	}
+	return protocol.FaceDetailModeTransparent
+}
+
+func (g *Gateway) connectionDetailMode(state *connection) protocol.FaceDetailMode {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.filter.detailMode != "" {
+		return state.filter.detailMode
+	}
+	return defaultDetailMode(state.identity)
 }
 
 // New 创建 Face Gateway 并连接结构化 domain 变化源。

@@ -232,6 +232,7 @@ func (s *Store) migrate() error {
 			hand_id TEXT NOT NULL,
 			tool TEXT NOT NULL,
 			args_digest TEXT NOT NULL,
+			detail_mode TEXT NOT NULL DEFAULT 'summary',
 			status TEXT NOT NULL,
 			created_at INTEGER NOT NULL,
 			started_at INTEGER NOT NULL DEFAULT 0,
@@ -248,16 +249,16 @@ func (s *Store) migrate() error {
 		`CREATE TABLE IF NOT EXISTS approval_audits (
 			approval_id TEXT PRIMARY KEY,
 			conversation_id TEXT NOT NULL,
-				request_id TEXT NOT NULL DEFAULT '',
-				run_id TEXT NOT NULL DEFAULT '',
-				trace_id TEXT NOT NULL DEFAULT '',
-				span_id TEXT NOT NULL DEFAULT '',
-				parent_span_id TEXT NOT NULL DEFAULT '',
-				group_id TEXT NOT NULL DEFAULT '',
-				principal_id TEXT NOT NULL DEFAULT '',
-				lifecycle_source TEXT NOT NULL DEFAULT '',
-				node_id TEXT NOT NULL DEFAULT '',
-				tool TEXT NOT NULL,
+			request_id TEXT NOT NULL DEFAULT '',
+			run_id TEXT NOT NULL DEFAULT '',
+			trace_id TEXT NOT NULL DEFAULT '',
+			span_id TEXT NOT NULL DEFAULT '',
+			parent_span_id TEXT NOT NULL DEFAULT '',
+			group_id TEXT NOT NULL DEFAULT '',
+			principal_id TEXT NOT NULL DEFAULT '',
+			lifecycle_source TEXT NOT NULL DEFAULT '',
+			node_id TEXT NOT NULL DEFAULT '',
+			tool TEXT NOT NULL,
 			reason TEXT NOT NULL,
 			args_digest TEXT NOT NULL,
 			status TEXT NOT NULL,
@@ -272,6 +273,31 @@ func (s *Store) migrate() error {
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_approval_audits_conversation ON approval_audits(conversation_id, created_at)`,
 		`CREATE INDEX IF NOT EXISTS idx_approval_audits_status ON approval_audits(status, expires_at)`,
+		`CREATE TABLE IF NOT EXISTS tool_display_projections (
+			conversation_id TEXT NOT NULL,
+			request_id TEXT NOT NULL,
+			ordinal INTEGER NOT NULL,
+			tool TEXT NOT NULL,
+			detail_mode TEXT NOT NULL,
+			args_digest TEXT NOT NULL,
+			args_bytes INTEGER NOT NULL DEFAULT 0,
+			args_truncated INTEGER NOT NULL DEFAULT 0,
+			args_projection TEXT NOT NULL DEFAULT '',
+			result_projection TEXT NOT NULL DEFAULT '',
+			output_bytes INTEGER NOT NULL DEFAULT 0,
+			output_digest TEXT NOT NULL DEFAULT '',
+			truncated INTEGER NOT NULL DEFAULT 0,
+			error_category TEXT NOT NULL DEFAULT '',
+			success INTEGER NOT NULL DEFAULT 0,
+			complete INTEGER NOT NULL DEFAULT 0,
+			projection_version TEXT NOT NULL DEFAULT '',
+			scan_warnings TEXT NOT NULL DEFAULT '[]',
+			created_at INTEGER NOT NULL,
+			completed_at INTEGER NOT NULL DEFAULT 0,
+			PRIMARY KEY(conversation_id, request_id, ordinal),
+			FOREIGN KEY (conversation_id) REFERENCES sessions(id) ON DELETE CASCADE
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_tool_display_conversation ON tool_display_projections(conversation_id, created_at, ordinal)`,
 		`CREATE TABLE IF NOT EXISTS management_audits (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			request_id TEXT NOT NULL,
@@ -370,6 +396,9 @@ func (s *Store) migrate() error {
 	}
 	if err := s.addColumnIfNotExists("remote_runs", "request_id", "TEXT NOT NULL DEFAULT ''"); err != nil {
 		return fmt.Errorf("migrate remote run request ID: %w", err)
+	}
+	if err := s.addColumnIfNotExists("remote_tasks", "detail_mode", "TEXT NOT NULL DEFAULT 'summary'"); err != nil {
+		return fmt.Errorf("migrate remote task detail mode: %w", err)
 	}
 	for _, column := range []string{"trace_id", "span_id", "parent_span_id", "group_id", "principal_id", "lifecycle_source", "node_id"} {
 		if err := s.addColumnIfNotExists("remote_runs", column, "TEXT NOT NULL DEFAULT ''"); err != nil {

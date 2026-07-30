@@ -151,6 +151,7 @@ func (r *LifecycleRegistry) NextEventMeta(base Meta) Meta {
 }
 
 type observation struct {
+	ctx   context.Context
 	event RedactedEvent
 	done  chan struct{}
 }
@@ -184,8 +185,12 @@ func (r *LifecycleRegistry) runObservers() {
 				close(item.done)
 				continue
 			}
+			ctx := item.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
 			for _, binding := range r.ObserverBindingsForPhase(item.event.Phase, item.event.Meta) {
-				_ = runObserver(context.Background(), binding, ObserverView(item.event, binding.Registration))
+				_ = runObserver(ctx, binding, ObserverView(item.event, binding.Registration))
 			}
 		}
 	}

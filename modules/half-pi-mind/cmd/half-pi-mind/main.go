@@ -156,9 +156,7 @@ func run(args []string, output, logs io.Writer) (runErr error) {
 	bus := events.NewEventBus()
 	defer bus.Close()
 
-	if replMode {
-		bus.Subscribe(events.NewConsoleWriter())
-	} else {
+	if !replMode {
 		logPath := filepath.Join(env.LogDir, "mind.log")
 		fw, err := events.NewFileWriter(logPath)
 		if err != nil {

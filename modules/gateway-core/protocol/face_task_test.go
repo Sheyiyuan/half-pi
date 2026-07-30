@@ -79,7 +79,8 @@ func TestFaceTaskResultDataStrictValidation(t *testing.T) {
 	}{
 		{FaceOperationTaskList, TaskListResult{Tasks: []TaskSummary{task}, NextCursor: "next"}},
 		{FaceOperationTaskGet, TaskGetResult{Task: task}},
-		{FaceOperationTaskLog, TaskLogResult{TaskID: "task-1", Offset: 3, NextOffset: 6, Data: []byte{0, 1, 2}, EOF: false, Truncated: true}},
+		{FaceOperationTaskLog, TaskLogResult{TaskID: "task-1", Offset: 3, NextOffset: 6, Data: []byte{0, 1, 2},
+			DataBytes: 3, Digest: "sha256:0000000000000000000000000000000000000000000000000000000000000000", EOF: false, Truncated: true}},
 		{FaceOperationTaskCancel, FaceTaskCancelResult{Outcome: string(TaskCancelCancelled), Task: task}},
 	}
 	for _, tt := range tests {
@@ -295,7 +296,8 @@ func TestFaceTaskDTOsDoNotDeclareSessionID(t *testing.T) {
 func validTaskSummary(now time.Time, status TaskStatus) TaskSummary {
 	task := TaskSummary{
 		TaskID: "task-1", ConversationID: "conv-1", HandID: "hand-1", Tool: "exec_command",
-		ArgsDigest: "sha256:abc", Status: status, CreatedAt: now, UpdatedAt: now, LogBytes: 3,
+		ArgsDigest: "sha256:abc", DetailMode: FaceDetailModeSummary,
+		Status: status, CreatedAt: now, UpdatedAt: now, LogBytes: 3,
 	}
 	if status != TaskPending {
 		task.StartedAt = &task.CreatedAt

@@ -5,11 +5,25 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+	"time"
 
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
 	coreexec "github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/security"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 )
+
+type coordinatorEventWriter struct {
+	events chan events.Event
+}
+
+func (w *coordinatorEventWriter) WriteEvent(event events.Event) error {
+	w.events <- event
+	return nil
+}
+
+func (*coordinatorEventWriter) Close() error { return nil }
 
 func TestCoordinatorCreation(t *testing.T) {
 	reg := corelifecycle.NewRegistry()
@@ -59,6 +73,73 @@ func TestEventBusAdapter(t *testing.T) {
 	adapter.Observe(context.Background(), corelifecycle.RedactedEvent{
 		Phase: corelifecycle.PhaseToolFinished,
 	})
+}
+
+func TestToolLogProjectionHonorsDetailMode(t *testing.T) {
+	toolName := "visibility_log_test"
+	testRegisterTool(t, toolName, &coreexec.ObjectSchema{Properties: []coreexec.PropertySchema{
+		{Name: "command", Type: "string"},
+		{Name: "api_token", Type: "string", Display: coreexec.DisplayShow},
+	}})
+	event := corelifecycle.RedactedEvent{
+		Phase: corelifecycle.PhaseToolFrozen, ResourceName: toolName, InputDigest: "sha256:args",
+		Sensitive: map[string]any{"args": json.RawMessage(`{"command":"pwd","api_token":"secret"}`)},
+	}
+	summary := projectToolLogData(context.Background(), event)
+	if summary["args"] != nil || summary["args_digest"] != "sha256:args" {
+		t.Fatalf("summary log projection = %+v", summary)
+	}
+	ctx := requestctx.WithToolDetailMode(context.Background(), "transparent")
+	transparent := projectToolLogData(ctx, event)
+	args, ok := transparent["args"].(coreexec.DisplayArgs)
+	if !ok || args.Fields["command"].Value != "pwd" || args.Fields["api_token"].State != coreexec.DisplayMask ||
+		args.Fields["api_token"].Value != "[masked]" {
+		t.Fatalf("transparent log projection = %+v", transparent)
+	}
+
+	progress := corelifecycle.RedactedEvent{
+		Phase: corelifecycle.PhaseToolProgress, ResourceName: toolName, Summary: "stdout",
+		Sensitive: map[string]any{"data": "token=possible-secret"},
+	}
+	if data := projectToolLogData(context.Background(), progress); data["data"] != nil || data["output_digest"] == nil {
+		t.Fatalf("summary progress log = %+v", data)
+	}
+	if data := projectToolLogData(ctx, progress); data["data"] != "token=possible-secret" {
+		t.Fatalf("transparent progress log = %+v", data)
+	}
+}
+
+func TestCoordinatorCarriesTransparentModeThroughObserverQueue(t *testing.T) {
+	toolName := "visibility_observer_context_test"
+	testRegisterTool(t, toolName, &coreexec.ObjectSchema{Properties: []coreexec.PropertySchema{
+		{Name: "command", Type: "string"},
+	}})
+	bus := events.NewEventBus()
+	defer bus.Close()
+	writer := &coordinatorEventWriter{events: make(chan events.Event, 4)}
+	bus.Subscribe(writer)
+	coordinator, err := NewCoordinator(Config{Bus: bus})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := requestctx.WithToolDetailMode(context.Background(), "transparent")
+	coordinator.Registry.Publish(ctx, corelifecycle.RedactedEvent{
+		Meta: corelifecycle.NewMeta(corelifecycle.SourceMind), Phase: corelifecycle.PhaseToolFrozen,
+		ResourceName: toolName, InputDigest: "sha256:args",
+		Sensitive: map[string]any{"args": json.RawMessage(`{"command":"pwd"}`)},
+	})
+	if err := coordinator.Registry.FlushObservers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case event := <-writer.events:
+		data, ok := event.Data.(map[string]any)
+		if !ok || data["args"] == nil {
+			t.Fatalf("transparent EventBus projection = %#v", event.Data)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("transparent EventBus projection was not published")
+	}
 }
 
 func TestMindAuthorizerDeny(t *testing.T) {

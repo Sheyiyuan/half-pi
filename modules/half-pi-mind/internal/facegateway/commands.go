@@ -2,9 +2,11 @@ package facegateway
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 
@@ -77,8 +79,9 @@ func (g *Gateway) handleCapabilitiesGet(state *connection, identity protocol.Fac
 		state.features = make(map[protocol.FaceFeature]struct{})
 	}
 	for _, feature := range request.AcceptFeatures {
-		if feature == string(protocol.FaceFeatureContextCompaction) {
-			state.features[protocol.FaceFeatureContextCompaction] = struct{}{}
+		switch protocol.FaceFeature(feature) {
+		case protocol.FaceFeatureContextCompaction, protocol.FaceFeatureToolVisibility:
+			state.features[protocol.FaceFeature(feature)] = struct{}{}
 		}
 	}
 	features := []protocol.FaceFeature{
@@ -89,6 +92,9 @@ func (g *Gateway) handleCapabilitiesGet(state *connection, identity protocol.Fac
 	}
 	if _, ok := state.features[protocol.FaceFeatureContextCompaction]; ok {
 		features = append(features, protocol.FaceFeatureContextCompaction)
+	}
+	if _, ok := state.features[protocol.FaceFeatureToolVisibility]; ok {
+		features = append(features, protocol.FaceFeatureToolVisibility)
 	}
 	state.mu.Unlock()
 	g.sendResult(state, meta, protocol.FaceOperationCapabilitiesGet, protocol.FaceCapabilitiesResult{
@@ -101,6 +107,8 @@ func (g *Gateway) handleCapabilitiesGet(state *connection, identity protocol.Fac
 			MaxChatStreamBytes:  protocol.MaxFaceChatStreamBytes,
 			MaxChatStreamChunks: protocol.MaxFaceChatStreamChunks,
 			MaxMessageListLimit: protocol.MaxFaceMessageListLimit,
+			MaxToolArgsBytes:    protocol.MaxFaceToolArgsBytes,
+			MaxToolOutputBytes:  protocol.MaxFaceToolOutputBytes,
 		},
 	})
 }
@@ -215,7 +223,7 @@ func (g *Gateway) handleConversationSnapshot(state *connection, identity protoco
 	if !g.sendAccepted(state, meta, protocol.FaceOperationConversationSnapshot, g.version.Load()) {
 		return
 	}
-	snapshot, err := g.snapshot(identity, request.ConversationID)
+	snapshot, err := g.snapshotWithMode(identity, request.ConversationID, g.connectionDetailMode(state))
 	if err != nil {
 		g.sendFailedResult(state, meta, protocol.FaceResultFailed, protocol.FaceErrorInternal, "conversation snapshot failed")
 		return
@@ -415,14 +423,29 @@ func (g *Gateway) handleTaskLog(state *connection, identity protocol.FaceIdentit
 		g.sendCommandFailure(state, meta, err, code, "task log is unavailable")
 		return
 	}
+	task, taskErr := g.store.GetRemoteTask(request.TaskID)
+	if taskErr != nil {
+		g.sendFailedResult(state, meta, protocol.FaceResultFailed, protocol.FaceErrorInternal, "task detail mode is unavailable")
+		return
+	}
+	g.sendResult(state, meta, protocol.FaceOperationTaskLog,
+		projectTaskLog(log, task.DetailMode, g.connectionDetailMode(state)))
+}
+
+func projectTaskLog(log protocol.TaskLogResp, admissionMode, connectionMode protocol.FaceDetailMode) protocol.TaskLogResult {
 	data := log.Data
 	if data == nil {
 		data = []byte{}
 	}
-	g.sendResult(state, meta, protocol.FaceOperationTaskLog, protocol.TaskLogResult{
+	digest := fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+	dataBytes := len(data)
+	if admissionMode != protocol.FaceDetailModeTransparent || connectionMode != protocol.FaceDetailModeTransparent {
+		data = []byte{}
+	}
+	return protocol.TaskLogResult{
 		TaskID: log.TaskID, Offset: log.Offset, NextOffset: log.NextOffset,
-		Data: data, EOF: log.EOF, Truncated: log.Truncated,
-	})
+		Data: data, DataBytes: dataBytes, Digest: digest, EOF: log.EOF, Truncated: log.Truncated,
+	}
 }
 
 func (g *Gateway) requireScope(state *connection, identity protocol.FaceIdentity, meta protocol.FaceCommandMeta, scope protocol.FaceScope) bool {
@@ -474,6 +497,13 @@ func (g *Gateway) validateSubscription(state *connection, identity protocol.Face
 		conversations: make(map[string]struct{}, len(request.ConversationIDs)),
 		events:        make(map[protocol.FaceEventType]struct{}, len(request.EventTypes)),
 		transients:    make(map[protocol.FaceTransientType]struct{}, len(request.TransientTypes)),
+		detailMode:    request.DetailMode,
+	}
+	if filter.detailMode == "" {
+		filter.detailMode = defaultDetailMode(identity)
+	}
+	if identity.Profile == protocol.FaceProfileObserver && filter.detailMode == protocol.FaceDetailModeTransparent {
+		return subscription{}, protocol.FaceErrorForbidden, "observer profile cannot use transparent tool details"
 	}
 	for _, conversationID := range request.ConversationIDs {
 		session, err := g.store.GetSession(conversationID)
@@ -509,6 +539,8 @@ func transientScope(transient protocol.FaceTransientType) protocol.FaceScope {
 	switch transient {
 	case protocol.FaceTransientChatDelta:
 		return protocol.FaceScopeSessionsRead
+	case protocol.FaceTransientChatToolProgress:
+		return protocol.FaceScopeChat
 	case protocol.FaceTransientRunProgress:
 		return protocol.FaceScopeRunsOutput
 	default:

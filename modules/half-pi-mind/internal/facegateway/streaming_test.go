@@ -82,7 +82,7 @@ func TestCapabilitiesMessagesAndRunProgress(t *testing.T) {
 		t.Fatal(err)
 	}
 	identity := protocol.FaceIdentity{
-		ID: "query-face", Label: "query-face",
+		ID: "query-face", Label: "query-face", Profile: protocol.FaceProfileOperator,
 		Scopes: []protocol.FaceScope{protocol.FaceScopeSessionsRead, protocol.FaceScopeRunsOutput, protocol.FaceScopeHandsRead},
 	}
 	state := newGatewayTestConnection(32, identity)
@@ -112,8 +112,16 @@ func TestCapabilitiesMessagesAndRunProgress(t *testing.T) {
 	subscribeForStream(t, fixture.gateway, state, identity, "query-conversation", []protocol.FaceTransientType{protocol.FaceTransientRunProgress})
 	fixture.gateway.PublishRunProgress(remoteexec.ProgressObservation{
 		Run: remoteexec.Run{
-			ID: "run-1", SessionID: "query-conversation", Status: protocol.RunRunning,
+			ID: "legacy-run", SessionID: "query-conversation", Status: protocol.RunRunning,
 			Metadata: remoteexec.AuditMetadata{RequestID: "chat-2"},
+		},
+		Progress: protocol.RPCProgress{RunID: "legacy-run", Seq: 1, Kind: protocol.ProgressStdout, Data: "hidden"},
+	})
+	assertNoQueuedMessage(t, state)
+	fixture.gateway.PublishRunProgress(remoteexec.ProgressObservation{
+		Run: remoteexec.Run{
+			ID: "run-1", SessionID: "query-conversation", Status: protocol.RunRunning,
+			Metadata: remoteexec.AuditMetadata{RequestID: "chat-2", DetailMode: protocol.FaceDetailModeTransparent},
 		},
 		Progress: protocol.RPCProgress{RunID: "run-1", Seq: 3, Kind: protocol.ProgressStderr, Data: "warning"},
 		Gap:      true,

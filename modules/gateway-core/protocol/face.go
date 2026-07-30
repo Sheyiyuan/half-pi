@@ -7,7 +7,9 @@ import (
 
 const (
 	// FaceProtocolRevision 是注册后 Face 应用协议的当前修订号。
-	FaceProtocolRevision = 2
+	FaceProtocolRevision = 3
+	// FaceToolDisplayProjectionVersion 是工具参数与结果展示投影的当前版本。
+	FaceToolDisplayProjectionVersion = "tool-display.v1"
 	// DefaultFaceMessageListLimit 是会话消息分页的默认大小。
 	DefaultFaceMessageListLimit = 100
 	// MaxFaceMessageListLimit 是会话消息分页的最大大小。
@@ -20,6 +22,10 @@ const (
 	MaxFaceChatStreamBytes = 2 << 20
 	// MaxFaceChatStreamChunks 限制单个 Chat 的聚合增量数量。
 	MaxFaceChatStreamChunks = 2048
+	// MaxFaceToolArgsBytes 限制透明工具参数投影保留的 UTF-8 字节数。
+	MaxFaceToolArgsBytes = MaxFaceChatContentBytes
+	// MaxFaceToolOutputBytes 限制透明工具结果投影保留的输出字节数。
+	MaxFaceToolOutputBytes = 1 << 20
 	// MaxFaceAcceptFeatures 限制一次 capabilities 协商的开放 feature 数量。
 	MaxFaceAcceptFeatures = 64
 	// MaxFaceFeatureBytes 限制开放 feature 名称的 ASCII 字节数。
@@ -63,9 +69,10 @@ const (
 	TypeFaceSnapshot = "face.snapshot"
 	TypeFaceEvent    = "face.event"
 
-	TypeFaceChatDelta     = "face.chat.delta"
-	TypeFaceChatStreamEnd = "face.chat.stream.end"
-	TypeFaceRunProgress   = "face.run.progress"
+	TypeFaceChatDelta        = "face.chat.delta"
+	TypeFaceChatStreamEnd    = "face.chat.stream.end"
+	TypeFaceRunProgress      = "face.run.progress"
+	TypeFaceChatToolProgress = "face.chat.tool.progress"
 )
 
 // FaceScope 是 Face 身份可被授予的权限。
@@ -93,21 +100,50 @@ const (
 	FaceFeatureRunProgress       FaceFeature = "run_progress.v1"
 	FaceFeatureMessagePaging     FaceFeature = "message_pagination.v1"
 	FaceFeatureContextCompaction FaceFeature = "context_compaction.v1"
+	FaceFeatureToolVisibility    FaceFeature = "tool_visibility.v1"
+)
+
+// FaceProfile 是凭据的用户角色。observer 永远不能请求透明工具详情。
+type FaceProfile string
+
+const (
+	FaceProfileObserver FaceProfile = "observer"
+	FaceProfileOperator FaceProfile = "operator"
+)
+
+// FaceDetailMode 是连接协商的工具详情视图。
+type FaceDetailMode string
+
+const (
+	FaceDetailModeTransparent FaceDetailMode = "transparent"
+	FaceDetailModeSummary     FaceDetailMode = "summary"
+)
+
+// ToolDisplayState 描述单个参数字段的展示状态。
+type ToolDisplayState string
+
+const (
+	ToolDisplayShow    ToolDisplayState = "show"
+	ToolDisplayMask    ToolDisplayState = "mask"
+	ToolDisplayHide    ToolDisplayState = "hide"
+	ToolDisplayPreview ToolDisplayState = "preview"
 )
 
 // FaceTransientType 是必须显式订阅的非权威增量类型。
 type FaceTransientType string
 
 const (
-	FaceTransientChatDelta   FaceTransientType = "chat.delta"
-	FaceTransientRunProgress FaceTransientType = "run.progress"
+	FaceTransientChatDelta        FaceTransientType = "chat.delta"
+	FaceTransientRunProgress      FaceTransientType = "run.progress"
+	FaceTransientChatToolProgress FaceTransientType = "chat.tool.progress"
 )
 
 // FaceIdentity 是通过鉴权的 Face 身份及其权限集合。
 type FaceIdentity struct {
-	ID     string      `json:"id"`
-	Label  string      `json:"label"`
-	Scopes []FaceScope `json:"scopes"`
+	ID      string      `json:"id"`
+	Label   string      `json:"label"`
+	Scopes  []FaceScope `json:"scopes"`
+	Profile FaceProfile `json:"profile,omitempty"`
 }
 
 // FaceErrorCode 是 Face 协议的稳定错误码。
@@ -353,6 +389,7 @@ type FaceSubscribe struct {
 	ConversationIDs []string            `json:"conversation_ids,omitempty"`
 	EventTypes      []FaceEventType     `json:"event_types,omitempty"`
 	TransientTypes  []FaceTransientType `json:"transient_types,omitempty"`
+	DetailMode      FaceDetailMode      `json:"detail_mode,omitempty"`
 }
 
 // FaceApprovalResolve 裁决一个待处理审批。
@@ -530,14 +567,19 @@ type ChatSummary struct {
 
 // ApprovalRequest 是等待 Face 裁决的审批请求。
 type ApprovalRequest struct {
-	ApprovalID     string    `json:"approval_id"`
-	ConversationID string    `json:"conversation_id"`
-	RequestID      string    `json:"request_id,omitempty"`
-	RunID          string    `json:"run_id,omitempty"`
-	Tool           string    `json:"tool"`
-	Reason         string    `json:"reason"`
-	ArgsDigest     string    `json:"args_digest"`
-	ExpiresAt      time.Time `json:"expires_at"`
+	ApprovalID        string        `json:"approval_id"`
+	ConversationID    string        `json:"conversation_id"`
+	RequestID         string        `json:"request_id,omitempty"`
+	RunID             string        `json:"run_id,omitempty"`
+	Tool              string        `json:"tool"`
+	Reason            string        `json:"reason"`
+	ArgsDigest        string        `json:"args_digest"`
+	Args              *ToolArgsView `json:"args,omitempty"`
+	ProjectionVersion string        `json:"projection_version,omitempty"`
+	ScanWarnings      []string      `json:"scan_warnings,omitempty"`
+	ArgsBytes         int           `json:"args_bytes,omitempty"`
+	ArgsTruncated     bool          `json:"args_truncated,omitempty"`
+	ExpiresAt         time.Time     `json:"expires_at"`
 }
 
 // ApprovalSummary 是快照中的待处理审批摘要。
@@ -568,37 +610,62 @@ type HandSummary struct {
 
 // TaskSummary 是 Face 可见的后台任务完整摘要。
 type TaskSummary struct {
-	TaskID         string        `json:"task_id"`
-	ConversationID string        `json:"conversation_id"`
-	HandID         string        `json:"hand_id"`
-	Tool           string        `json:"tool"`
-	ArgsDigest     string        `json:"args_digest"`
-	Status         TaskStatus    `json:"status"`
-	CreatedAt      time.Time     `json:"created_at"`
-	StartedAt      *time.Time    `json:"started_at,omitempty"`
-	FinishedAt     *time.Time    `json:"finished_at,omitempty"`
-	UpdatedAt      time.Time     `json:"updated_at"`
-	LogBytes       int64         `json:"log_bytes"`
-	Truncated      bool          `json:"truncated"`
-	Stale          bool          `json:"stale"`
-	ErrorCode      FaceErrorCode `json:"error_code,omitempty"`
-	Error          string        `json:"error,omitempty"`
+	TaskID         string         `json:"task_id"`
+	ConversationID string         `json:"conversation_id"`
+	HandID         string         `json:"hand_id"`
+	Tool           string         `json:"tool"`
+	ArgsDigest     string         `json:"args_digest"`
+	DetailMode     FaceDetailMode `json:"detail_mode,omitempty"`
+	Status         TaskStatus     `json:"status"`
+	CreatedAt      time.Time      `json:"created_at"`
+	StartedAt      *time.Time     `json:"started_at,omitempty"`
+	FinishedAt     *time.Time     `json:"finished_at,omitempty"`
+	UpdatedAt      time.Time      `json:"updated_at"`
+	LogBytes       int64          `json:"log_bytes"`
+	Truncated      bool           `json:"truncated"`
+	Stale          bool           `json:"stale"`
+	ErrorCode      FaceErrorCode  `json:"error_code,omitempty"`
+	Error          string         `json:"error,omitempty"`
 }
 
 // ConversationSnapshot 是断线恢复所需的对话权威状态。
 type ConversationSnapshot struct {
-	ConversationID       string             `json:"conversation_id"`
-	Name                 string             `json:"name"`
-	Mode                 string             `json:"mode"`
-	ActiveHand           string             `json:"active_hand,omitempty"`
-	Messages             []FaceMessage      `json:"messages"`
-	PendingChats         []ChatSummary      `json:"pending_chats"`
-	PendingApprovals     []ApprovalSummary  `json:"pending_approvals"`
-	ActiveRuns           []RemoteRunSummary `json:"active_runs"`
-	Tasks                []TaskSummary      `json:"tasks"`
-	TaskHistoryLimit     int                `json:"task_history_limit"`
-	TaskHistoryTruncated bool               `json:"task_history_truncated"`
-	SnapshotVersion      int64              `json:"snapshot_version"`
+	ConversationID       string                  `json:"conversation_id"`
+	Name                 string                  `json:"name"`
+	Mode                 string                  `json:"mode"`
+	ActiveHand           string                  `json:"active_hand,omitempty"`
+	Messages             []FaceMessage           `json:"messages"`
+	PendingChats         []ChatSummary           `json:"pending_chats"`
+	PendingApprovals     []ApprovalSummary       `json:"pending_approvals"`
+	ActiveRuns           []RemoteRunSummary      `json:"active_runs"`
+	Tasks                []TaskSummary           `json:"tasks"`
+	ToolHistory          []ToolHistoryProjection `json:"tool_history,omitempty"`
+	TaskHistoryLimit     int                     `json:"task_history_limit"`
+	TaskHistoryTruncated bool                    `json:"task_history_truncated"`
+	SnapshotVersion      int64                   `json:"snapshot_version"`
+}
+
+// ToolHistoryProjection 是新工具调用在断线恢复时使用的持久化展示记录。
+type ToolHistoryProjection struct {
+	RequestID         string          `json:"request_id"`
+	Ordinal           int64           `json:"ordinal"`
+	Tool              string          `json:"tool"`
+	DetailMode        FaceDetailMode  `json:"detail_mode"`
+	ArgsDigest        string          `json:"args_digest"`
+	ArgsBytes         int             `json:"args_bytes,omitempty"`
+	ArgsTruncated     bool            `json:"args_truncated,omitempty"`
+	Args              *ToolArgsView   `json:"args,omitempty"`
+	Result            *ToolOutputView `json:"result,omitempty"`
+	OutputBytes       int             `json:"output_bytes,omitempty"`
+	OutputDigest      string          `json:"output_digest,omitempty"`
+	Truncated         bool            `json:"truncated,omitempty"`
+	ErrorCategory     string          `json:"error_category,omitempty"`
+	Success           bool            `json:"success"`
+	Complete          bool            `json:"complete"`
+	ProjectionVersion string          `json:"projection_version,omitempty"`
+	ScanWarnings      []string        `json:"scan_warnings,omitempty"`
+	CreatedAt         time.Time       `json:"created_at"`
+	CompletedAt       *time.Time      `json:"completed_at,omitempty"`
 }
 
 // ConversationListResult 是 conversation.list 的结构化结果。
@@ -623,6 +690,8 @@ type FaceProtocolLimits struct {
 	MaxChatStreamBytes  int `json:"max_chat_stream_bytes"`
 	MaxChatStreamChunks int `json:"max_chat_stream_chunks"`
 	MaxMessageListLimit int `json:"max_message_list_limit"`
+	MaxToolArgsBytes    int `json:"max_tool_args_bytes"`
+	MaxToolOutputBytes  int `json:"max_tool_output_bytes"`
 }
 
 // FaceCapabilitiesResult 返回当前身份、可选能力和协议限额。
@@ -758,6 +827,8 @@ type TaskLogResult struct {
 	Offset     int64  `json:"offset"`
 	NextOffset int64  `json:"next_offset"`
 	Data       []byte `json:"data"`
+	DataBytes  int    `json:"data_bytes,omitempty"`
+	Digest     string `json:"digest,omitempty"`
 	EOF        bool   `json:"eof"`
 	Truncated  bool   `json:"truncated"`
 }
@@ -775,16 +846,69 @@ type ChatStartedEventData struct {
 
 // ChatToolCalledEventData 是 chat.tool_called 的结构化数据。
 type ChatToolCalledEventData struct {
-	RequestID  string `json:"request_id"`
-	Tool       string `json:"tool"`
-	ArgsDigest string `json:"args_digest"`
+	RequestID         string        `json:"request_id"`
+	Tool              string        `json:"tool"`
+	ArgsDigest        string        `json:"args_digest"`
+	Args              *ToolArgsView `json:"args,omitempty"`
+	ProjectionVersion string        `json:"projection_version,omitempty"`
+	ScanWarnings      []string      `json:"scan_warnings,omitempty"`
+	ArgsBytes         int           `json:"args_bytes,omitempty"`
+	ArgsTruncated     bool          `json:"args_truncated,omitempty"`
 }
 
 // ChatToolCompletedEventData 是 chat.tool_completed 的结构化数据。
 type ChatToolCompletedEventData struct {
-	RequestID string `json:"request_id"`
-	Tool      string `json:"tool"`
-	Success   bool   `json:"success"`
+	RequestID         string          `json:"request_id"`
+	Tool              string          `json:"tool"`
+	Success           bool            `json:"success"`
+	Result            *ToolOutputView `json:"result,omitempty"`
+	ProjectionVersion string          `json:"projection_version,omitempty"`
+	ScanWarnings      []string        `json:"scan_warnings,omitempty"`
+	OutputBytes       int             `json:"output_bytes,omitempty"`
+	OutputDigest      string          `json:"output_digest,omitempty"`
+	Truncated         bool            `json:"truncated,omitempty"`
+	ErrorCategory     string          `json:"error_category,omitempty"`
+}
+
+// ToolFieldView 是参数投影中的一个字段。Value 只在 show 状态下携带原值。
+type ToolFieldView struct {
+	State     ToolDisplayState `json:"state"`
+	Value     any              `json:"value,omitempty"`
+	Preview   string           `json:"preview,omitempty"`
+	Bytes     int              `json:"bytes,omitempty"`
+	Truncated bool             `json:"truncated,omitempty"`
+}
+
+// ToolArgsView 是版本化的结构化参数展示投影。
+type ToolArgsView struct {
+	ProjectionVersion string                   `json:"projection_version"`
+	Fields            map[string]ToolFieldView `json:"fields"`
+	Bytes             int                      `json:"bytes"`
+	Truncated         bool                     `json:"truncated"`
+	Warnings          []string                 `json:"warnings"`
+}
+
+// ToolOutputView 是版本化的结构化工具终态输出投影。
+type ToolOutputView struct {
+	Stdout      string   `json:"stdout,omitempty"`
+	Stderr      string   `json:"stderr,omitempty"`
+	StdoutBytes int      `json:"stdout_bytes"`
+	StderrBytes int      `json:"stderr_bytes"`
+	OutputBytes int      `json:"output_bytes"`
+	Digest      string   `json:"digest"`
+	Truncated   bool     `json:"truncated"`
+	Warnings    []string `json:"warnings"`
+}
+
+// FaceChatToolProgress 是允许丢失的工具 stdout/stderr 增量。
+type FaceChatToolProgress struct {
+	ConversationID string `json:"conversation_id"`
+	RequestID      string `json:"request_id"`
+	Tool           string `json:"tool"`
+	Seq            int64  `json:"seq"`
+	Kind           string `json:"kind"`
+	Data           string `json:"data"`
+	Gap            bool   `json:"gap"`
 }
 
 // ChatCompletedEventData 是 chat.completed 的结构化数据。

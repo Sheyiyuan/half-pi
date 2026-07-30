@@ -3,10 +3,13 @@ package lifecycle
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-core/events"
+	coreexec "github.com/Sheyiyuan/half-pi/modules/half-pi-core/executor"
 	corelifecycle "github.com/Sheyiyuan/half-pi/modules/half-pi-core/lifecycle"
+	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/requestctx"
 )
 
 // Coordinator 是 Mind 侧的生命周期协调器。
@@ -38,9 +41,13 @@ func NewCoordinator(cfg Config) (*Coordinator, error) {
 	if cfg.Bus != nil {
 		adapter := &eventBusAdapter{bus: cfg.Bus}
 		if err := reg.RegisterObserver(corelifecycle.Registration{
-			ID:          "builtin.eventbus-adapter",
-			Kind:        corelifecycle.KindObserver,
-			Phases:      allObservationPhases(),
+			ID:     "builtin.eventbus-adapter",
+			Kind:   corelifecycle.KindObserver,
+			Phases: allObservationPhases(),
+			Capabilities: []corelifecycle.Capability{
+				corelifecycle.CapabilityReadArgs,
+				corelifecycle.CapabilityReadResults,
+			},
 			Order:       1000, // 最后执行
 			FailureMode: corelifecycle.FailureFailOpen,
 		}, adapter); err != nil {
@@ -105,6 +112,9 @@ func (a *eventBusAdapter) Observe(ctx context.Context, event corelifecycle.Redac
 	case corelifecycle.PhaseToolFinished:
 		eventType = events.TypeToolResult
 		message = fmt.Sprintf("工具完成: %s (outcome=%s)", event.ResourceName, event.Outcome)
+	case corelifecycle.PhaseToolProgress:
+		eventType = events.TypeToolProgress
+		message = fmt.Sprintf("工具进度: %s (%s)", event.ResourceName, event.Summary)
 	case corelifecycle.PhaseModelRequested:
 		eventType = events.TypeLLMRequest
 		message = fmt.Sprintf("模型请求: %s/%s", event.ProviderID, event.ModelID)
@@ -116,7 +126,67 @@ func (a *eventBusAdapter) Observe(ctx context.Context, event corelifecycle.Redac
 	}
 
 	evt := events.New(sessionID, "lifecycle-coordinator", events.LevelInfo, eventType, message)
+	if data := projectToolLogData(ctx, event); data != nil {
+		evt = evt.WithData(data)
+	}
 	a.bus.Publish(evt)
+}
+
+func projectToolLogData(ctx context.Context, event corelifecycle.RedactedEvent) map[string]any {
+	if event.ResourceName == "" || event.Phase != corelifecycle.PhaseToolFrozen && event.Phase != corelifecycle.PhaseToolDenied &&
+		event.Phase != corelifecycle.PhaseToolStarted && event.Phase != corelifecycle.PhaseToolProgress &&
+		event.Phase != corelifecycle.PhaseToolFinished {
+		return nil
+	}
+	data := map[string]any{
+		"tool": event.ResourceName,
+	}
+	if event.InputDigest != "" {
+		data["args_digest"] = event.InputDigest
+	}
+	if event.InputLength > 0 {
+		data["args_bytes"] = event.InputLength
+	}
+	if event.Outcome != "" {
+		data["outcome"] = event.Outcome
+	}
+	if event.ReasonCode != "" {
+		data["error_category"] = event.ReasonCode
+	}
+	transparent := requestctx.ToolDetailMode(ctx) == "transparent"
+	switch event.Phase {
+	case corelifecycle.PhaseToolFrozen, corelifecycle.PhaseToolDenied, corelifecycle.PhaseToolStarted:
+		raw, ok := event.Sensitive["args"].(json.RawMessage)
+		if !ok {
+			return data
+		}
+		tool, _ := coreexec.FindTool(event.ResourceName)
+		view, err := coreexec.ProjectDisplayArgs(tool, raw)
+		if err != nil {
+			return data
+		}
+		data["args_bytes"], data["args_truncated"], data["scan_warnings"] = view.Bytes, view.Truncated, view.Warnings
+		if transparent {
+			data["projection_version"], data["args"] = view.ProjectionVersion, view
+		}
+	case corelifecycle.PhaseToolProgress:
+		value, _ := event.Sensitive["data"].(string)
+		view := coreexec.ProjectDisplayOutput(value, "")
+		data["kind"], data["output_bytes"], data["output_digest"], data["scan_warnings"] =
+			event.Summary, view.OutputBytes, view.Digest, view.Warnings
+		if transparent {
+			data["data"] = view.Stdout
+		}
+	case corelifecycle.PhaseToolFinished:
+		value, _ := event.Sensitive["output"].(string)
+		view := coreexec.ProjectDisplayOutput(value, "")
+		data["output_bytes"], data["output_digest"], data["truncated"], data["scan_warnings"] =
+			view.OutputBytes, view.Digest, view.Truncated, view.Warnings
+		if transparent {
+			data["projection_version"], data["result"] = coreexec.DisplayProjectionVersion, view
+		}
+	}
+	return data
 }
 
 func allObservationPhases() []corelifecycle.Phase {
@@ -125,6 +195,7 @@ func allObservationPhases() []corelifecycle.Phase {
 		corelifecycle.PhaseToolDenied,
 		corelifecycle.PhaseToolAuthorized,
 		corelifecycle.PhaseToolStarted,
+		corelifecycle.PhaseToolProgress,
 		corelifecycle.PhaseToolFinished,
 		corelifecycle.PhaseModelRequested,
 		corelifecycle.PhaseModelResponseReceived,

@@ -25,11 +25,24 @@ Catalog 解析工具并提供不可变快照；Transformer 只能在冻结前改
 
 ## Lifecycle
 
-Message、Model、Assistant、Tool、Security、Approval、Chat 共享 Meta / Phase / Outcome。四类 Hook 能力分离：Guard 单调收紧；Transformer 改变准入前输入或交付结果；Observer 异步有界且 fail open；Auditor 按阶段决定是否 fail closed。
+Message、Model、Assistant、Tool、Security、Approval、Chat 共享 Meta / Phase / Outcome。四类 Hook 能力分离：Guard 单调收紧；Transformer 改变准入前输入或交付结果；Observer 异步有界且 fail open；Auditor 按阶段决定是否 fail closed。Lifecycle context 会沿 ToolRuntime 的 prepare、admission、execute、terminal 路径传播 conversation、request、run、detail mode 和冻结调用摘要，使 REPL、Face、EventBus 看到同一条事实链。
+
+## 工具展示投影
+
+`PropertySchema.Display` 是用户可见性契约，不参与安全裁决：
+
+| 策略 | 展示行为 |
+|---|---|
+| `show` | 返回原值（默认策略） |
+| `mask` | 返回固定 `[masked]` |
+| `hide` | 保留字段名和状态，不返回值 |
+| `preview` | 返回 UTF-8 安全前缀、原始字节数和截断标记 |
+
+中央高置信字段名规则可以把 `show`/`preview` 收紧为 `mask`；显式 `hide` 不会被放宽。参数与结果先生成版本化展示投影，再由 lifecycle/EventBus、REPL 或 Face 按 `summary`/`transparent` 视图交付。内容扫描只产生告警，不把用户字符串当成可静默删除的秘密。展示投影不进入 approval/security audit 表。
 
 ## EventBus
 
-EventBus 负责进程内观察与 Console / JSONL File Writer。`PublishSync` 可保证 REPL 输出顺序，但 EventBus 不承担 Guard、领域状态或必需审计。
+EventBus 负责进程内观察与 Console / JSONL File Writer。`PublishSync` 可保证 REPL 输出顺序，但 EventBus 不承担 Guard、领域状态或必需审计。收到 transparent 工具事件时，ConsoleWriter 将参数、progress 或结果投影写到 stderr；FileWriter 以每行一个 JSON 事件保留同一投影，便于用户日志分析。summary 事件则只写稳定摘要元数据。两种 Writer 都是展示路径，不能代替安全审计；透明日志可能包含用户自己传入的秘密。
 
 ## 通用工具
 

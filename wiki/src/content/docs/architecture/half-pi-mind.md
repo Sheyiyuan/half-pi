@@ -32,6 +32,8 @@ Core 构造上下文、调用统一 Provider、消费完整流批次并运行工
 
 Manager 恢复每 conversation 独立 Actor。Actor 持有 Core、mode、active Hand 和审批缓存，用 mutation lease 串行化 Chat / compact。SQLite 保存 session group、session、message、approval audit、remote run / task、凭据、管理审计、summary 与 outbox。
 
+工具展示投影也由 Store 保存：admission 记录 conversation、request、tool、冻结的 detail mode、参数摘要和版本化参数投影；terminal 只完成一次并记录结果投影。`summary` admission 不会因为后来连接改用 transparent 而产生原文，透明记录则可以在 Face 侧降级为 summary。投影日志与安全审计分开，后者仍只保存摘要和结构化裁决。
+
 ## Skill
 
 Store 递归加载 `.skill.md`，按路径确定重名优先级，支持 `groups` allowlist、`always`、revision / digest。索引只放名称和简介；正文通过 `view_skill` 按需读取。
@@ -46,7 +48,9 @@ Authority 是 Hand accepted / rejected / progress / result / cancel 的服务级
 
 ## Face Gateway
 
-按 principal / scope / ownership 路由 command，提供 snapshot、subscribe、Chat replay、审批和取消。每连接独立有界队列与单调 event sequence；领域 hook 直接投影结构化事件。
+按 principal / scope / ownership 路由 command，提供 snapshot、subscribe、Chat replay、审批和取消。Gateway 在工具、前台 run 或后台 task admission 时把协商的 `detail_mode` 绑定到调用，之后只允许降级投影。每连接独立有界队列与单调 event sequence；领域 hook 直接投影结构化事件。`chat.tool.progress` 可丢，工具终态与 snapshot history 用 Store 恢复。
+
+REPL 是服务上的交互适配器，默认使用 `transparent`；它和 Face、EventBus 共用同一 ToolRuntime/lifecycle 路径，不存在透明模式旁路。透明控制台或文件日志可能包含用户自己传入的秘密。
 
 ## Compact
 

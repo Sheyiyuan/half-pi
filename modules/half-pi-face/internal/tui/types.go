@@ -65,8 +65,13 @@ type responseState struct {
 }
 
 type toolActivity struct {
+	Ordinal       int64
 	Tool          string
 	ArgsDigest    string
+	Args          *protocol.ToolArgsView
+	Result        *protocol.ToolOutputView
+	Progress      string
+	ProgressSeq   int64
 	AfterResponse int
 	Success       bool
 	Complete      bool
@@ -213,6 +218,7 @@ type Model struct {
 	legacyCapabilities bool
 	capabilityFallback bool
 	limits             protocol.FaceProtocolLimits
+	detailMode         protocol.FaceDetailMode
 	syncCapabilities   bool
 	syncConversations  bool
 	compactRequests    map[string]protocol.FaceConversationCompact

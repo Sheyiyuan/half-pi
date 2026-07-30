@@ -15,6 +15,7 @@ sidebar:
 | ToolRuntime / 参数冻结 | [5](../../tutorial/05-registration-is-not-safety/)、[6](../../tutorial/06-tool-runtime/) | [half-pi-core](../half-pi-core/) |
 | 安全策略 / Reviewer | [6 · 审批与 ToolRuntime](../../tutorial/06-tool-runtime/) | [half-pi-core](../half-pi-core/)、[half-pi-mind](../half-pi-mind/) |
 | EventBus / Lifecycle / Outbox | [7](../../tutorial/07-observability/)、[19](../../tutorial/19-lifecycle-audit/) | [half-pi-core](../half-pi-core/)、[状态机](../state-machines/) |
+| 工具透明可见性 / summary / transparent | [7](../../tutorial/07-observability/)、[14](../../tutorial/14-mind-service-actors/)、[15](../../tutorial/15-face-protocol/)、[17](../../tutorial/17-face-clients/) | [half-pi-core](../half-pi-core/)、[half-pi-face](../half-pi-face/)、[half-pi-mind](../half-pi-mind/) |
 | Store / session / message | [8 · 持久化](../../tutorial/08-persistence/) | [half-pi-mind](../half-pi-mind/) |
 | Skill Store / group 隔离 | [9 · Skill](../../tutorial/09-skills/) | [half-pi-mind](../half-pi-mind/) |
 | 三端与五 module | [10 · 三端拆分](../../tutorial/10-face-mind-hand/) | [系统总览](../)、[五个 module](../modules/) |

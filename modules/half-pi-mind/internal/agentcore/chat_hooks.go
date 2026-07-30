@@ -1,15 +1,27 @@
 package agentcore
 
+import "encoding/json"
+
 // ChatToolCall 是一次脱敏的 Chat 工具调用观察数据。
 type ChatToolCall struct {
 	Tool       string
 	ArgsDigest string
+	Args       json.RawMessage
 }
 
 // ChatToolResult 是一次 Chat 工具调用的终态观察数据。
 type ChatToolResult struct {
 	Tool    string
 	Success bool
+	Stdout  string
+	Stderr  string
+}
+
+// ChatToolProgress 是工具执行期间的有界 stdout/stderr 增量。
+type ChatToolProgress struct {
+	Tool string
+	Kind string
+	Data string
 }
 
 // ChatTextDelta 是一次 provider response 中的用户可见文本增量。
@@ -33,4 +45,5 @@ type ChatTransport struct {
 	ResponseCompleted func(ChatResponse) error
 	ToolCalled        func(ChatToolCall)
 	ToolCompleted     func(ChatToolResult)
+	ToolProgress      func(ChatToolProgress)
 }

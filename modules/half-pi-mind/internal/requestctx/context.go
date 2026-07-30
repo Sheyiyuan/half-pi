@@ -6,6 +6,7 @@ import "context"
 type requestIDKey struct{}
 type principalIDKey struct{}
 type sourceKey struct{}
+type toolDetailModeKey struct{}
 
 // WithRequestID 返回绑定稳定 request ID 的子 context。
 func WithRequestID(ctx context.Context, requestID string) context.Context {
@@ -47,4 +48,18 @@ func WithSource(ctx context.Context, source string) context.Context {
 func Source(ctx context.Context) string {
 	source, _ := ctx.Value(sourceKey{}).(string)
 	return source
+}
+
+// WithToolDetailMode 在工具 admission 前绑定用户详情模式。
+func WithToolDetailMode(ctx context.Context, mode string) context.Context {
+	if mode == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, toolDetailModeKey{}, mode)
+}
+
+// ToolDetailMode 返回本次工具 admission 绑定的详情模式。
+func ToolDetailMode(ctx context.Context) string {
+	mode, _ := ctx.Value(toolDetailModeKey{}).(string)
+	return mode
 }

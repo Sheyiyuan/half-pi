@@ -136,7 +136,13 @@ func (b *Broker) Confirm(ctx context.Context, request Request) Resolution {
 	faceRequest := protocol.ApprovalRequest{
 		ApprovalID: protocol.MustNewMsgID(), ConversationID: request.ConversationID,
 		RequestID: request.RequestID, RunID: request.RunID, Tool: request.Tool,
-		Reason: request.Reason, ArgsDigest: request.ArgsDigest, ExpiresAt: now.Add(b.ttl),
+		Reason: request.Reason, ArgsDigest: request.ArgsDigest, Args: request.Args,
+		ProjectionVersion: request.ProjectionVersion, ScanWarnings: append([]string(nil), request.ScanWarnings...),
+		ExpiresAt: now.Add(b.ttl),
+	}
+	if request.Args != nil {
+		faceRequest.ArgsBytes = request.Args.Bytes
+		faceRequest.ArgsTruncated = request.Args.Truncated
 	}
 	meta := request.Meta
 	if meta.TraceID == "" || meta.SpanID == "" {

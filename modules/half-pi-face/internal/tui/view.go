@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -286,8 +287,15 @@ func (m *Model) renderApprovalModal() string {
 	if m.modal.Resolving {
 		state = "\n\nResolving..."
 	}
-	return fmt.Sprintf("Tool: %s\nReason: %s\nArguments: %s\nExpires: %s\n\n%s%s",
-		approval.Tool, approval.Reason, approval.ArgsDigest, approval.ExpiresAt.Local().Format(time.DateTime), strings.Join(choices, "   "), state)
+	arguments := approval.ArgsDigest
+	if approval.Args != nil {
+		if encoded, err := json.MarshalIndent(approval.Args.Fields, "", "  "); err == nil {
+			arguments = sanitizeRemoteText(string(encoded))
+		}
+	}
+	return fmt.Sprintf("Tool: %s\nReason: %s\nArguments: %s\nDigest: %s\nExpires: %s\n\n%s%s",
+		approval.Tool, approval.Reason, arguments, approval.ArgsDigest,
+		approval.ExpiresAt.Local().Format(time.DateTime), strings.Join(choices, "   "), state)
 }
 
 func (m *Model) renderCompletions() string {
@@ -338,7 +346,18 @@ func (m *Model) refreshViewport(newContent bool) {
 
 func (m *Model) renderChatContent(conversation *conversationState, width int) string {
 	var sections []string
+	persistedTools := make(map[string]int)
 	for _, message := range conversation.sortedMessages() {
+		if message.Role == "tool" && message.RequestID != "" {
+			if chat := conversation.Chats[message.RequestID]; chat != nil {
+				index := persistedTools[message.RequestID]
+				if index < len(chat.Tools) {
+					sections = append(sections, renderTool(chat.Tools[index]))
+					persistedTools[message.RequestID] = index + 1
+					continue
+				}
+			}
+		}
 		label := strings.ToUpper(message.Role)
 		content := message.Content
 		if message.Role == "assistant" {
@@ -379,13 +398,19 @@ func (m *Model) renderChatContent(conversation *conversationState, width int) st
 				content = ansi.Wrap(content, width, " \t-")
 			}
 			sections = append(sections, roleLabel("HALF-PI")+"\n"+content)
-			for _, tool := range chat.Tools {
+			for toolIndex, tool := range chat.Tools {
+				if toolIndex < persistedTools[requestID] {
+					continue
+				}
 				if tool.AfterResponse == index {
 					sections = append(sections, renderTool(tool))
 				}
 			}
 		}
-		for _, tool := range chat.Tools {
+		for toolIndex, tool := range chat.Tools {
+			if toolIndex < persistedTools[requestID] {
+				continue
+			}
 			if tool.AfterResponse == 0 {
 				sections = append(sections, renderTool(tool))
 			}
@@ -447,7 +472,24 @@ func renderTool(tool toolActivity) string {
 		state = "failed"
 		style = style.Foreground(colorDanger)
 	}
-	return roleLabel("TOOL") + "  " + tool.Tool + "  " + style.Render(state)
+	lines := []string{roleLabel("TOOL") + "  " + tool.Tool + "  " + style.Render(state)}
+	if tool.Args != nil {
+		if encoded, err := json.MarshalIndent(tool.Args.Fields, "", "  "); err == nil {
+			lines = append(lines, sanitizeRemoteText(string(encoded)))
+		}
+	}
+	if tool.Progress != "" && !tool.Complete {
+		lines = append(lines, sanitizeRemoteText(tool.Progress))
+	}
+	if tool.Result != nil {
+		if tool.Result.Stdout != "" {
+			lines = append(lines, sanitizeRemoteText(tool.Result.Stdout))
+		}
+		if tool.Result.Stderr != "" {
+			lines = append(lines, sanitizeRemoteText(tool.Result.Stderr))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func roleLabel(value string) string {

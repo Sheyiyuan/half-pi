@@ -35,6 +35,7 @@ func NewModel(connector client.Connector) *Model {
 		hands: make(map[string]protocol.HandSummary), pending: make(map[string]pendingRequest),
 		outgoingChats: make(map[string]*sendFlow), features: make(map[protocol.FaceFeature]struct{}),
 		compactRequests: make(map[string]protocol.FaceConversationCompact),
+		detailMode:      protocol.FaceDetailModeTransparent,
 		scopes:          make(map[protocol.FaceScope]struct{}), limits: protocol.FaceProtocolLimits{
 			MaxChatContentBytes: protocol.MaxFaceChatContentBytes, MaxMessageListLimit: protocol.MaxFaceMessageListLimit,
 		},

@@ -38,13 +38,16 @@ var (
 
 // Request 是 Agent Core 提交给 Broker 的脱敏审批请求。
 type Request struct {
-	Meta           corelifecycle.Meta
-	ConversationID string
-	RequestID      string
-	RunID          string
-	Tool           string
-	Reason         string
-	ArgsDigest     string
+	Meta              corelifecycle.Meta
+	ConversationID    string
+	RequestID         string
+	RunID             string
+	Tool              string
+	Reason            string
+	ArgsDigest        string
+	Args              *protocol.ToolArgsView
+	ProjectionVersion string
+	ScanWarnings      []string
 }
 
 // Observation 是 Approval Broker 投影给 lifecycle adapter 的权威事实。

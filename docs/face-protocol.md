@@ -4,7 +4,7 @@
 
 ## 状态
 
-Face Alpha P0-P4 runtime 和应用协议 revision 2 流式增强已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密和严格验证；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、分级有界队列、可恢复 Chat 流、run progress、Chat/cancel、异步审批、run/task cancel 以及结构化事件；Headless JSONL 与人类终端 Face 已通过真实 Mind/Hand/Face 进程级 E2E。流式细节见归档规格 [`face-streaming-protocol.md`](archive/face-streaming-protocol.md)，AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。
+Face Alpha P0-P4 runtime 和应用协议 revision 3 已落地。`gateway-core` 已提供 Web、TUI、IM Bot 和 Headless Agent Face 共用的 typed payload、独立凭据、四步挑战握手、强制加密、严格验证和 transparent/summary 工具详情；Mind 已提供 Conversation Manager、scope 驱动的 Face Gateway、快照、订阅、分级有界队列、可恢复 Chat 流、工具/run progress、Chat/cancel、异步审批、run/task cancel 以及结构化事件。工具可见性、展示策略和个人 operator 风险以 [`tool-visibility.md`](tool-visibility.md) 为准；流式细节见归档规格 [`face-streaming-protocol.md`](archive/face-streaming-protocol.md)，AI/自动化客户端接入约定见 [`ai-face-protocol.md`](ai-face-protocol.md)。
 
 2026-07-19 的 v2 安全升级已通过 Unix 五模块 race/E2E、Windows `386/amd64/arm64` 交叉编译，以及 WinBoat Windows 11 Pro AMD64 原生 protocol/wss/hub/dispatcher race 测试和 Mind/Hand/Face 进程链路。原生链路验证 version 2 encrypted `registered`、Face/Hand 同时在线、凭据撤销立即断连和日志秘密扫描；更新后的官方 `scripts/test-windows.ps1 -PrebuiltDir` 使用当前源码运行，11 组测试全部 PASS 且 stderr 为空。
 
@@ -256,6 +256,7 @@ face.event
 face.chat.delta
 face.chat.stream.end
 face.run.progress
+face.chat.tool.progress
 ```
 
 后三类是显式订阅的瞬时数据或其可靠终止屏障，不属于 `face.event`。`face.result.Content`、conversation snapshot/messages 和 run 终态始终是权威状态。
@@ -399,11 +400,12 @@ type ConversationSnapshot struct {
 	PendingChats     []ChatSummary      `json:"pending_chats"`
 	PendingApprovals []ApprovalSummary  `json:"pending_approvals"`
 	ActiveRuns       []RemoteRunSummary `json:"active_runs"`
+	ToolHistory      []ToolHistoryProjection `json:"tool_history,omitempty"`
 	SnapshotVersion  int64              `json:"snapshot_version"`
 }
 ```
 
-`SnapshotVersion` 是业务快照版本，不等于连接级 `seq`。Alpha 可只保证单个 Mind 进程内递增；持久化事件游标属于后续增强。
+`ToolHistory` 只包含 revision 3 之后 admission 时持久化的版本化投影；旧消息保持摘要且不回填。`SnapshotVersion` 是业务快照版本，不等于连接级 `seq`。Alpha 可只保证单个 Mind 进程内递增；持久化事件游标属于后续增强。
 
 订阅命令：
 
@@ -413,13 +415,16 @@ type FaceSubscribe struct {
 	ConversationIDs []string            `json:"conversation_ids,omitempty"`
 	EventTypes      []FaceEventType     `json:"event_types,omitempty"`
 	TransientTypes  []FaceTransientType `json:"transient_types,omitempty"`
+	DetailMode      FaceDetailMode      `json:"detail_mode,omitempty"`
 }
 ```
 
 - 空 conversation 列表表示订阅该身份可访问的全部会话。
 - 空事件类型表示订阅全部正式 Face Event，不包括内部 debug 日志。
-- 空瞬时类型表示不接收 Chat delta 或 run progress，保证旧客户端兼容。
-- `chat.delta` 要求 `face:sessions:read`；`run.progress` 要求 `face:runs:output`。
+- 空瞬时类型表示不接收 Chat delta、tool progress 或 run progress。
+- `chat.delta` 要求 `face:sessions:read`；`chat.tool.progress` 要求 `face:chat`；`run.progress` 要求 `face:runs:output`。
+- `operator` 省略 `detail_mode` 时默认 `transparent`；`observer` 固定为 `summary`，请求透明模式返回 `forbidden`。
+- 详情模式在工具/run/task admission 时绑定；完整字段和风险边界见 [`tool-visibility.md`](tool-visibility.md)。
 - 订阅只影响增量事件，不改变 command response。
 - Face Gateway 必须先安装订阅，再返回 accepted，避免状态窗口丢失。
 
@@ -459,8 +464,8 @@ Alpha 必须结构化的事件：
 | Event Type | 必需 Data |
 |---|---|
 | `chat.started` | `request_id` |
-| `chat.tool_called` | `request_id`, `tool`, `args_digest` |
-| `chat.tool_completed` | `request_id`, `tool`, `success` |
+| `chat.tool_called` | `request_id`, `tool`, `args_digest`；transparent 增加版本化 `args` 和扫描告警 |
+| `chat.tool_completed` | `request_id`, `tool`, `success`；transparent 增加可靠 `result`、长度、digest 和截断状态 |
 | `chat.completed` | `request_id` |
 | `chat.failed` | `request_id`, `code` |
 | `approval.requested` | 审批 ID、工具、原因、参数摘要和过期时间 |
@@ -469,7 +474,7 @@ Alpha 必须结构化的事件：
 | `hand.connected` | `hand_id`, `hostname`, `os`, `arch` |
 | `hand.disconnected` | `hand_id` |
 
-内部 LLM 原始请求、完整工具参数、token 和敏感输出默认不得投递给 Face。调试能力需要显式 scope 和脱敏规则。
+内部 LLM 原始请求仍不得投递给 Face。工具参数和结果按连接详情模式投影：summary 不含原文；transparent 默认展示未标记字段，并可能展示和记录用户自己传入的秘密。只有 schema 或中央高置信规则会执行 mask/hide/preview，扫描器只告警。详见 [`tool-visibility.md`](tool-visibility.md)。
 
 ## 审批生命周期
 

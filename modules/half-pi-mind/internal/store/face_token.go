@@ -54,7 +54,25 @@ func (s *Store) FaceIdentityByLabel(label string) (*protocol.FaceIdentity, error
 	if encoded != scopesJSON {
 		return nil, fmt.Errorf("Face identity scopes are not canonical")
 	}
-	return &protocol.FaceIdentity{ID: strconv.FormatInt(id, 10), Label: storedLabel, Scopes: canonical}, nil
+	return &protocol.FaceIdentity{ID: strconv.FormatInt(id, 10), Label: storedLabel, Scopes: canonical, Profile: inferFaceProfile(canonical)}, nil
+}
+
+func inferFaceProfile(scopes []protocol.FaceScope) protocol.FaceProfile {
+	observer := []protocol.FaceScope{protocol.FaceScopeSessionsRead, protocol.FaceScopeHandsRead,
+		protocol.FaceScopeRunsRead, protocol.FaceScopeTasksRead}
+	if len(scopes) != len(observer) {
+		return protocol.FaceProfileOperator
+	}
+	seen := make(map[protocol.FaceScope]struct{}, len(scopes))
+	for _, scope := range scopes {
+		seen[scope] = struct{}{}
+	}
+	for _, scope := range observer {
+		if _, ok := seen[scope]; !ok {
+			return protocol.FaceProfileOperator
+		}
+	}
+	return protocol.FaceProfileObserver
 }
 
 // CanonicalFaceScopes 校验、去重并按字典序排列 Face scopes。

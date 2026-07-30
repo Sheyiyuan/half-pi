@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/Sheyiyuan/half-pi/modules/gateway-core/protocol"
 	"github.com/Sheyiyuan/half-pi/modules/half-pi-mind/internal/remoteexec"
 )
 
@@ -16,10 +17,13 @@ func (s *Store) CreateRemoteTask(task remoteexec.Task) error {
 func insertRemoteTask(db interface {
 	Exec(string, ...any) (sql.Result, error)
 }, task remoteexec.Task) error {
+	if task.DetailMode == "" {
+		task.DetailMode = protocol.FaceDetailModeSummary
+	}
 	_, err := db.Exec(`INSERT INTO remote_tasks
-		(task_id, session_id, hand_id, tool, args_digest, status, created_at, started_at, finished_at, updated_at, log_bytes, truncated, stale, error)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, task.TaskID, task.SessionID, task.HandID,
-		task.Tool, task.ArgsDigest, task.Status, millis(task.CreatedAt), millis(task.StartedAt), millis(task.FinishedAt),
+		(task_id, session_id, hand_id, tool, args_digest, detail_mode, status, created_at, started_at, finished_at, updated_at, log_bytes, truncated, stale, error)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, task.TaskID, task.SessionID, task.HandID,
+		task.Tool, task.ArgsDigest, task.DetailMode, task.Status, millis(task.CreatedAt), millis(task.StartedAt), millis(task.FinishedAt),
 		millis(task.UpdatedAt), task.LogBytes, task.Truncated, task.Stale, task.Error)
 	if err != nil {
 		return fmt.Errorf("insert remote task: %w", err)
@@ -117,19 +121,22 @@ func (s *Store) RecoverRemoteTasks() (int, error) {
 	return int(n), err
 }
 
-const remoteTaskSelect = `SELECT task_id, session_id, hand_id, tool, args_digest, status, created_at,
+const remoteTaskSelect = `SELECT task_id, session_id, hand_id, tool, args_digest, detail_mode, status, created_at,
 	started_at, finished_at, updated_at, log_bytes, truncated, stale, error FROM remote_tasks`
 
 func scanRemoteTask(row scanner) (remoteexec.Task, error) {
 	var task remoteexec.Task
 	var created, started, finished, updated int64
-	err := row.Scan(&task.TaskID, &task.SessionID, &task.HandID, &task.Tool, &task.ArgsDigest, &task.Status,
+	err := row.Scan(&task.TaskID, &task.SessionID, &task.HandID, &task.Tool, &task.ArgsDigest, &task.DetailMode, &task.Status,
 		&created, &started, &finished, &updated, &task.LogBytes, &task.Truncated, &task.Stale, &task.Error)
 	if err != nil {
 		return remoteexec.Task{}, err
 	}
 	task.CreatedAt = time.UnixMilli(created)
 	task.UpdatedAt = time.UnixMilli(updated)
+	if task.DetailMode == "" {
+		task.DetailMode = protocol.FaceDetailModeSummary
+	}
 	if started > 0 {
 		task.StartedAt = time.UnixMilli(started)
 	}

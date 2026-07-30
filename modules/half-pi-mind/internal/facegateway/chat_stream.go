@@ -203,6 +203,10 @@ func (g *Gateway) matchesTransientLocked(state *connection, transient protocol.F
 	if _, ok := state.filter.transients[transient]; !ok {
 		return false
 	}
+	if state.filter.detailMode != protocol.FaceDetailModeTransparent &&
+		(transient == protocol.FaceTransientRunProgress || transient == protocol.FaceTransientChatToolProgress) {
+		return false
+	}
 	if len(state.filter.conversations) > 0 {
 		_, ok := state.filter.conversations[conversationID]
 		return ok

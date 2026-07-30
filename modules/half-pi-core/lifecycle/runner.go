@@ -56,9 +56,14 @@ func (r *LifecycleRegistry) Publish(ctx context.Context, event RedactedEvent) {
 	if r.closed {
 		return
 	}
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
+	}
 	event.Sensitive = cloneStringMap(event.Sensitive)
 	select {
-	case r.observerQueue <- observation{event: event}:
+	case r.observerQueue <- observation{ctx: ctx, event: event}:
 	default:
 		r.observerDrops.Add(1)
 	}
